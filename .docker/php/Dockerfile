@@ -56,9 +56,7 @@ ENV COMPOSER_ALLOW_SUPERUSER 1
 ENV COMPOSER_HOME /composer
 ENV PATH $PATH:/composer/vendor/bin
 RUN composer config --global process-timeout 3600 
-# 这个源是 GitHub，阿里云没有镜像；网络不通时构建前临时挂代理
-WORKDIR /root
-RUN git clone https://github.com/seebi/dircolors-solarized
+
 
 EXPOSE 5173
 WORKDIR /var/www
