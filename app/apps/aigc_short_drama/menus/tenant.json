@@ -1,0 +1,126 @@
+[
+  {
+    "source_menu_key": "aigc_short_drama",
+    "app_code": "aigc_short_drama",
+    "source": "app",
+    "type": "M",
+    "name": "AI短剧",
+    "icon": "el-icon-VideoCamera",
+    "sort": 100,
+    "perms": "",
+    "paths": "aigc-short-drama",
+    "component": "",
+    "children": [
+      {
+        "source_menu_key": "aigc_short_drama_index",
+        "type": "C",
+        "name": "AI短剧",
+        "sort": 40,
+        "perms": "app.aigc_short_drama.config/detail",
+        "paths": "",
+        "component": "apps/aigc_short_drama/config",
+        "selected": "aigc-short-drama/config",
+        "is_show": 0
+      },
+      {
+        "source_menu_key": "aigc_short_drama_config",
+        "type": "C",
+        "name": "基础配置",
+        "sort": 30,
+        "perms": "app.aigc_short_drama.config/detail",
+        "paths": "config",
+        "component": "apps/aigc_short_drama/config"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_prompt",
+        "type": "C",
+        "name": "提示词配置",
+        "sort": 6,
+        "perms": "app.aigc_short_drama.config/detail",
+        "paths": "prompt",
+        "component": "apps/aigc_short_drama/prompt"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_project",
+        "type": "C",
+        "name": "剧本列表",
+        "sort": 20,
+        "perms": "app.aigc_short_drama.script_task/lists",
+        "paths": "project",
+        "component": "apps/aigc_short_drama/project"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_creation_task",
+        "type": "C",
+        "name": "创作任务",
+        "sort": 19,
+        "perms": "app.aigc_short_drama.generation_task/lists",
+        "paths": "creation-task",
+        "component": "apps/aigc_short_drama/creation-task"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_template",
+        "type": "C",
+        "name": "首页模板",
+        "sort": 12,
+        "perms": "app.aigc_short_drama.template/lists",
+        "paths": "template",
+        "component": "apps/aigc_short_drama/template"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_skill",
+        "type": "C",
+        "name": "Skill 管理",
+        "sort": 11,
+        "perms": "app.aigc_short_drama.skill/lists",
+        "paths": "skill",
+        "component": "apps/aigc_short_drama/skill"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_agent",
+        "type": "C",
+        "name": "短剧画布 Agent",
+        "sort": 11,
+        "perms": "app.aigc_short_drama.config/detail",
+        "paths": "agent",
+        "component": "apps/aigc_short_drama/agent"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_inspiration",
+        "type": "C",
+        "name": "灵感素材",
+        "sort": 10,
+        "perms": "app.aigc_short_drama.inspiration/lists",
+        "paths": "inspiration",
+        "component": "apps/aigc_short_drama/inspiration"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_subject",
+        "type": "C",
+        "name": "主体库",
+        "sort": 9,
+        "perms": "app.aigc_short_drama.subject/lists",
+        "paths": "subject",
+        "component": "apps/aigc_short_drama/subject"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_style",
+        "type": "C",
+        "name": "画风库",
+        "sort": 8,
+        "perms": "app.aigc_short_drama.style/lists",
+        "paths": "style",
+        "component": "apps/aigc_short_drama/style"
+      },
+      {
+        "source_menu_key": "aigc_short_drama_public_voice",
+        "type": "C",
+        "name": "声音库",
+        "sort": 7,
+        "perms": "app.aigc_short_drama.public_voice/lists",
+        "paths": "public-voice",
+        "component": "apps/aigc_short_drama/public-voice"
+      }
+    ]
+  }
+]

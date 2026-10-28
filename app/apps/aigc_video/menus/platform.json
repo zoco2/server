@@ -1,0 +1,42 @@
+[
+  {
+    "source_menu_key": "aigc_video_platform",
+    "app_code": "aigc_video",
+    "source": "app",
+    "type": "M",
+    "name": "AIGC视频",
+    "icon": "el-icon-Picture",
+    "sort": 90,
+    "perms": "",
+    "paths": "aigc-video",
+    "component": "",
+    "children": [
+      {
+        "source_menu_key": "aigc_video_platform_config",
+        "type": "C",
+        "name": "基础配置",
+        "perms": "app.aigc_video.config/detail",
+        "paths": "config",
+        "component": "apps/aigc_video/config",
+        "sort": 30
+      },
+      {
+        "source_menu_key": "aigc_video_platform_effects",
+        "type": "C",
+        "name": "效果配置",
+        "sort": 29,
+        "perms": "app.aigc_video.config/detail",
+        "paths": "effects",
+        "component": "apps/aigc_video/effects"
+      },
+      {
+        "source_menu_key": "aigc_video_platform_tenant_usage",
+        "type": "C",
+        "name": "租户用量",
+        "perms": "app.aigc_video.tenant/stat",
+        "paths": "tenant-usage",
+        "component": "apps/aigc_video/tenant-usage"
+      }
+    ]
+  }
+]

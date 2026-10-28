@@ -1,0 +1,118 @@
+<?php
+
+namespace app\tenantapi\controller\power;
+
+use app\common\service\power\TenantPowerMarketService;
+use app\tenantapi\controller\BaseAdminController;
+use Exception;
+
+class MarketController extends BaseAdminController
+{
+    public function models()
+    {
+        return $this->success('获取成功', TenantPowerMarketService::models(
+            (int)$this->adminInfo['tenant_id'],
+            (string)$this->request->get('keyword', ''),
+            $this->request->get('status', ''),
+            (int)$this->request->get('page_no', 1),
+            (int)$this->request->get('page_size', 15),
+            (string)$this->request->get('model_type', '')
+        ));
+    }
+
+    public function apps()
+    {
+        return $this->success('获取成功', TenantPowerMarketService::apps(
+            (int)$this->adminInfo['tenant_id'],
+            (string)$this->request->get('keyword', ''),
+            $this->request->get('status', ''),
+            (int)$this->request->get('page_no', 1),
+            (int)$this->request->get('page_size', 15),
+            (string)$this->request->get('category_code', '')
+        ));
+    }
+
+    public function detail()
+    {
+        return $this->success('获取成功', TenantPowerMarketService::detail(
+            (int)$this->adminInfo['tenant_id'],
+            (int)$this->request->get('id', 0)
+        ));
+    }
+
+    public function appDetail()
+    {
+        return $this->success('获取成功', TenantPowerMarketService::appDetail(
+            (int)$this->adminInfo['tenant_id'],
+            (string)$this->request->get('app_code', '')
+        ));
+    }
+
+    public function pricingRules()
+    {
+        return $this->success('获取成功', \app\common\service\power\MarketPriceRuleService::settings((int)$this->adminInfo['tenant_id']));
+    }
+
+    public function previewPricing()
+    {
+        try {
+            return $this->success('预览成功', \app\common\service\power\MarketPriceRuleService::preview((int)$this->adminInfo['tenant_id'], $this->adminId, $this->request->post()));
+        } catch (\Throwable $e) { return $this->fail($e->getMessage()); }
+    }
+
+    public function applyPricing()
+    {
+        try {
+            return $this->success('价格已更新', \app\common\service\power\MarketPriceRuleService::apply((int)$this->adminInfo['tenant_id'], $this->adminId, (string)$this->request->post('token', '')), 1, 1);
+        } catch (\Throwable $e) { return $this->fail($e->getMessage()); }
+    }
+
+    public function savePrices()
+    {
+        try {
+            TenantPowerMarketService::savePrices(
+                (int)$this->adminInfo['tenant_id'],
+                (int)$this->request->post('product_id', 0),
+                (array)$this->request->post('prices', [])
+            );
+            return $this->success('保存成功', [], 1, 1);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function saveDisplay()
+    {
+        try {
+            $tenantId = (int)$this->adminInfo['tenant_id'];
+            $params = $this->request->post();
+            $appCode = trim((string)($params['app_code'] ?? ''));
+            if ($appCode !== '') {
+                TenantPowerMarketService::saveAppDisplay($tenantId, $appCode, $params);
+            } else {
+                TenantPowerMarketService::saveProductDisplay($tenantId, (int)($params['product_id'] ?? 0), $params);
+            }
+            return $this->success('保存成功', [], 1, 1);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function batchShelf()
+    {
+        try {
+            $result = TenantPowerMarketService::batchShelf(
+                (int)$this->adminInfo['tenant_id'],
+                (array)$this->request->post('product_ids', []),
+                (int)$this->request->post('sale_status', 0),
+                (bool)$this->request->post('all', false),
+                (string)$this->request->post('keyword', ''),
+                (string)$this->request->post('model_type', ''),
+                $this->request->post('status', '')
+            );
+            return $this->success('设置成功', $result, 1, 1);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+}

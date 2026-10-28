@@ -1,0 +1,87 @@
+{
+  "code": "image_human",
+  "name": "全驱数字人",
+  "version": "1.0.8",
+  "require_core": ">=1.0.0",
+  "description": "基于人物图片和参考音频生成全驱数字人视频，首版提供PC端创作、任务轮询和作品展示。",
+  "changelog": "1. 支持在工具管理中独立设置形象克隆价格。\\n2. 保存形象前展示当前价格，编辑已有形象不重复收费。",
+  "icon": "resource/image/common/menu_generator.png",
+  "category": "aigc",
+  "cover": "",
+  "is_builtin": 1,
+  "expire_policy": "allow",
+  "sort": 890,
+  "frontends": [
+    "platform",
+    "tenant",
+    "pc",
+    "uniapp"
+  ],
+  "api_prefix": "/app/image_human",
+  "platform_menus": "menus/platform.json",
+  "menus": "menus/tenant.json",
+  "permissions": "permissions/tenant.json",
+  "migrations": "migrations",
+  "frontend_entries": [
+    {
+      "terminal": "platform",
+      "entry_key": "image_human_platform",
+      "name": "全驱数字人",
+      "path": "/app/image_human",
+      "icon": "el-icon-VideoCamera",
+      "sort": 100,
+      "status": 1
+    },
+    {
+      "terminal": "tenant",
+      "entry_key": "image_human_admin",
+      "name": "全驱数字人",
+      "path": "/app/image_human",
+      "icon": "el-icon-VideoCamera",
+      "sort": 100,
+      "status": 1
+    },
+    {
+      "terminal": "pc",
+      "entry_key": "image_human",
+      "name": "全驱数字人",
+      "path": "/ai/avatar?tab=image_human",
+      "icon": "resource/image/common/menu_generator.png",
+      "sort": 98,
+      "status": 1
+    },
+    {
+      "terminal": "uniapp",
+      "entry_key": "image_human",
+      "name": "全驱数字人",
+      "path": "/apps/image_human/pages/index/index",
+      "icon": "resource/image/common/menu_generator.png",
+      "sort": 98,
+      "status": 1,
+      "meta": {
+        "pages": [
+          {
+            "name": "全驱数字人创作",
+            "path": "/apps/image_human/pages/index/index"
+          },
+          {
+            "name": "人物形象",
+            "path": "/apps/image_human/pages/avatar/avatar"
+          },
+          {
+            "name": "声音素材",
+            "path": "/apps/image_human/pages/voice/voice"
+          },
+          {
+            "name": "合成任务",
+            "path": "/apps/image_human/pages/tasks/tasks"
+          },
+          {
+            "name": "创作记录",
+            "path": "/apps/image_human/pages/results/results"
+          }
+        ]
+      }
+    }
+  ]
+}

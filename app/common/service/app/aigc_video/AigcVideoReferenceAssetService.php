@@ -1,0 +1,325 @@
+<?php
+
+namespace app\common\service\app\aigc_video;
+
+use app\common\service\FileService;
+use Exception;
+
+class AigcVideoReferenceAssetService
+{
+    public const TYPE_IMAGE = 'image';
+    public const TYPE_VIDEO = 'video';
+    public const TYPE_AUDIO = 'audio';
+
+    public static function normalize(array $params, int $max = 15): array
+    {
+        $assets = [];
+        foreach ((array)($params['reference_assets'] ?? []) as $asset) {
+            if (!is_array($asset)) {
+                continue;
+            }
+            $normalized = self::normalizeItem($asset);
+            if (!empty($normalized)) {
+                $assets[] = $normalized;
+            }
+        }
+
+        foreach (self::legacyImageAssets($params) as $asset) {
+            if (array_filter($assets, static fn(array $existing): bool =>
+                ($existing['type'] ?? '') === self::TYPE_IMAGE
+                && self::sameMediaSource($existing, $asset)
+                && (($asset['role'] ?? '') === 'reference_image' || ($existing['role'] ?? '') === ($asset['role'] ?? ''))
+            )) {
+                continue;
+            }
+            $normalized = self::normalizeItem($asset);
+            if (!empty($normalized)) {
+                $assets[] = $normalized;
+            }
+        }
+
+        foreach (['video_urls' => self::TYPE_VIDEO, 'audio_urls' => self::TYPE_AUDIO] as $key => $type) {
+            foreach ((array)($params[$key] ?? []) as $url) {
+                $normalized = self::normalizeItem([
+                    'type' => $type,
+                    'uri' => $url,
+                    'url' => $url,
+                ]);
+                if (!empty($normalized)) {
+                    $assets[] = $normalized;
+                }
+            }
+        }
+
+        $assets = self::unique($assets);
+        if (count($assets) > max(0, $max)) {
+            throw new Exception('参考素材数量超出限制');
+        }
+        return $assets;
+    }
+
+    public static function images(array $assets): array
+    {
+        return array_values(array_map(
+            static fn(array $asset) => (string)($asset['uri'] ?? $asset['url'] ?? ''),
+            array_filter($assets, static fn(array $asset) => ($asset['type'] ?? '') === self::TYPE_IMAGE)
+        ));
+    }
+
+    public static function publicUrl(array $asset): string
+    {
+        $url = self::durableSource((string)($asset['url'] ?? ''), (string)($asset['uri'] ?? ''));
+        if ($url === '') {
+            return '';
+        }
+        if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://') || str_starts_with($url, 'data:')) {
+            return $url;
+        }
+        return FileService::getFileUrl($url);
+    }
+
+    /**
+     * Converts display aliases in a prompt to the provider's reference order.
+     * The original prompt remains available to the caller for task auditing.
+     */
+    public static function promptWithReferenceAliases(string $prompt, array $params): string
+    {
+        if ($prompt === '') {
+            return '';
+        }
+
+        $labels = [
+            self::TYPE_IMAGE => '图片',
+            self::TYPE_VIDEO => '视频',
+            self::TYPE_AUDIO => '音频',
+        ];
+        $counts = array_fill_keys(array_keys($labels), 0);
+        $aliases = [];
+        foreach (self::normalize($params) as $asset) {
+            $type = (string)($asset['type'] ?? '');
+            if (!isset($labels[$type])) {
+                continue;
+            }
+            $counts[$type]++;
+            $name = ltrim(trim((string)($asset['name'] ?? '')), '@');
+            if ($name === '' || preg_match('/^(图片|视频|音频)\d+$/u', $name)) {
+                continue;
+            }
+            $aliases[$name][] = '@' . $labels[$type] . $counts[$type];
+        }
+
+        // An ambiguous display name cannot safely bind to more than one asset.
+        $aliases = array_filter($aliases, static fn(array $values): bool => count($values) === 1);
+        if ($aliases === []) {
+            return $prompt;
+        }
+
+        $names = array_keys($aliases);
+        usort($names, static fn(string $left, string $right): int => mb_strlen($right, 'UTF-8') <=> mb_strlen($left, 'UTF-8'));
+        $pattern = '/@(' . implode('|', array_map(static fn(string $name): string => preg_quote($name, '/'), $names)) . ')/u';
+        $converted = preg_replace_callback(
+            $pattern,
+            static fn(array $matches): string => $aliases[$matches[1]][0],
+            $prompt
+        );
+        return $converted === null ? $prompt : $converted;
+    }
+
+    public static function assertSeedanceSupported(array $assets): void
+    {
+        $counts = [self::TYPE_IMAGE => 0, self::TYPE_VIDEO => 0, self::TYPE_AUDIO => 0];
+        foreach ($assets as $asset) {
+            $type = (string)($asset['type'] ?? '');
+            if (isset($counts[$type])) {
+                $counts[$type]++;
+            }
+        }
+        if ($counts[self::TYPE_IMAGE] > 9) {
+            throw new Exception('Seedance最多支持9张参考图片');
+        }
+        if ($counts[self::TYPE_VIDEO] > 3) {
+            throw new Exception('Seedance最多支持3个参考视频');
+        }
+        if ($counts[self::TYPE_AUDIO] > 3) {
+            throw new Exception('Seedance最多支持3段参考音频');
+        }
+        if (($counts[self::TYPE_IMAGE] + $counts[self::TYPE_VIDEO]) === 0 && $counts[self::TYPE_AUDIO] > 0) {
+            throw new Exception('Seedance不能单独使用音频素材，请同时上传图片或视频参考');
+        }
+    }
+
+    public static function assertSeedance2ProSupported(array $assets): void
+    {
+        $counts = [self::TYPE_IMAGE => 0, self::TYPE_VIDEO => 0, self::TYPE_AUDIO => 0];
+        $audioDuration = 0.0;
+        foreach ($assets as $asset) {
+            $type = (string)($asset['type'] ?? '');
+            if (isset($counts[$type])) {
+                $counts[$type]++;
+            }
+            if ($type === self::TYPE_AUDIO && isset($asset['duration']) && is_numeric($asset['duration'])) {
+                $audioDuration += max(0, (float)$asset['duration']);
+            }
+        }
+        if ($counts[self::TYPE_IMAGE] > 9) {
+            throw new Exception('Seedance 2.0 Pro最多支持9张参考图片');
+        }
+        if ($counts[self::TYPE_VIDEO] > 3) {
+            throw new Exception('Seedance 2.0 Pro最多支持3个参考视频');
+        }
+        if ($counts[self::TYPE_AUDIO] > 3) {
+            throw new Exception('Seedance 2.0 Pro最多支持3段参考音频');
+        }
+        if (($counts[self::TYPE_IMAGE] + $counts[self::TYPE_VIDEO]) === 0 && $counts[self::TYPE_AUDIO] > 0) {
+            throw new Exception('Seedance 2.0 Pro不能单独使用音频素材，请同时上传图片或视频参考');
+        }
+        if ($audioDuration > 15) {
+            throw new Exception('Seedance 2.0 Pro参考音频总时长不能超过15秒');
+        }
+    }
+
+    private static function legacyImageAssets(array $params): array
+    {
+        $assets = [];
+        foreach (array_values(array_filter((array)($params['reference_images'] ?? $params['image_urls'] ?? []))) as $image) {
+            $assets[] = [
+                'type' => self::TYPE_IMAGE,
+                'uri' => $image,
+                'url' => $image,
+                'role' => 'reference_image',
+            ];
+        }
+        foreach ([
+            'image' => 'reference_image',
+            'first_frame_image' => 'first_frame_image',
+            'last_frame_image' => 'last_frame_image',
+        ] as $key => $role) {
+            $value = trim((string)($params[$key] ?? ''));
+            if ($value !== '') {
+                $assets[] = [
+                    'type' => self::TYPE_IMAGE,
+                    'uri' => $value,
+                    'url' => $value,
+                    'role' => $role,
+                ];
+            }
+        }
+        return $assets;
+    }
+
+    // Browser object URLs are previews, never provider-accessible media addresses.
+    private static function durableSource(string $preferred, string $fallback): string
+    {
+        foreach ([$preferred, $fallback] as $value) {
+            $value = trim($value);
+            if ($value !== '' && !str_starts_with(strtolower($value), 'blob:')) {
+                return $value;
+            }
+        }
+        if (trim($preferred . $fallback) !== '') {
+            throw new Exception('参考素材尚未上传完成，请重新上传后重试');
+        }
+        return '';
+    }
+
+    private static function normalizeItem(array $asset): array
+    {
+        $type = strtolower(trim((string)($asset['type'] ?? $asset['media_type'] ?? 'image')));
+        $type = match ($type) {
+            'img', 'picture', 'photo' => self::TYPE_IMAGE,
+            'movie', 'mp4' => self::TYPE_VIDEO,
+            'sound', 'voice', 'music' => self::TYPE_AUDIO,
+            default => $type,
+        };
+        if (!in_array($type, [self::TYPE_IMAGE, self::TYPE_VIDEO, self::TYPE_AUDIO], true)) {
+            return [];
+        }
+        $uri = trim((string)($asset['uri'] ?? $asset['url'] ?? $asset['path'] ?? ''));
+        $url = trim((string)($asset['url'] ?? $asset['uri'] ?? $asset['path'] ?? ''));
+        if ($uri === '' && $url === '') {
+            return [];
+        }
+        $uri = self::durableSource($uri, $url);
+        $url = self::durableSource($url, $uri);
+        $name = trim((string)($asset['name'] ?? ''));
+        if ($name === '') {
+            $meta = (array)($asset['meta'] ?? []);
+            foreach (['subject_name', 'character_name', 'scene_name', 'location_name', 'item_name', 'name'] as $key) {
+                $name = trim((string)($meta[$key] ?? ''));
+                if ($name !== '') {
+                    break;
+                }
+            }
+        }
+        if ($name === '') {
+            $name = trim((string)($asset['title'] ?? ''));
+        }
+        $normalized = [
+            'type' => $type,
+            'uri' => $uri !== '' ? $uri : $url,
+            'url' => $url !== '' ? $url : $uri,
+            'name' => $name,
+        ];
+        foreach (['field','parameters'] as $key) if (isset($asset[$key])) $normalized[$key] = $asset[$key];
+        $role = trim((string)($asset['role'] ?? ''));
+        $allowedRoles = match ($type) {
+            self::TYPE_VIDEO => ['reference_video'],
+            self::TYPE_AUDIO => ['reference_audio'],
+            default => ['reference_image', 'first_frame_image', 'last_frame_image', 'mask_image', 'keyframe_image', 'loop_image'],
+        };
+        if (in_array($role, $allowedRoles, true)) {
+            $normalized['role'] = $role;
+        }
+        $generationMethod = strtolower(trim((string)($asset['generation_method'] ?? '')));
+        if (in_array($generationMethod, ['omni_reference', 'start_end', 'multi_frame'], true)) {
+            $normalized['generation_method'] = $generationMethod;
+        }
+        foreach (['duration', 'start', 'end'] as $key) {
+            if (isset($asset[$key]) && is_numeric($asset[$key])) {
+                $normalized[$key] = max(0, (float)$asset[$key]);
+            }
+        }
+        return $normalized;
+    }
+
+    /** Match the exact stored URI or delivery URL already carried by a media
+     * record. Never strip domains/query strings: two independent cloud files
+     * may have the same object path, and signed/derived URLs are not guesses.
+     */
+    private static function sameMediaSource(array $left, array $right): bool
+    {
+        if (($left['type']??'')!==($right['type']??'')) return false;
+        $leftUrl=trim((string)($left['url']??''));
+        $rightUrl=trim((string)($right['url']??''));
+        if (preg_match('#^https?://#i',$leftUrl) && preg_match('#^https?://#i',$rightUrl) && $leftUrl!==$rightUrl) return false;
+        $leftKeys=array_filter([trim((string)($left['uri']??'')),$leftUrl],static fn(string $value): bool => $value!=='');
+        $rightKeys=array_filter([trim((string)($right['uri']??'')),$rightUrl],static fn(string $value): bool => $value!=='');
+        return array_intersect($leftKeys,$rightKeys)!==[];
+    }
+
+    private static function unique(array $assets): array
+    {
+        $unique=[];
+        $frames=['first_frame_image','last_frame_image'];
+        $frameSources=array_values(array_filter($assets,static fn(array $asset): bool => in_array($asset['role']??'',$frames,true)));
+        foreach ($assets as $asset) {
+            $role=(string)($asset['role']??'');
+            if ($role==='' && array_filter($frameSources,static fn(array $frame): bool => self::sameMediaSource($asset,$frame))) continue;
+            $slot=!empty($asset['field'])?'field:'.$asset['field']:($role ?: 'reference_image');
+            $duplicate=null;
+            foreach ($unique as $index=>$existing) {
+                $existingRole=(string)($existing['role']??'');
+                $existingSlot=!empty($existing['field'])?'field:'.$existing['field']:($existingRole ?: 'reference_image');
+                if ($slot===$existingSlot && self::sameMediaSource($asset,$existing)) { $duplicate=$index; break; }
+            }
+            if ($duplicate!==null) {
+                if (empty($unique[$duplicate]['generation_method']) && !empty($asset['generation_method'])) {
+                    $unique[$duplicate]['generation_method']=$asset['generation_method'];
+                }
+                continue;
+            }
+            $unique[]=$asset;
+        }
+        return $unique;
+    }
+}

@@ -1,0 +1,61 @@
+# Include at server scope (BaoTa's site rewrite configuration).
+# The root host decision belongs to PHP, even if a static index exists.
+location = / {
+    rewrite ^ /index.php?s=/ last;
+}
+
+location = /platform {
+    rewrite ^ /index.php?s=/platform last;
+}
+
+# Platform documents must pass the tenant ownership check in PHP. Static assets
+# stay directly accessible and missing assets must never return SPA HTML.
+location ^~ /platform/ {
+    location ~ /\. {
+        return 404;
+    }
+    location ~* \.(php|phtml|phar)(/|$) {
+        return 404;
+    }
+    location /platform/assets/ {
+        try_files $uri =404;
+    }
+    location ~* \.(js|css|ico|png|jpe?g|gif|svg|webp|woff2?|ttf|mp4|mp3)$ {
+        try_files $uri =404;
+    }
+    location /platform/ {
+        rewrite ^ /index.php?s=$uri last;
+    }
+}
+
+# Tenant-admin history routes must reload the SPA instead of entering PHP
+# tenant-domain resolution. Business APIs retain the ThinkPHP rewrite below.
+location = /admin {
+    try_files /admin/index.html =404;
+}
+
+location ^~ /admin/ {
+    # Keep sensitive files and executable source out of this static namespace.
+    location ~ /\. {
+        return 404;
+    }
+    location ~* \.(php|phtml|phar)(/|$) {
+        return 404;
+    }
+    location ~* (runtime|application)/ {
+        return 403;
+    }
+    # A stale asset URL is a real 404, not an HTML document served as JS/CSS.
+    location /admin/assets/ {
+        try_files $uri =404;
+    }
+    try_files $uri $uri/ /admin/index.html;
+}
+
+# Other requests retain the existing ThinkPHP rewrite.
+location / {
+    if (!-e $request_filename) {
+        rewrite ^(.*)$ /index.php?s=$1 last;
+        break;
+    }
+}

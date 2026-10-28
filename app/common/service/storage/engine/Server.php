@@ -1,0 +1,195 @@
+<?php
+
+namespace app\common\service\storage\engine;
+
+use app\common\service\storage\UploadExtension;
+use app\common\service\storage\SvgSanitizer;
+use think\Request;
+use think\Exception;
+
+/**
+ * 存储引擎抽象类
+ * Class server
+ * @package app\common\library\storage\drivers
+ */
+abstract class Server
+{
+    protected $file;
+    protected $error;
+    protected $fileName;
+    protected $fileInfo;
+
+    // 是否为内部上传
+    protected $isInternal = false;
+
+    /**
+     * 构造函数
+     * Server constructor.
+     */
+    protected function __construct()
+    {
+    }
+
+    /**
+     * 设置上传的文件信息
+     * @param string $name
+     * @throws Exception
+     */
+    public function setUploadFile($name)
+    {
+        // 接收上传的文件
+        $this->file = request()->file($name);
+        if (empty($this->file)) {
+            throw new Exception('未找到上传文件的信息');
+        }
+
+        // Some mobile upload adapters send an anonymous Blob with no filename
+        // extension. In that case, recover only formats identified from bytes.
+        $originalName = $this->file->getOriginalName();
+        $extension = strtolower($this->file->extension());
+        if ($extension === '') {
+            $extension = UploadExtension::fromContent($this->file->getRealPath());
+            if ($extension !== '') {
+                $originalName = ($originalName !== '' ? $originalName : 'upload') . '.' . $extension;
+            }
+        }
+
+        // Keep the existing allow-list for both original and inferred types.
+        $limit = array_merge(config('project.file_image'), config('project.file_video'), config('project.file_file'));
+        if (!in_array($extension, $limit, true)) {
+            throw new Exception('不允许上传' . $extension . '后缀文件');
+        }
+
+        // Shared by image/file endpoints and every storage driver. Never persist the original SVG.
+        if ($extension === 'svg') {
+            SvgSanitizer::sanitizeFile($this->file->getRealPath());
+        }
+
+        // 文件信息
+        $this->fileInfo = [
+            'ext'      => $extension,
+            'size'     => $this->file->getSize(),
+            'mime'     => $extension === 'svg' ? 'image/svg+xml' : $this->file->getMime(),
+            'name'     => $originalName,
+            'realPath' => $this->file->getRealPath(),
+        ];
+        // 生成保存文件名
+        $this->fileName = $this->buildSaveName();
+    }
+
+    /**
+     * 设置上传的文件信息
+     * @param string $filePath
+     */
+    public function setUploadFileByReal($filePath, ?string $targetName = null)
+    {
+        // 设置为系统内部上传
+        $this->isInternal = true;
+        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+        $mime = self::mimeByExtension($extension) ?: (function_exists('mime_content_type') ? (string)@mime_content_type($filePath) : '');
+        // 文件信息
+        $this->fileInfo = [
+            'name' => basename($filePath),
+            'size' => filesize($filePath),
+            'ext' => $extension,
+            'mime' => $mime ?: 'application/octet-stream',
+            'tmp_name' => $filePath,
+            'realPath' => $filePath,
+            'error' => 0,
+        ];
+        // 生成保存文件名
+        $this->fileName = $this->buildSaveName();
+        if ($targetName !== null) {
+            if (!preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/D', $targetName) || str_contains($targetName, '..') || strtolower(pathinfo($targetName, PATHINFO_EXTENSION)) !== $extension) {
+                throw new Exception('内部素材目标文件名无效');
+            }
+            $this->fileName = $targetName;
+        }
+    }
+
+    /**
+     * Notes: 抓取网络资源
+     * @param $url
+     * @param $key
+     * @author 张无忌(2021/3/2 14:15)
+     * @return mixed
+     */
+    abstract protected function fetch($url, $key);
+
+    /**
+     * 文件上传
+     * @param $save_dir (保存路径)
+     * @return mixed
+     */
+    abstract protected function upload($save_dir);
+
+    /**
+     * 文件删除
+     * @param $fileName
+     * @return mixed
+     */
+    abstract protected function delete($fileName);
+
+    /**
+     * 返回上传后文件路径
+     * @return mixed
+     */
+    abstract public function getFileName();
+
+    /**
+     * 返回文件信息
+     * @return mixed
+     */
+    public function getFileInfo()
+    {
+        return $this->fileInfo;
+    }
+
+    protected function getRealPath()
+    {
+        return $this->fileInfo['realPath'];
+    }
+
+    /**
+     * 返回错误信息
+     * @return mixed
+     */
+    public function getError()
+    {
+        return $this->error;
+    }
+
+    /**
+     * 生成保存文件名
+     */
+    private function buildSaveName()
+    {
+        // 要上传图片的本地路径
+        $realPath = $this->getRealPath();
+        // 扩展名
+        $ext = pathinfo($this->getFileInfo()['name'], PATHINFO_EXTENSION);
+        // 自动生成文件名
+        return date('YmdHis') . substr(md5($realPath), 0, 5)
+            . str_pad(rand(0, 9999), 4, '0', STR_PAD_LEFT) . ".{$ext}";
+    }
+
+    protected static function mimeByExtension(string $extension): string
+    {
+        return match (strtolower($extension)) {
+            'mp4', 'm4v' => 'video/mp4',
+            'mov' => 'video/quicktime',
+            'webm' => 'video/webm',
+            'mp3' => 'audio/mpeg',
+            'm4a' => 'audio/mp4',
+            'aac' => 'audio/aac',
+            'wav' => 'audio/wav',
+            'ogg' => 'audio/ogg',
+            'png' => 'image/png',
+            'jpg', 'jpeg' => 'image/jpeg',
+            'webp' => 'image/webp',
+            'gif' => 'image/gif',
+            default => '',
+        };
+    }
+
+}

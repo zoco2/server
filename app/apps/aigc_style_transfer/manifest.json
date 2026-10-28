@@ -1,0 +1,82 @@
+{
+  "code": "aigc_style_transfer",
+  "name": "图片风格化",
+  "version": "1.0.2",
+  "require_core": ">=1.0.0",
+  "description": "面向电商风格化生成的 AI 工具，复用 AIGC 生图通道并支持独立售价、风格分类和风格模板。",
+  "changelog": "1. 支持租户按生成质量配置图片风格化售价。\n2. 支持用户端选择生成质量和比例后提交生成。\n3. 优化图片风格化价格配置体验。",
+  "icon": "resource/image/common/menu_generator.png",
+  "category": "aigc",
+  "cover": "",
+  "is_builtin": 1,
+  "expire_policy": "allow",
+  "sort": 852,
+  "frontends": [
+    "tenant",
+    "pc",
+    "uniapp"
+  ],
+  "api_prefix": "/app/aigc_style_transfer",
+  "platform_menus": "menus/platform.json",
+  "menus": "menus/tenant.json",
+  "permissions": "permissions/tenant.json",
+  "migrations": "migrations",
+  "frontend_entries": [
+    {
+      "terminal": "tenant",
+      "entry_key": "aigc_style_transfer_admin",
+      "name": "图片风格化",
+      "path": "/app/aigc_style_transfer",
+      "icon": "el-icon-Picture",
+      "sort": 94,
+      "status": 1
+    },
+    {
+      "terminal": "pc",
+      "entry_key": "aigc_style_transfer",
+      "name": "图片风格化",
+      "path": "/ai/tools/aigc_style_transfer",
+      "icon": "resource/image/common/menu_generator.png",
+      "sort": 89,
+      "status": 1
+    },
+    {
+      "terminal": "uniapp",
+      "entry_key": "aigc_style_transfer",
+      "name": "图片风格化",
+      "path": "/apps/aigc_style_transfer/pages/creator/index",
+      "icon": "resource/image/common/menu_generator.png",
+      "sort": 852,
+      "status": 1,
+      "meta": {
+        "pages": [
+          {
+            "name": "创作首页",
+            "path": "/apps/aigc_style_transfer/pages/creator/index"
+          },
+          {
+            "name": "任务记录",
+            "path": "/apps/aigc_style_transfer/pages/tasks/index",
+            "query": {
+              "view": "tasks"
+            }
+          },
+          {
+            "name": "作品记录",
+            "path": "/apps/aigc_style_transfer/pages/tasks/index",
+            "query": {
+              "view": "results"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "app_code": "aigc_image",
+      "name": "AIGC生图",
+      "required_for": "风格化生成"
+    }
+  ]
+}

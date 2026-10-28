@@ -1,0 +1,290 @@
+<?php
+
+namespace app\common\service\wechat;
+
+use app\common\model\wechat\WechatCallbackLog;
+use app\common\model\wechat\WechatAuthorizer;
+use app\tenantapi\logic\channel\OfficialAccountReplyLogic;
+use EasyWeChat\Kernel\Encryptor;
+use think\facade\Cache;
+
+/** Handles unauthenticated callbacks from the WeChat open platform. */
+class OpenPlatformCallbackService
+{
+    private static function virtualReply(string $app,array $event,bool $json): array
+    {
+        if($app==='')throw new \RuntimeException('虚拟支付回调缺少小程序身份');
+        $sn=\app\common\service\virtualpay\VirtualPayNotifyService::reference($event);
+        if($sn!=='')$tenant=(int)(\think\facade\Db::name('virtual_pay_intent')->where('app_id',$app)->where(function($q)use($sn){$q->where('out_trade_no',$sn)->whereOr('wx_order_id',$sn);})->value('tenant_id')??0);
+        else $tenant=(int)(WechatAuthorizer::withoutGlobalScope()->where(['authorizer_appid'=>$app,'authorizer_type'=>'miniprogram'])->value('tenant_id')??0);
+        if($tenant<=0)throw new \RuntimeException('虚拟支付回调未关联原租户');
+        $result=(new \app\common\service\virtualpay\VirtualPayNotifyService())->event($tenant,$app,$event);
+        if($json)return ['response'=>json_encode($result,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)];
+        $xml='<xml>';foreach($result as $key=>$value)$xml.='<'.$key.'>'.htmlspecialchars((string)$value,ENT_XML1|ENT_QUOTES,'UTF-8').'</'.$key.'>';
+        return ['response'=>$xml.'</xml>'];
+    }
+
+    public static function handle($request): array|string
+    {
+        $config = \app\common\model\wechat\WechatOpenPlatform::withoutGlobalScope()->findOrEmpty(1)->toArray();
+        $token = OpenPlatformService::credentialValue($config['token'] ?? '');
+        $aesKey = OpenPlatformService::credentialValue($config['encoding_aes_key'] ?? '');
+        $appId = (string)($config['app_id'] ?? '');
+        $routeAppId = trim((string)$request->param('appid', ''));
+        $timestamp = (string)$request->param('timestamp', '');
+        $nonce = (string)$request->param('nonce', '');
+        // URL verification uses `signature`; encrypted event callbacks use
+        // `msg_signature`. Keep the two flows separate so a stale query value
+        // cannot make WeChat's URL check fail.
+        $isUrlCheck = $request->isGet() && $request->param('auth_code', '') === '';
+        $signature = $isUrlCheck
+            ? (string)$request->param('signature', '')
+            : (string)$request->param('msg_signature', $request->param('signature', ''));
+        if ($token === '' || $aesKey === '' || $appId === '') throw new \RuntimeException('开放平台回调配置不完整');
+        if ($isUrlCheck) {
+            self::verifyPlain($token, $timestamp, $nonce, $signature);
+            return (string)$request->param('echostr', '');
+        }
+        if ($request->isGet() && $request->param('auth_code', '') !== '') {
+            $requestId = bin2hex(random_bytes(12)); $tenantId = 0; $context = [];
+            try {
+                $state = self::authorizationState($request); if ($state === '') throw new \RuntimeException('授权状态缺失');
+                $context = self::stateContext($state);
+                if (empty($context['return_origin'])) $context['return_origin'] = OpenPlatformService::authReturnOriginFromCookie((string)$request->cookie(OpenPlatformService::authReturnOriginCookieName(), ''));
+                $tenantId = (int)($context['tenant_id'] ?? 0);
+                $info = OpenPlatformService::queryAuthorization((string)$request->param('auth_code'));
+                $scope = (array)($info['func_info'] ?? []); $profile = OpenPlatformService::authorizerProfileByAppid((string)$info['authorizer_appid']); $type = self::authorizerType($scope, array_merge($info, ['authorizer_info' => $profile]));
+                $expectedType = (string)($context['authorizer_type'] ?? '');
+                if ($expectedType !== '' && $expectedType !== $type) throw new \RuntimeException('微信返回的账号类型与选择不一致，请重新授权');
+                if ($tenantId > 0) OpenPlatformService::bindAuthorizer($tenantId, (string)$info['authorizer_appid'], $type, array_merge($profile, ['refresh_token' => $info['authorizer_refresh_token'] ?? '', 'func_info' => $scope]));
+                OpenPlatformService::clearAuthState($state);
+                self::log($requestId, 'authorized', 1, 'success', '', $tenantId);
+                return self::authorizationRedirect($tenantId, $type, 'success', (string)($context['return_origin'] ?? ''));
+            } catch (\Throwable $e) {
+                self::log($requestId, 'authorized', 1, 'failed', $e->getMessage(), $tenantId);
+                return self::authorizationRedirect($tenantId, (string)($context['authorizer_type'] ?? ''), 'failed', (string)($context['return_origin'] ?? ''));
+            }
+        }
+        if ($timestamp === '' || $nonce === '' || abs(time() - (int)$timestamp) > 300) throw new \RuntimeException('回调时间戳或 Nonce 已过期');
+        $raw = (string)$request->getContent();
+        if (str_starts_with(ltrim($raw),'{')) {
+            $envelope=\app\common\service\virtualpay\VirtualPayNotifyService::parse($raw);
+            $encrypted=trim((string)($envelope['Encrypt']??$envelope['encrypt']??''));
+        } else {
+            $xml = @simplexml_load_string($raw, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
+            if (!$xml) throw new \RuntimeException('回调报文格式错误');
+            $encrypted = trim((string)($xml->Encrypt ?? ''));
+        }
+        if ($encrypted === '') throw new \RuntimeException('回调密文为空');
+        $expected = sha1(implode('', self::sorted([$token, $timestamp, $nonce, $encrypted])));
+        if ($signature === '' || !hash_equals($expected, $signature)) throw new \RuntimeException('回调签名校验失败');
+        $encryptor = new Encryptor($appId, $token, $aesKey, $appId);
+        $plain = $encryptor->decrypt($encrypted, $signature, $nonce, $timestamp);
+        if (str_starts_with(ltrim($plain),'{')) {
+            $virtual=\app\common\service\virtualpay\VirtualPayNotifyService::parse($plain);
+            if (str_starts_with((string)($virtual['Event']??''),'xpay_')) return self::virtualReply($routeAppId,$virtual,true);
+            throw new \RuntimeException('不支持的 JSON 授权回调');
+        }
+        $message = @simplexml_load_string($plain, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
+        if (!$message) throw new \RuntimeException('回调解密失败');
+        $authorizerAppId = trim((string)($message->ToUserName ?? ''));
+        // The $APPID$ path segment is supplied by WeChat for the test
+        // authorizer, while ToUserName in an encrypted whole-network payload
+        // can identify the receiving platform/account differently. Signature
+        // and AES validation above already authenticate the callback, so this
+        // secondary equality check must not reject valid whole-network tests.
+        if ($routeAppId !== '' && $authorizerAppId !== '' && !hash_equals($routeAppId, $authorizerAppId)) {
+            error_log('[wechat-callback] route/message appid differ: route=' . $routeAppId . ' message=' . $authorizerAppId);
+        }
+        if (str_starts_with((string)($message->Event??''),'xpay_')) {
+            return self::virtualReply($routeAppId,json_decode(json_encode($message,JSON_THROW_ON_ERROR),true,64,JSON_THROW_ON_ERROR),false);
+        }
+        $testReply = self::wholeNetworkTestReply($message, $config);
+        if ($testReply !== null) {
+            return $testReply;
+        }
+        $event = (string)($message->InfoType ?? '');
+        $dedupePayload = match ($event) {
+            'component_verify_ticket' => (string)($message->ComponentVerifyTicket ?? ''),
+            'authorized', 'updateauthorized' => (string)($message->AuthorizationCode ?? $request->param('auth_code', '')),
+            'unauthorized' => (string)($message->AuthorizerAppid ?? ''),
+            default => $plain,
+        };
+        $eventKey = sha1($event . '|' . $dedupePayload);
+        $cachedReply = Cache::get('wechat.open_platform.callback.' . $eventKey);
+        if ($cachedReply) {
+            self::log(bin2hex(random_bytes(12)), $event, 1, 'duplicate');
+            return is_array($cachedReply) ? (string)($cachedReply['response'] ?? 'success') : 'success';
+        }
+        $requestId = bin2hex(random_bytes(12));
+        $tenantId = 0;
+        try {
+            if ($event === '') {
+                $result = self::authorizerReply($message, $config);
+            } elseif ($event === 'component_verify_ticket') {
+                OpenPlatformService::saveVerifyTicket((string)($message->ComponentVerifyTicket ?? ''));
+            } elseif (in_array($event, ['authorized', 'updateauthorized'], true)) {
+                $state = (string)$request->param('state', '');
+                $authorizationCode = (string)($message->AuthorizationCode ?? $request->param('auth_code', ''));
+                $context = $state !== '' ? self::stateContext($state) : ['tenant_id' => 0];
+                $tenantId = (int)($context['tenant_id'] ?? 0);
+                $info = OpenPlatformService::queryAuthorization($authorizationCode);
+                $scope = (array)($info['func_info'] ?? []);
+                $profile = OpenPlatformService::authorizerProfileByAppid((string)$info['authorizer_appid']);
+                $type = self::authorizerType($scope, array_merge($info, ['authorizer_info' => $profile]));
+                $expectedType = (string)($context['authorizer_type'] ?? '');
+                if ($expectedType !== '' && $expectedType !== $type) throw new \RuntimeException('微信返回的账号类型与选择不一致，请重新授权');
+                if ($tenantId > 0) OpenPlatformService::bindAuthorizer($tenantId, (string)$info['authorizer_appid'], $type, array_merge($profile, ['refresh_token' => $info['authorizer_refresh_token'] ?? '', 'func_info' => $scope]));
+                if ($state !== '') OpenPlatformService::clearAuthState($state);
+            } elseif ($event === 'unauthorized') {
+                OpenPlatformService::markUnauthorized((string)($message->AuthorizerAppid ?? ''));
+            }
+            $response = $result ?? 'success';
+            Cache::set('wechat.open_platform.callback.' . $eventKey, ['response' => $response], 86400);
+            self::log($requestId, $event, 1, 'success', '', $tenantId);
+            return $response;
+        } catch (\Throwable $e) {
+            self::log($requestId, $event, 1, 'failed', $e->getMessage(), $tenantId);
+            throw $e;
+        }
+    }
+
+    private static function verifyPlain(string $token, string $timestamp, string $nonce, string $signature): void { if ($timestamp === '' || abs(time() - (int)$timestamp) > 300 || $signature === '') throw new \RuntimeException('回调签名参数无效'); $expected = sha1(implode('', self::sorted([$token, $timestamp, $nonce]))); if (!hash_equals($expected, $signature)) throw new \RuntimeException('回调签名校验失败'); }
+    private static function stateContext(string $state): array { return $state === '' ? ['tenant_id' => 0] : OpenPlatformService::authState($state); }
+
+    /**
+     * componentloginpage does not reliably round-trip a custom state value.
+     * The relay therefore stores the signed value in an HttpOnly, same-site
+     * cookie on the configured OPC host. Query state is still preferred for
+     * compatibility with providers that do return it.
+     */
+    private static function authorizationState($request): string
+    {
+        $state = trim((string)$request->param('state', ''));
+        return $state !== '' ? $state : trim((string)$request->cookie(OpenPlatformService::authStateCookieName(), ''));
+    }
+
+    private static function authorizationRedirect(int $tenantId, string $type, string $status, string $returnOrigin = ''): array
+    {
+        if ($tenantId <= 0) return ['response' => $status === 'success' ? 'success' : 'fail'];
+        $channel = $type === 'miniprogram' ? 'miniprogram' : 'official';
+        $base = OpenPlatformService::normalizeReturnOrigin($returnOrigin);
+        if ($base === '') {
+            $base = rtrim((string)request()->domain(), '/');
+            $base = (string)(preg_replace('#^http://#i', 'https://', $base) ?: $base);
+        }
+        $query = http_build_query(['channel' => $channel, 'wechat_auth' => $status]);
+        return ['redirect' => $base . '/t/' . $tenantId . '/admin/channel/overview?' . $query];
+    }
+
+    /** Handle WeChat's fixed whole-network verification messages before tenant routing. */
+    private static function wholeNetworkTestReply(\SimpleXMLElement $message, array $config): ?string
+    {
+        $messageType = strtolower(trim((string)($message->MsgType ?? '')));
+        $fromUser = (string)($message->FromUserName ?? '');
+        $toUser = (string)($message->ToUserName ?? '');
+        $content = trim((string)($message->Content ?? ''));
+
+        // WeChat's whole-network test messages are encrypted text messages,
+        // but installations/proxies have been observed to vary MsgType case.
+        // Match the content contract independently so QUERY_AUTH_CODE cannot
+        // fall through into the normal authorizer-message handler.
+        if (stripos($content, 'QUERY_AUTH_CODE:') === 0) {
+            if ($fromUser === '' || $toUser === '') throw new \RuntimeException('全网检测消息用户标识为空');
+            $queryCode = trim(substr($content, strlen('QUERY_AUTH_CODE:')));
+            if ($queryCode === '') throw new \RuntimeException('全网检测授权码为空');
+            $authorization = OpenPlatformService::queryAuthorization($queryCode);
+            $accessToken = (string)($authorization['authorizer_access_token'] ?? '');
+            if ($accessToken === '') throw new \RuntimeException('全网检测授权未返回 authorizer_access_token');
+            OpenPlatformService::sendAuthorizerCustomText($accessToken, $fromUser, $queryCode . '_from_api');
+            // WeChat's official-account whole-network test requires an empty
+            // response body after the custom message is sent.
+            return '';
+        }
+
+        if ($messageType === 'text' && $fromUser !== '' && $toUser !== '' && strcasecmp($content, 'TESTCOMPONENT_MSG_TYPE_TEXT') === 0) {
+            return self::encryptedTextReply($config, $fromUser, $toUser, 'TESTCOMPONENT_MSG_TYPE_TEXT_callback');
+        }
+
+        if ($messageType === 'event') {
+            $event = trim((string)($message->Event ?? ''));
+            if ($event !== '') return self::encryptedTextReply($config, $fromUser, $toUser, $event . 'from_callback');
+        }
+        return null;
+    }
+
+    private static function encryptedTextReply(array $config, string $toUser, string $fromUser, string $content): string
+    {
+        $plain = self::textReplyXml($toUser, $fromUser, $content);
+        $encryptor = new Encryptor(
+            (string)$config['app_id'],
+            OpenPlatformService::credentialValue($config['token'] ?? ''),
+            OpenPlatformService::credentialValue($config['encoding_aes_key'] ?? ''),
+            (string)$config['app_id']
+        );
+        return $encryptor->encryptAsXml($plain);
+    }
+    private static function sorted(array $values): array { sort($values, SORT_STRING); return $values; }
+    private static function authorizerType(array $scope, array $info = []): string
+    {
+        $profile = (array)($info['authorizer_info'] ?? $info);
+        foreach (['MiniProgramInfo', 'mini_program_info', 'miniProgramInfo'] as $key) {
+            if (!empty($profile[$key])) return 'miniprogram';
+        }
+        $value = json_encode($profile, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (str_contains((string)$value, '小程序') || str_contains(strtolower((string)$value), 'miniprogram')) return 'miniprogram';
+        $json = json_encode($scope, JSON_UNESCAPED_UNICODE);
+        return str_contains((string)$json, '小程序') || str_contains(strtolower((string)$json), 'mini') ? 'miniprogram' : 'official';
+    }
+
+    /** Reply to an authorized official-account message through the component callback. */
+    private static function authorizerReply(\SimpleXMLElement $message, array $config): string
+    {
+        $authorizerAppId = trim((string)($message->ToUserName ?? ''));
+        if ($authorizerAppId === '') {
+            return 'success';
+        }
+        $authorizer = WechatAuthorizer::withoutGlobalScope()
+            ->where([
+                'authorizer_appid' => $authorizerAppId,
+                'authorizer_type' => 'official',
+                'authorization_status' => 1,
+            ])
+            ->findOrEmpty();
+        if ($authorizer->isEmpty()) {
+            return 'success';
+        }
+
+        $payload = [];
+        foreach ($message as $key => $value) {
+            $payload[$key] = (string)$value;
+        }
+        $reply = OfficialAccountReplyLogic::authorizerReply($payload, (int)$authorizer['tenant_id']);
+        if ($reply === '') {
+            return 'success';
+        }
+
+        $plain = self::textReplyXml(
+            (string)($message->FromUserName ?? ''),
+            $authorizerAppId,
+            $reply
+        );
+        $encryptor = new Encryptor(
+            (string)$config['app_id'],
+            OpenPlatformService::credentialValue($config['token'] ?? ''),
+            OpenPlatformService::credentialValue($config['encoding_aes_key'] ?? ''),
+            (string)$config['app_id']
+        );
+        return $encryptor->encryptAsXml($plain);
+    }
+
+    private static function textReplyXml(string $toUser, string $fromUser, string $content): string
+    {
+        $escape = static fn (string $value): string => str_replace(']]>', ']]]]><![CDATA[>', $value);
+        return '<xml><ToUserName><![CDATA[' . $escape($toUser) . ']]></ToUserName>'
+            . '<FromUserName><![CDATA[' . $escape($fromUser) . ']]></FromUserName>'
+            . '<CreateTime>' . time() . '</CreateTime><MsgType><![CDATA[text]]></MsgType>'
+            . '<Content><![CDATA[' . $escape($content) . ']]></Content></xml>';
+    }
+    private static function log(string $requestId, string $event, int $valid, string $result, string $error = '', int $tenantId = 0): void { try { WechatCallbackLog::withoutGlobalScope()->insert(['request_id' => $requestId, 'tenant_id' => $tenantId, 'event_type' => $event, 'signature_valid' => $valid, 'result' => $result, 'error_message' => mb_substr($error, 0, 255), 'create_time' => time()]); } catch (\Throwable $ignored) {} }
+}

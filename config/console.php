@@ -1,0 +1,52 @@
+<?php
+// +----------------------------------------------------------------------
+// | 控制台配置
+// +----------------------------------------------------------------------
+return [
+    // 指令定义
+    'commands' => [
+        'point-alert:maintain' => 'app\\common\\command\\PointAlertMaintain',
+        'micro-video:worker' => 'app\\common\\command\\MicroVideoWorkerCommand',
+        'canvas:adapt-projects' => 'app\\common\\command\\CanvasAdaptProjects',
+        'home-agent:stt-reconcile' => 'app\\common\\command\\HomeAgentSttReconcile',
+        'home-agent:health' => 'app\\common\\command\\HomeAgentHealth',
+        'home-agent:worker' => 'app\\common\\command\\HomeAgentWorker',
+
+        'virtualpay:maintain' => 'app\\common\\command\\VirtualPayMaintain',
+        'brand:worker' => 'app\\common\\command\\BrandWorker',
+        'brand:maintain' => 'app\\common\\command\\BrandMaintain',
+        'decoration:agent-worker' => 'app\\common\\command\\DecorationAgentWorker',
+        'open-platform:worker' => 'app\\common\\command\\OpenPlatformWorker',
+        'short-drama:episode-worker' => 'app\common\command\ShortDramaEpisodeWorker',
+        'short-drama:planning-worker' => 'app\common\command\ShortDramaPlanningWorker',
+        'short-drama:reconcile-planning' => 'app\common\command\ReconcileShortDramaPlanning',
+        'short-drama:canvas-agent-worker' => 'app\common\command\ShortDramaCanvasAgentWorker',
+        // 定时任务
+        'site-license:refresh' => 'app\common\command\SiteLicenseRefresh',
+        'crontab' => 'app\common\command\Crontab',
+        // 退款查询
+        'query_refund' => 'app\common\command\QueryRefund',
+        // 到期分销佣金结算
+        'distribution:settle' => 'app\common\command\SettleDistributionCommission',
+        // 充值到账修复
+        'recharge:repair' => 'app\common\command\RepairRecharge',
+        // AIGC消耗日志补偿刷新
+        'ai:usage_reconcile' => 'app\common\command\AiUsageReconcile',
+        // AIGC 异步结果 Worker（宝塔守护进程）
+        'ai:task-worker' => 'app\common\command\AiTaskWorker',
+        'ai:market-audit' => 'app\common\command\MarketTaskAudit',
+        // AIGC 关联业务结果修复
+        'ai:repair-linked-results' => 'app\common\command\AiRepairLinkedResults',
+        // 仅恢复因错误本地超时被退款的上游任务
+        'ai:recover-timeout-tasks' => 'app\common\command\AiRecoverTimeoutTasks',
+        // 租户合约到期扫描
+        'tenant:expire_contracts' => 'app\common\command\ExpireTenantContracts',
+        // 算力套餐支付状态核对与补偿
+        'tenant_power:reconcile' => 'app\common\command\ReconcileTenantPowerOrders',
+        // 贴牌订单超时释放预占额度
+        'tenant:expire_brand_orders' => 'app\common\command\ExpireTenantBrandOrders',
+        // 短剧任务提示词修复
+        'short-drama:repair-prompts' => 'app\common\command\RepairShortDramaPrompts',
+        'short-drama:dedupe-assets' => 'app\common\command\RepairShortDramaDuplicateAssets',
+    ],
+];

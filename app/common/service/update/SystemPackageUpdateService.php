@@ -1,0 +1,1531 @@
+<?php
+
+namespace app\common\service\update;
+
+use app\common\model\update\UpdatePackage;
+use app\common\model\update\UpdateTask;
+use app\common\service\ConfigService;
+use app\common\service\app\AppAccessService;
+use app\common\service\app\DefaultAppService;
+use app\common\service\app\AppRegistryService;
+use app\common\service\billing\PackageProvisionService;
+use app\common\service\database\SqlMigrationExecutor;
+use app\platformapi\logic\upgrade\UpgradeLogic;
+use RuntimeException;
+use think\facade\Db;
+use Throwable;
+
+class SystemPackageUpdateService
+{
+    private const UPDATE_EXECUTION_TIMEOUT = 600;
+    private const STEP_UPDATE_BRIDGE_VERSION = '1.0.116';
+    private const CONFIG_TYPE = 'update_service';
+    private const AUTO_UPDATE_ENABLED_CONFIG = 'auto_update_enabled';
+    private const FULL_REPLACE_ALLOWED_DIRS = [
+        'public/admin',
+        'public/platform',
+        'public/pc',
+        'public/_nuxt',
+        'public/media',
+        'public/mobile',
+        'public/mp-weixin',
+        'public/static',
+    ];
+    private const DELETE_ALLOWED_PREFIXES = [
+        'app/',
+        'config/',
+        'extend/',
+        'public/admin/',
+        'public/platform/',
+        'public/pc/',
+        'public/_nuxt/',
+        'public/media/',
+        'public/mobile/',
+        'public/mp-weixin/',
+        'public/static/',
+        'route/',
+        'upgrade/',
+    ];
+    private const PROTECTED_PATH_PATTERNS = [
+        '#^oem(/|$)#',
+        '#^public/oem-assets(/|$)#',
+        '#^\.env$#',
+        '#(^|/)\.env(\.|$)#',
+        '#^config/install\.lock$#',
+        '#^runtime(/|$)#',
+        '#^public/uploads(/|$)#',
+        '#^public/storage(/|$)#',
+        '#^public/qrcode(/|$)#',
+        '#(^|/)\.DS_Store$#',
+        '#\.log$#',
+    ];
+
+    public function versions(array $params = []): array
+    {
+        $params = array_merge([
+            'current_version' => UpdateSourceClient::currentCoreVersion(),
+            'upgrade_mode' => 'step',
+            'updater_capability' => [
+                'step_package' => true,
+                'base_version_check' => true,
+                'bridge_version' => self::STEP_UPDATE_BRIDGE_VERSION,
+                'composer_runtime' => 1,
+                'composer_runtime_updater_version' => ComposerRuntimeUpdateService::CAPABILITY_VERSION,
+            ],
+        ], $params);
+        return (new UpdateSourceClient())->systemRequest('system/versions', $params)['data'];
+    }
+
+    public function overview(): array
+    {
+        $current = UpdateSourceClient::currentCoreVersion();
+        $ignored = (string)ConfigService::get(self::CONFIG_TYPE, 'ignored_version', '');
+        $environment = PackageExtractService::environment(UpgradeLogic::getProjectPath());
+        $versions = [];
+        $latest = [];
+        $error = '';
+        $errorCode = '';
+        try {
+            $data = $this->versions();
+            $versions = $this->normalizeVersions($data);
+            $latest = $this->selectNextVersion($versions, $current);
+            $cloudLatestVersion = $this->versionOf($versions[0] ?? []);
+            if (!$latest && $cloudLatestVersion !== '' && version_compare($cloudLatestVersion, $current, '>')) {
+                $denied = array_values(array_filter($versions, fn(array $v): bool => !$this->canDownloadVersion($v)
+                    && version_compare($this->versionOf($v), $current, '>')));
+                $errorCode = (string)($denied[0]['deny_reason'] ?? 'UPGRADE_CHAIN_UNSUPPORTED');
+                $error = $denied ? (string)(($denied[0]['deny_message'] ?? '') ?: '新版本不在当前更新权益范围内')
+                    : '更新源未返回当前版本可用的下一步升级包，请先同步桥接包或连续步进包';
+            }
+        } catch (Throwable $e) {
+            $error = $e->getMessage();
+            $errorCode = $e instanceof UpdateProtocolException ? $e->errorCode : 'SYSTEM_CHECK_FAILED';
+        }
+        $latestVersion = (string)($latest['version'] ?? $latest['version_no'] ?? '');
+        return [
+            'current_version' => $current,
+            'latest' => $latest,
+            'versions' => $versions,
+            'current_version_log' => $this->versionRecord($versions, $current),
+            'worker' => $this->workerGuide(),
+            'ignored_version' => $ignored,
+            'auto_update_enabled' => $this->autoUpdateEnabled(),
+            'has_update' => $latestVersion !== '' && version_compare($latestVersion, $current, '>'),
+            'is_ignored' => $latestVersion !== '' && $latestVersion === $ignored,
+            'environment' => $environment,
+            'error' => $error,
+            'error_code' => $errorCode,
+            'cloud_latest_version' => $this->versionOf($versions[0] ?? []),
+            'updates' => (new \app\common\service\license\SiteLicenseAccessService())->snapshot()['updates'],
+        ];
+    }
+
+    public function saveAutoUpdateEnabled(bool $enabled): array
+    {
+        ConfigService::set(self::CONFIG_TYPE, self::AUTO_UPDATE_ENABLED_CONFIG, $enabled ? 1 : 0);
+        $this->recordTask('auto_update_config', '', 'success', 0, [], [
+            'enabled' => $enabled,
+        ]);
+
+        return ['enabled' => $enabled];
+    }
+
+    private function autoUpdateEnabled(): bool
+    {
+        return filter_var(
+            ConfigService::get(self::CONFIG_TYPE, self::AUTO_UPDATE_ENABLED_CONFIG, 0),
+            FILTER_VALIDATE_BOOLEAN
+        );
+    }
+
+    private function workerGuide(): array
+    {
+        $directory = rtrim(root_path(), DIRECTORY_SEPARATOR);
+        $script = $directory . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'start-ai-task-worker.sh';
+        if (!is_file($script) && is_file($directory . DIRECTORY_SEPARATOR . 'server' . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'start-ai-task-worker.sh')) {
+            $directory .= DIRECTORY_SEPARATOR . 'server';
+            $script = $directory . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'start-ai-task-worker.sh';
+        }
+
+        return [
+            'name' => 'aigc-task-worker',
+            'start_user' => 'root',
+            'process_count' => '1',
+            'priority' => '999',
+            'remark' => 'AI 任务守护进程',
+            'directory' => $directory,
+            'start_command' => '/bin/sh ' . escapeshellarg($script),
+            'log_command' => 'tail -f ' . escapeshellarg($directory . DIRECTORY_SEPARATOR . 'runtime' . DIRECTORY_SEPARATOR . 'log' . DIRECTORY_SEPARATOR . 'ai_task_worker.log'),
+        ];
+    }
+
+    private function versionRecord(array $versions, string $version): array
+    {
+        foreach ($versions as $item) {
+            if ($this->versionOf($item) === $version) {
+                return $item;
+            }
+        }
+        return ['version' => $version];
+    }
+
+    public function downloadPackage(string $targetVersion, string $currentVersion = ''): array
+    {
+        $this->extendExecutionTimeout();
+        try {
+            if ($targetVersion === '') {
+                throw new RuntimeException('请选择目标版本');
+            }
+            (new UpdateLicenseService())->assertSystemUpdateAllowed($targetVersion);
+            $params = [
+                'target_version' => $targetVersion,
+                'current_version' => $currentVersion ?: UpdateSourceClient::currentCoreVersion(),
+                'upgrade_mode' => 'step',
+                'updater_capability' => [
+                    'step_package' => true,
+                    'base_version_check' => true,
+                    'bridge_version' => self::STEP_UPDATE_BRIDGE_VERSION,
+                    'composer_runtime' => 1,
+                    'composer_runtime_updater_version' => ComposerRuntimeUpdateService::CAPABILITY_VERSION,
+                ],
+            ];
+            $client = new UpdateSourceClient();
+            $response = $client->systemRequest('system/package', $params);
+            for ($attempt = 0; ; $attempt++) {
+                $data = $response['data'];
+                SystemUpdateProtocol::package($response['response_json'], UpdateSourceClient::getSource()['public_key'],
+                    (new UpdateLicenseService())->verifiedSiteContext(), $targetVersion);
+                try {
+                    $download = $this->downloadWithFallback($data);
+                    break;
+                } catch (UpdateProtocolException $e) {
+                    if ($attempt > 0 || $e->errorCode !== 'SYSTEM_DOWNLOAD_REAUTHORIZE') throw $e;
+                    $response = $client->systemRequest('system/package', $params);
+                }
+            }
+            $row = UpdatePackage::create([
+                'package_id' => (string)($data['package_id'] ?? 'system_' . $targetVersion),
+                'type' => 'system',
+                'source' => 'cloud',
+                'app_code' => '',
+                'version' => (string)($data['version'] ?? $targetVersion),
+                'format' => (string)($download['format'] ?? 'zip'),
+                'local_path' => (string)$download['path'],
+                'extract_path' => '',
+                'sha256' => (string)$download['sha256'],
+                'package_size' => (int)$download['size'],
+                'manifest_json' => $data['manifest'] ?? [],
+                'status' => 'downloaded',
+                'error' => '',
+                'create_time' => time(),
+                'update_time' => time(),
+            ]);
+            $result = $row->toArray();
+            (new SystemPackageGrantService())->save((int)$result['id'], $response, $result);
+            $this->recordTask('download', (string)$result['version'], 'success', (int)$result['id'], [], [
+                'package_id' => $result['package_id'],
+                'format' => $result['format'],
+                'sha256' => $result['sha256'],
+                'package_size' => $result['package_size'],
+            ]);
+            return $result;
+        } catch (Throwable $e) {
+            $this->recordTask('download', $targetVersion, 'failed', 0, [], [], $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public function ignoreVersion(string $version): array
+    {
+        ConfigService::set(self::CONFIG_TYPE, 'ignored_version', $version);
+        $this->recordTask('ignore', $version, 'success', 0, [], ['ignored_version' => $version]);
+        return ['ignored_version' => $version];
+    }
+
+    /**
+     * 可回退的版本仅来自已签名的更新源，且只能低于当前本地版本。
+     */
+    public function rollbackVersions(): array
+    {
+        $current = UpdateSourceClient::currentCoreVersion();
+        $versions = $this->normalizeVersions($this->versions());
+        $lists = array_values(array_filter($versions, function (array $item) use ($current): bool {
+            $version = $this->versionOf($item);
+            return $this->isValidVersion($version) && version_compare($version, $current, '<');
+        }));
+
+        return [
+            'current_version' => $current,
+            'lists' => $lists,
+        ];
+    }
+
+    /**
+     * 回退仅重置本地版本标记，以便重新检测、下载对应的升级包；不会回退业务文件或数据库。
+     */
+    public function rollbackVersion(string $version): array
+    {
+        $version = trim($version);
+        $current = UpdateSourceClient::currentCoreVersion();
+        if (!$this->isValidVersion($version)) {
+            throw new RuntimeException('版本号格式不正确');
+        }
+        if (!version_compare($version, $current, '<')) {
+            throw new RuntimeException('只能回退到低于当前系统的历史版本');
+        }
+
+        $availableVersions = $this->rollbackVersions()['lists'];
+        $allowed = array_filter($availableVersions, fn (array $item): bool => $this->versionOf($item) === $version);
+        if (!$allowed) {
+            throw new RuntimeException('该版本不在当前更新源的可回退版本列表中');
+        }
+
+        $this->writeLocalVersion($version);
+        ConfigService::set(self::CONFIG_TYPE, 'ignored_version', '');
+        $this->recordTask('rollback', $version, 'success', 0, [], [
+            'from_version' => $current,
+            'to_version' => $version,
+            'scope' => 'local_version_markers',
+        ]);
+
+        return [
+            'from_version' => $current,
+            'version' => $version,
+        ];
+    }
+
+    public function logs(array $params = []): array
+    {
+        $pageNo = max(1, (int)($params['page_no'] ?? 1));
+        $pageSize = max(1, (int)($params['page_size'] ?? 15));
+        $query = UpdateTask::where('type', 'system');
+        if (!empty($params['status'])) {
+            $query->where('status', (string)$params['status']);
+        }
+        if (!empty($params['version'])) {
+            $query->whereLike('version', '%' . $params['version'] . '%');
+        }
+        if (!empty($params['start_time']) && !empty($params['end_time'])) {
+            $query->whereBetween('create_time', [strtotime((string)$params['start_time']), strtotime((string)$params['end_time'])]);
+        }
+        $count = (clone $query)->count();
+        $lists = $query->order('id', 'desc')
+            ->limit(($pageNo - 1) * $pageSize, $pageSize)
+            ->select()
+            ->toArray();
+        return [
+            'lists' => $lists,
+            'count' => $count,
+            'page_no' => $pageNo,
+            'page_size' => $pageSize,
+            'extend' => [],
+        ];
+    }
+
+    public function versionLogs(array $params = []): array
+    {
+        $pageNo = max(1, (int)($params['page_no'] ?? 1));
+        $pageSize = max(1, (int)($params['page_size'] ?? 15));
+        $keyword = trim((string)($params['keyword'] ?? ''));
+        $version = trim((string)($params['version'] ?? ''));
+        $updateType = trim((string)($params['update_type'] ?? ''));
+
+        $lists = $this->normalizeVersions($this->versions($params));
+        $lists = array_values(array_filter($lists, function ($item) use ($keyword, $version, $updateType) {
+            $itemVersion = (string)($item['version'] ?? $item['version_no'] ?? '');
+            $title = (string)($item['title'] ?? '');
+            $summary = (string)($item['summary'] ?? $item['description'] ?? '');
+            if ($version !== '' && stripos($itemVersion, $version) === false) {
+                return false;
+            }
+            if ($updateType !== '' && (string)($item['update_type'] ?? '') !== $updateType) {
+                return false;
+            }
+            if ($keyword !== '' && stripos($itemVersion . ' ' . $title . ' ' . $summary, $keyword) === false) {
+                return false;
+            }
+            return true;
+        }));
+
+        $count = count($lists);
+        $pageLists = array_slice($lists, ($pageNo - 1) * $pageSize, $pageSize);
+        return [
+            'lists' => $pageLists,
+            'count' => $count,
+            'page_no' => $pageNo,
+            'page_size' => $pageSize,
+            'extend' => [],
+        ];
+    }
+
+    public function preflight(int $packageId): array
+    {
+        $this->extendExecutionTimeout();
+        try {
+            $package = $this->getPackage($packageId);
+            (new SystemPackageGrantService())->ensure($package->toArray());
+            $extractor = new PackageExtractService();
+            $preflight = $extractor->preflight((string)$package['local_path'], UpgradeLogic::getProjectPath(), (int)$package['package_size'], (string)$package['format']);
+            if (!$preflight['passed']) {
+                return $this->finishPreflight($package, $preflight);
+            }
+            $extract = $extractor->extract((string)$package['local_path'], (string)$package['format']);
+            if (($extract['extract_status'] ?? '') !== 'success') {
+                return $this->finishPreflight($package, [
+                    'passed' => false,
+                    'errors' => [$extract['error'] ?? '解压失败'],
+                    'extract' => $extract,
+                    'environment' => $preflight['environment'],
+                ]);
+            }
+            try {
+                PackageExtractService::assertRequiredFiles($extract['path'], [
+                    'update.json',
+                    'files',
+                    'menus',
+                    'rollback',
+                    'signature.json',
+                ]);
+                $extractor->verifySignatureManifest($extract['path']);
+                $manifest = $this->readUpdateManifest($extract['path']);
+                if (!empty($package['version']) && !empty($manifest['version']) && $manifest['version'] !== $package['version']) {
+                    throw new RuntimeException('系统包版本与下载接口不一致');
+                }
+                if (!empty($manifest['product_code']) && $manifest['product_code'] !== UpdateSourceClient::PRODUCT_CODE) {
+                    throw new RuntimeException('系统包 product_code 不一致');
+                }
+                $this->assertCoreRequirement($manifest);
+                $this->assertIncrementalManifest($manifest, $extract['path']);
+                $this->assertIncrementalComposerRuntime($manifest, $extract['path']);
+                $runtime = (new ComposerRuntimeUpdateService(UpgradeLogic::getProjectPath()))->preflight($extract['path'], $manifest);
+                $builtinApps = $this->preflightBuiltinApps($extract['path'], $manifest);
+                $processImpact = ProjectUpdateProcessGate::inspectUpdate(UpgradeLogic::getProjectPath(), $extract['path'], $manifest);
+                $result = [
+                    'passed' => true,
+                    'errors' => [],
+                    'extract' => $extract,
+                    'manifest' => $manifest,
+                    'environment' => $preflight['environment'],
+                    'builtin_apps' => $builtinApps,
+                    'composer_runtime' => $runtime,
+                    'process_impact' => $processImpact,
+                ];
+                $package->save([
+                    'version' => (string)($manifest['version'] ?? $package['version']),
+                    'manifest_json' => $manifest,
+                    'extract_path' => $extract['path'],
+                    'status' => 'preflight_success',
+                    'error' => '',
+                    'update_time' => time(),
+                ]);
+                $this->recordTask('preflight', (string)($manifest['version'] ?? $package['version']), 'success', (int)$package['id'], $result, [
+                    'passed' => true,
+                    'extract_path' => $extract['path'] ?? '',
+                ]);
+                return $result;
+            } catch (Throwable $e) {
+                return $this->finishPreflight($package, [
+                    'passed' => false,
+                    'errors' => [$e->getMessage()],
+                    'extract' => $extract,
+                    'environment' => $preflight['environment'],
+                ]);
+            }
+        } catch (Throwable $e) {
+            $this->recordTask('preflight', '', 'failed', $packageId, [], [], $e->getMessage());
+            throw $e;
+        }
+    }
+
+    public function apply(int $packageId): array
+    {
+        $this->extendExecutionTimeout();
+        $package = $this->getPackage($packageId);
+        $task = $this->createTask($package, 'apply');
+        $transactionStarted = false;
+        $lock = $this->acquireLock('system_update');
+        if (!$lock) {
+            $this->finishTask($task, 'failed', [], '已有系统更新任务正在执行，请稍后再试');
+            throw new RuntimeException('已有系统更新任务正在执行，请稍后再试');
+        }
+        try {
+            if (!DirectSiteUpdateService::enabled(UpgradeLogic::getProjectPath()) && is_file(UpgradeLogic::getProjectPath().'/.composer-runtime/current.json')) {
+                (new ComposerRuntimeUpdateService(UpgradeLogic::getProjectPath()))->recover();
+            }
+            // Re-extract from the signed archive so a modified previous preflight directory
+            // or an expired/rebound grant cannot bypass the final installation gate.
+            $this->preflight($packageId);
+            $package = $this->getPackage($packageId);
+            if ($package['status'] !== 'preflight_success') {
+                throw new RuntimeException($package['error'] ?: '系统包预检未通过');
+            }
+            $extractPath = rtrim((string)$package['extract_path'], '/');
+            (new SystemPackageGrantService())->ensure($package->toArray());
+            $manifest = $this->readUpdateManifest($extractPath);
+            $processImpact = ProjectUpdateProcessGate::inspectUpdate(UpgradeLogic::getProjectPath(), $extractPath, $manifest);
+            ProjectUpdateProcessGate::assertUpdateAllowed(UpgradeLogic::getProjectPath(), $processImpact);
+            $runtimeInstaller = new ComposerRuntimeUpdateService(UpgradeLogic::getProjectPath());
+            $binding=['kind'=>'system','package_id'=>(int)$package['id'],'task_id'=>(int)$task['id'],'archive_sha256'=>(string)$package['sha256'],'context'=>array_intersect_key($_SERVER,array_flip(['HTTP_HOST','SERVER_NAME','SERVER_ADDR','SERVER_PORT','HTTPS']))];
+            // Derived only by this authenticated server from verified bytes.
+            // UI-only updates must not opportunistically repair unrelated schema.
+            $binding['runtime_metadata_unchanged']=!$processImpact['requires_stop'];
+            $encoded=json_encode($binding,JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+            if (DirectSiteUpdateService::enabled(UpgradeLogic::getProjectPath()) || !is_file(rtrim(UpgradeLogic::getProjectPath(),'/').'/.composer-runtime/current.json')) {
+                $direct=new DirectSiteUpdateService(UpgradeLogic::getProjectPath(),PHP_SAPI==='cli'?PHP_BINARY:PHP_BINDIR.'/php');
+                $binding['deployment_generation']=rtrim(UpgradeLogic::getProjectPath(),'/');
+                $encoded=json_encode($binding,JSON_THROW_ON_ERROR);
+                $watch=['public/admin/index.html','public/pc/index.html'];
+                foreach(glob($extractPath.'/files/app/apps/*/manifest.json')?:[] as $appFile){
+                    $appManifest=json_decode((string)file_get_contents($appFile),true);
+                    foreach((array)($appManifest['public_assets']??[]) as $asset)if(!empty($asset['target']))$watch[]=(string)$asset['target'];
+                }
+                $result=$direct->apply($extractPath,$manifest,[
+                    'binding'=>$binding,'watch_paths'=>array_values(array_unique($watch)),
+                    'before_sql'=>fn()=>ProjectUpdateProcessGate::assertUpdateAllowed(UpgradeLogic::getProjectPath(),$processImpact),
+                    'validate_sql'=>fn(string $site)=>$direct->child(['--bootstrap-check',$site,$extractPath,$encoded]),
+                    'sql'=>fn(string $site)=>$direct->child(['--bootstrap-prepare',$site,$extractPath,$encoded]),
+                    'complete'=>fn(string $site)=>$direct->child(['--bootstrap-complete',$site,$extractPath,$encoded])['completion'],
+                    'confirm'=>function(string $site,array $context)use($direct):?array{
+                        $reply=$direct->child(['--direct-confirm',$site,'-',json_encode($context,JSON_THROW_ON_ERROR)]);
+                        return !empty($reply['committed'])?(array)$reply['completion']:null;
+                    },
+                ]);
+                return $result['completion'];
+            }
+            $installation = $runtimeInstaller->apply($extractPath, $manifest, [
+                'immutable_code'=>true,'bootstrap_context'=>$binding,
+                'before_sql'=>fn()=>ProjectUpdateProcessGate::assertUpdateAllowed(UpgradeLogic::getProjectPath(),$processImpact),
+                'validate_sql'=>fn(string $generation)=>$runtimeInstaller->bootstrapChild(['--bootstrap-check',$generation,$extractPath,$encoded]),
+                'sql'=>fn(string $generation)=>$runtimeInstaller->bootstrapChild(['--bootstrap-prepare',$generation,$extractPath,$encoded]),
+                'files'=>fn()=> (new SystemRuntimeBootstrapService())->copySharedFiles($extractPath,$manifest),
+                'finalize'=>fn()=>[],
+                'marker'=>fn()=>ProjectUpdateProcessGate::assertUpdateAllowed(UpgradeLogic::getProjectPath(),$processImpact),
+                'complete'=>fn(string $generation)=>$runtimeInstaller->bootstrapChild(['--bootstrap-complete',$generation,$extractPath,$encoded])['completion'],
+            ]);
+            $result = $installation['completion'] ?? ['version'=>$package['version'], 'extract_path'=>$extractPath, 'composer_runtime'=>$installation];
+            return $result;
+        } catch (Throwable $e) {
+            if ($transactionStarted) Db::rollback();
+            if (DirectSiteUpdateService::hasPendingOperation(UpgradeLogic::getProjectPath(),(int)$package['id'],(int)$task['id'])) throw $e;
+            $package->save(['status' => 'apply_failed', 'error' => $e->getMessage(), 'update_time' => time()]);
+            $this->finishTask($task, 'failed', [], $e->getMessage());
+            throw $e;
+        } finally {
+            $this->releaseLock($lock);
+        }
+    }
+
+    private function downloadWithFallback(array $data): array
+    {
+        try {
+            return UpdateSourceClient::download((string)($data['download_url'] ?? ''), (string)($data['sha256'] ?? ''), (string)($data['format'] ?? 'zip'));
+        } catch (Throwable $e) {
+            if ($e instanceof UpdateProtocolException && $e->errorCode === 'SYSTEM_DOWNLOAD_REAUTHORIZE') throw $e;
+            if (empty($data['fallback_url'])) {
+                throw $e;
+            }
+            return UpdateSourceClient::download((string)$data['fallback_url'], (string)($data['fallback_sha256'] ?? ''), (string)($data['fallback_format'] ?? 'tar.gz'));
+        }
+    }
+
+    private function extendExecutionTimeout(): void
+    {
+        ini_set('max_execution_time', (string)self::UPDATE_EXECUTION_TIMEOUT);
+        set_time_limit(self::UPDATE_EXECUTION_TIMEOUT);
+    }
+
+    public function checkBootstrapMigrations(string $extractPath,array $binding=[]): array
+    {
+        if (PHP_SAPI !== 'cli' || empty($GLOBALS['AIGC_RUNTIME_GENERATION_OVERRIDE'])) throw new RuntimeException('自举迁移预检必须在隔离进程执行');
+        $manifest=$this->readUpdateManifest($extractPath);
+        if (($binding['runtime_metadata_unchanged']??false)===true) return [];
+        $checked=[];
+        foreach ($this->packagedBuiltinAppCodes($extractPath) as $code) {
+            AppRegistryService::assertRuntimeMigrationsReady($code);
+            $checked[]=$code;
+        }
+        return $checked;
+    }
+
+    public function prepareBootstrapSql(string $extractPath,array $binding=[]): array
+    {
+        if (PHP_SAPI !== 'cli' || empty($GLOBALS['AIGC_RUNTIME_GENERATION_OVERRIDE'])) throw new RuntimeException('自举迁移必须在隔离进程执行');
+        $manifest=$this->readUpdateManifest($extractPath);
+        if(($binding['runtime_metadata_unchanged']??false)===true){
+            $impact=ProjectUpdateProcessGate::inspectUpdate(root_path(),$extractPath,$manifest);
+            if($impact['requires_stop'])throw new RuntimeException('无需停机更新的运行内容已变化，请重新预检');
+            return [];
+        }
+        $appSqlOwners=$this->runtimeAppSqlOwners($extractPath,$manifest);
+        \app\common\service\database\RuntimeMetadataTransactionGate::assertMetadata();
+        if (System392RecoveryService::shouldSkipCompletedSystemSql($extractPath)) {
+            return $this->prepareRuntimeApps($extractPath,(string)$manifest['version']);
+        }
+        Db::startTrans();
+        try { $this->applySqlGroup($extractPath,$manifest,'data',$appSqlOwners); Db::commit(); }
+        catch (Throwable $e) { Db::rollback(); throw $e; }
+        $this->applySqlGroup($extractPath,$manifest,'structure',$appSqlOwners);
+        return $this->prepareRuntimeApps($extractPath,(string)$manifest['version']);
+    }
+
+    public function completeBootstrap(string $extractPath, array $binding): array
+    {
+        if (PHP_SAPI !== 'cli' || empty($GLOBALS['AIGC_RUNTIME_GENERATION_OVERRIDE'])) throw new RuntimeException('自举完成必须在隔离进程执行');
+        $package=$this->getPackage((int)$binding['package_id']);
+        $task=UpdateTask::where(['id'=>(int)$binding['task_id'],'package_id'=>(int)$package['id'],'status'=>'running'])->findOrEmpty();
+        if($task->isEmpty())throw new RuntimeException('自举完成任务绑定无效');
+        \app\common\service\database\RuntimeMetadataTransactionGate::assertMetadata();
+        $canonicalMigration=null;
+        $site=rtrim(root_path(),'/');
+        if (($GLOBALS['AIGC_RUNTIME_GENERATION']??$site)!==$site && version_compare((string)$package['version'],'1.0.403','>=')) {
+            $canonicalMigration=new DirectSiteUpdateService($site,PHP_BINARY);
+            $canonicalMigration->beginLegacyMigration($GLOBALS['AIGC_RUNTIME_GENERATION'],(string)$package['version'],$binding);
+        }
+        Db::startTrans();
+        try {
+            $apps=($binding['runtime_metadata_unchanged']??false)===true?$this->syncRuntimePublicAssets($extractPath):$this->finalizeRuntimeApps($extractPath,(string)$package['version']);
+            $result=['version'=>$package['version'],'extract_path'=>$extractPath,'builtin_apps'=>$apps,'composer_runtime'=>['generation'=>$GLOBALS['AIGC_RUNTIME_GENERATION']]];
+            $package->save(['status'=>'applied','error'=>'','update_time'=>time()]);
+            $this->finishTask($task,'success',$result);
+            if(!Db::connect()->getPdo()->inTransaction())throw new RuntimeException('自举元数据事务被隐式提交，禁止成功标记');
+            $this->writeLocalVersion((string)$package['version']);
+            Db::commit();
+        } catch (Throwable $e) {
+            // COMMIT may have succeeded even if its reply was lost. The parent
+            // must confirm independently before restoring canonical files.
+            try { Db::rollback(); } catch (Throwable $rollbackError) {}
+            throw $e;
+        }
+        $canonicalMigration?->finishLegacyMigration($result);
+        return $result;
+    }
+
+    public function prepareRuntimeApps(string $extractPath, string $version): array
+    {
+        if (PHP_SAPI !== 'cli' || empty($GLOBALS['AIGC_RUNTIME_GENERATION_OVERRIDE'])) throw new RuntimeException('运行时迁移只能由更新器子进程执行');
+        \app\common\service\database\RuntimeMetadataTransactionGate::assertMetadata();
+        $result=[];
+        foreach ($this->packagedBuiltinAppCodes($extractPath) as $code) {
+            $manifest=AppRegistryService::getManifest($code);
+            $result[$code]=AppRegistryService::prepareRuntimeMigrations($code,(string)$manifest['version']);
+        }
+        PackageProvisionService::prepareRuntimeSchema();
+        return $result;
+    }
+
+    /** Deploy static app bridges without migration or global tenant defaults. */
+    private function syncRuntimePublicAssets(string $extractPath): array
+    {
+        $result=[];
+        foreach($this->packagedBuiltinAppCodes($extractPath) as $code){
+            $manifest=AppRegistryService::getManifest($code);
+            AppRegistryService::installPublicAssets($manifest,base_path().'apps/'.$code);
+            $result[$code]=['status'=>'static_assets_updated'];
+        }
+        return $result;
+    }
+
+    /** Called only by the isolated candidate-runtime CLI interpreter. */
+    public function finalizeRuntimeApps(string $extractPath, string $version): array
+    {
+        if (PHP_SAPI !== 'cli' || empty($GLOBALS['AIGC_RUNTIME_GENERATION_OVERRIDE'])) throw new RuntimeException('运行时应用同步只能由更新器子进程执行');
+        $result = $this->syncBuiltinApps($extractPath, $version);
+        DefaultAppService::syncAllTenants();
+        PackageProvisionService::syncAllTenants();
+        return $result;
+    }
+
+    private function syncBuiltinApps(string $extractPath, string $coreVersion): array
+    {
+        $this->ensureSqlMigrationExecutorAvailable();
+        $result = [];
+        foreach ($this->packagedBuiltinAppCodes($extractPath) as $appCode) {
+            $manifestPath = AppRegistryService::manifestPath($appCode);
+            if (!is_file($manifestPath)) {
+                $result[] = [
+                    'app_code' => $appCode,
+                    'version' => '',
+                    'status' => 'skipped',
+                    'error' => '应用目录或清单不存在',
+                ];
+                continue;
+            }
+
+            try {
+                $sync = $this->installBuiltinAppFromLocal($appCode, $coreVersion);
+                $manifest = $sync['manifest'] ?? [];
+                $result[] = [
+                    'app_code' => $appCode,
+                    'version' => (string)($manifest['version'] ?? ''),
+                    'status' => 'executed',
+                    'migrations' => $sync['migrations'] ?? [],
+                    'error' => '',
+                ];
+            } catch (Throwable $e) {
+                $result[] = [
+                    'app_code' => $appCode,
+                    'version' => '',
+                    'status' => 'error',
+                    'migrations' => [],
+                    'error' => $e->getMessage(),
+                ];
+                throw new RuntimeException('内置应用同步失败[' . $appCode . ']：' . $e->getMessage(), 0, $e);
+            }
+        }
+        return $result;
+    }
+
+    private function ensureSqlMigrationExecutorAvailable(): void
+    {
+        $class = '\\app\\common\\service\\database\\SqlMigrationExecutor';
+        if (class_exists($class)) {
+            return;
+        }
+        $path = root_path() . 'app/common/service/database/SqlMigrationExecutor.php';
+        if (is_file($path)) {
+            require_once $path;
+        }
+    }
+
+    private function installBuiltinAppFromLocal(string $appCode, string $coreVersion): array
+    {
+        if (method_exists(AppRegistryService::class, 'installFromLocalWithResult')) {
+            return AppRegistryService::installFromLocalWithResult($appCode, $coreVersion);
+        }
+
+        $method = new \ReflectionMethod(AppRegistryService::class, 'installFromLocal');
+        $manifest = $method->getNumberOfParameters() >= 2
+            ? AppRegistryService::installFromLocal($appCode, $coreVersion)
+            : AppRegistryService::installFromLocal($appCode);
+
+        return [
+            'manifest' => is_array($manifest) ? $manifest : [],
+            'migrations' => [],
+        ];
+    }
+
+    private function preflightBuiltinApps(string $extractPath, array $manifest = []): array
+    {
+        $result = [];
+        $incremental = ($manifest['package_mode'] ?? '') === 'incremental';
+        $appCodes = $this->packagedBuiltinAppCodes($extractPath);
+        if (!$incremental) {
+            $appCodes = array_values(array_unique([
+                ...AppAccessService::DEFAULT_AIGC_APP_CODES,
+                ...$appCodes,
+            ]));
+        }
+        foreach ($appCodes as $appCode) {
+            $appPath = rtrim($extractPath, '/') . '/files/app/apps/' . $appCode;
+            $manifestPath = $appPath . '/manifest.json';
+            if (!is_file($manifestPath)) {
+                if ($incremental) {
+                    $result[] = [
+                        'app_code' => $appCode,
+                        'version' => '',
+                        'status' => 'not_in_package',
+                        'migrations' => [],
+                    ];
+                    continue;
+                }
+                throw new RuntimeException('系统包缺少内置应用清单: ' . $appCode);
+            }
+            $manifest = json_decode((string)file_get_contents($manifestPath), true);
+            if (!is_array($manifest) || ($manifest['code'] ?? '') !== $appCode) {
+                throw new RuntimeException('系统包内置应用清单格式错误: ' . $appCode);
+            }
+            $migrations = [];
+            foreach (glob($appPath . '/migrations/*.sql') ?: [] as $file) {
+                $migrations[] = basename($file);
+            }
+            $result[] = [
+                'app_code' => $appCode,
+                'version' => (string)($manifest['version'] ?? ''),
+                'status' => 'present',
+                'migrations' => $migrations,
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Only applications shipped by the verified system package are synchronized.
+     * This keeps non-built-in app-center packages outside the system-update path.
+     */
+    private function packagedBuiltinAppCodes(string $extractPath): array
+    {
+        $appsPath = rtrim($extractPath, '/') . '/files/app/apps';
+        if (!is_dir($appsPath)) {
+            return [];
+        }
+
+        $codes = [];
+        foreach (glob($appsPath . '/*', GLOB_ONLYDIR) ?: [] as $appPath) {
+            $manifestPath = $appPath . '/manifest.json';
+            if (!is_file($manifestPath)) {
+                continue;
+            }
+
+            $manifest = json_decode((string)file_get_contents($manifestPath), true);
+            $appCode = basename($appPath);
+            if (!is_array($manifest) || ($manifest['code'] ?? '') !== $appCode) {
+                throw new RuntimeException('系统包应用清单格式错误: ' . $appCode);
+            }
+            if (empty($manifest['is_builtin'])) {
+                continue;
+            }
+            AppRegistryService::assertValidCode($appCode);
+            $codes[] = $appCode;
+        }
+
+        sort($codes, SORT_STRING);
+        return $codes;
+    }
+
+    private function normalizeVersions(array $data): array
+    {
+        $versions = $data;
+        if (isset($data['lists']) && is_array($data['lists'])) {
+            $versions = $data['lists'];
+        } elseif (isset($data['versions']) && is_array($data['versions'])) {
+            $versions = $data['versions'];
+        }
+        usort($versions, function ($a, $b) {
+            return version_compare((string)($b['version'] ?? $b['version_no'] ?? ''), (string)($a['version'] ?? $a['version_no'] ?? ''));
+        });
+        return $versions;
+    }
+
+    private function selectNextVersion(array $versions, string $current): array
+    {
+        $versions = array_values(array_filter($versions, fn (array $item): bool => $this->isVersionEnabled($item) && $this->canDownloadVersion($item)));
+        if (!$versions) {
+            return [];
+        }
+        if ($current === '') {
+            return $versions[0] ?? [];
+        }
+
+        $ascending = $versions;
+        usort($ascending, function ($a, $b) {
+            return version_compare((string)($this->versionOf($a)), (string)($this->versionOf($b)));
+        });
+
+        if (version_compare($current, self::STEP_UPDATE_BRIDGE_VERSION, '<')) {
+            foreach ($ascending as $item) {
+                if (version_compare($this->versionOf($item), self::STEP_UPDATE_BRIDGE_VERSION, '==')) {
+                    return $item;
+                }
+            }
+            return [];
+        }
+
+        foreach ($ascending as $item) {
+            $version = $this->versionOf($item);
+            if ($version === '' || !version_compare($version, $current, '>')) {
+                continue;
+            }
+            $baseVersion = $this->baseVersionOf($item);
+            if ($baseVersion !== '' && version_compare($baseVersion, $current, '==')) {
+                return $item;
+            }
+        }
+
+        $hasStepMetadata = false;
+        foreach ($versions as $item) {
+            if ($this->baseVersionOf($item) !== '') {
+                $hasStepMetadata = true;
+                break;
+            }
+        }
+        if ($hasStepMetadata) {
+            return [];
+        }
+
+        foreach ($ascending as $item) {
+            if (version_compare($this->versionOf($item), $current, '>')) {
+                return $item;
+            }
+        }
+        return [];
+    }
+
+    private function isVersionEnabled(array $item): bool
+    {
+        foreach (['status', 'enabled', 'is_enabled', 'is_published', 'published', 'release_status'] as $field) {
+            if (!array_key_exists($field, $item)) {
+                continue;
+            }
+            $value = $item[$field];
+            if (is_bool($value)) {
+                return $value;
+            }
+            if (is_numeric($value)) {
+                return (int)$value === 1;
+            }
+            $value = strtolower(trim((string)$value));
+            if (in_array($value, ['0', 'false', 'off', 'disabled', 'down', 'unpublished'], true)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private function canDownloadVersion(array $item): bool
+    {
+        // A legacy source without per-version permission cannot grant an automatic target.
+        return ($item['can_download'] ?? null) === true;
+    }
+
+    private function versionOf(array $item): string
+    {
+        return (string)($item['version'] ?? $item['version_no'] ?? $item['target_version'] ?? ($item['manifest']['version'] ?? ''));
+    }
+
+    private function baseVersionOf(array $item): string
+    {
+        return (string)($item['base_version'] ?? ($item['manifest']['base_version'] ?? ''));
+    }
+
+    private function writeLocalVersion(string $version): void
+    {
+        if (!$this->isValidVersion($version)) {
+            throw new RuntimeException('版本号格式不正确');
+        }
+        $dir = PackageExtractService::versionDir() . DIRECTORY_SEPARATOR;
+        if (!is_dir($dir)) {
+            if (!mkdir($dir, 0777, true) && !is_dir($dir)) {
+                throw new RuntimeException('无法创建版本状态目录');
+            }
+        }
+
+        $projectFile = root_path() . 'config' . DIRECTORY_SEPARATOR . 'project.php';
+        $projectContent = @file_get_contents($projectFile);
+        if ($projectContent === false) {
+            throw new RuntimeException('无法读取项目版本配置文件');
+        }
+        $projectContent = preg_replace(
+            "/('version'\\s*=>\\s*)'[^']*'/",
+            "\$1'{$version}'",
+            $projectContent,
+            1,
+            $replacementCount
+        );
+        if ($projectContent === null || $replacementCount !== 1) {
+            throw new RuntimeException('项目版本配置格式不正确');
+        }
+
+        $versionFile = $dir . 'version.json';
+        $files = [
+            $projectFile => $projectContent,
+            $versionFile => json_encode(['version' => $version], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ];
+        $originals = [];
+        $temporaryFiles = [];
+        try {
+            foreach ($files as $file => $content) {
+                $originals[$file] = is_file($file) ? (string)file_get_contents($file) : null;
+                $temporaryFile = $file . '.tmp.' . bin2hex(random_bytes(6));
+                if (file_put_contents($temporaryFile, $content, LOCK_EX) === false) {
+                    throw new RuntimeException('无法写入本地版本文件');
+                }
+                $temporaryFiles[$file] = $temporaryFile;
+            }
+        } catch (Throwable $e) {
+            foreach ($temporaryFiles as $temporaryFile) {
+                if (is_file($temporaryFile)) {
+                    @unlink($temporaryFile);
+                }
+            }
+            throw $e;
+        }
+
+        try {
+            foreach ($temporaryFiles as $file => $temporaryFile) {
+                if (!rename($temporaryFile, $file)) {
+                    throw new RuntimeException('无法替换本地版本文件');
+                }
+            }
+        } catch (Throwable $e) {
+            foreach ($temporaryFiles as $temporaryFile) {
+                if (is_file($temporaryFile)) {
+                    @unlink($temporaryFile);
+                }
+            }
+            foreach ($originals as $file => $original) {
+                if ($original !== null) {
+                    @file_put_contents($file, $original, LOCK_EX);
+                } else {
+                    @unlink($file);
+                }
+            }
+            throw $e;
+        }
+    }
+
+    private function isValidVersion(string $version): bool
+    {
+        return (bool)preg_match('/^\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/', $version);
+    }
+
+    private function getPackage(int $packageId): UpdatePackage
+    {
+        $package = UpdatePackage::where(['id' => $packageId, 'type' => 'system'])->findOrEmpty();
+        if ($package->isEmpty()) {
+            throw new RuntimeException('系统更新包不存在');
+        }
+        return $package;
+    }
+
+    private function savePreflight(UpdatePackage $package, array $result): array
+    {
+        $package->save([
+            'status' => ($result['passed'] ?? false) ? 'preflight_success' : 'preflight_failed',
+            'error' => implode(';', $result['errors'] ?? []),
+            'update_time' => time(),
+        ]);
+        return $result;
+    }
+
+    private function finishPreflight(UpdatePackage $package, array $result): array
+    {
+        $result = $this->savePreflight($package, $result);
+        $error = implode(';', $result['errors'] ?? []);
+        $this->recordTask(
+            'preflight',
+            (string)($result['manifest']['version'] ?? $package['version']),
+            ($result['passed'] ?? false) ? 'success' : 'failed',
+            (int)$package['id'],
+            $result,
+            ['passed' => (bool)($result['passed'] ?? false)],
+            $error
+        );
+        return $result;
+    }
+
+    private function readUpdateManifest(string $extractPath): array
+    {
+        $manifest = json_decode((string)file_get_contents($extractPath . '/update.json'), true);
+        if (!is_array($manifest) || empty($manifest['version'])) {
+            throw new RuntimeException('update.json 格式错误');
+        }
+        $filesRoot = rtrim($extractPath, '/') . '/files';
+        if (is_dir($filesRoot)) {
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($filesRoot, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST);
+            foreach ($iterator as $entry) {
+                if ($entry->isLink()) throw new RuntimeException('更新文件包含链接');
+                $relative = $this->normalizePackagePath(substr($entry->getPathname(), strlen($filesRoot) + 1));
+                if ($entry->isDir() && in_array($relative, ['runtime','runtime/wechat-artifacts'], true)) continue;
+                $this->assertSafeUpdatePath($relative, $entry->isDir());
+            }
+        }
+        return $manifest;
+    }
+
+    private function assertIncrementalManifest(array $manifest, string $extractPath): void
+    {
+        if (($manifest['package_mode'] ?? '') !== 'incremental') {
+            return;
+        }
+
+        foreach (['base_version', 'target_version', 'included_versions', 'full_replace_dirs', 'delete_files', 'sql_order'] as $field) {
+            if (!array_key_exists($field, $manifest)) {
+                throw new RuntimeException('增量系统包缺少字段: ' . $field);
+            }
+        }
+        if ((string)$manifest['target_version'] !== (string)$manifest['version']) {
+            throw new RuntimeException('增量系统包 target_version 与 version 不一致');
+        }
+        if (!is_array($manifest['included_versions']) || !$manifest['included_versions']) {
+            throw new RuntimeException('增量系统包 included_versions 不能为空');
+        }
+        if (!in_array((string)$manifest['target_version'], array_map('strval', $manifest['included_versions']), true)) {
+            throw new RuntimeException('增量系统包 included_versions 未包含目标版本');
+        }
+        $this->assertIncrementalVersionRange($manifest);
+        foreach (['full_replace_dirs', 'delete_files', 'sql_order'] as $field) {
+            if (!is_array($manifest[$field])) {
+                throw new RuntimeException('增量系统包字段必须为数组: ' . $field);
+            }
+        }
+        foreach ($manifest['full_replace_dirs'] as $dir) {
+            $relative = $this->normalizePackagePath((string)$dir);
+            $this->assertSafeUpdatePath($relative, true);
+            if (!in_array($relative, self::FULL_REPLACE_ALLOWED_DIRS, true)) {
+                throw new RuntimeException('增量系统包不允许全量覆盖目录: ' . $relative);
+            }
+            if (!is_dir(rtrim($extractPath, '/') . '/files/' . $relative)) {
+                throw new RuntimeException('增量系统包声明的全量覆盖目录不存在: ' . $relative);
+            }
+        }
+        foreach ($manifest['delete_files'] as $file) {
+            $relative = $this->normalizePackagePath((string)$file);
+            $this->assertSafeUpdatePath($relative, false);
+            if (!$this->isDeleteAllowed($relative)) {
+                throw new RuntimeException('增量系统包不允许删除路径: ' . $relative);
+            }
+        }
+        $declaredSql = [];
+        foreach ($manifest['sql_order'] as $file) {
+            $relative = $this->normalizePackagePath((string)$file);
+            $this->assertSafeUpdatePath($relative, false);
+            if (!str_starts_with($relative, 'sql/data/') && !str_starts_with($relative, 'sql/structure/')) {
+                throw new RuntimeException('增量系统包 sql_order 只能声明 SQL 文件: ' . $relative);
+            }
+            if ($this->isReadmeSql($relative)) {
+                throw new RuntimeException('增量系统包 sql_order 不允许声明说明文件: ' . $relative);
+            }
+            if (strtolower(basename($relative)) === 'install.sql') {
+                throw new RuntimeException('增量系统包不允许执行全新安装 SQL: ' . $relative);
+            }
+            if (!is_file(rtrim($extractPath, '/') . '/' . $relative)) {
+                throw new RuntimeException('增量系统包 sql_order 声明的文件不存在: ' . $relative);
+            }
+            $declaredSql[$relative] = true;
+        }
+        $this->assertIncrementalSqlDirectorySafe($extractPath, $declaredSql);
+    }
+
+    /**
+     * Incremental packages cannot safely update Composer runtime files. They are
+     * copied file by file, so an interrupted or partial vendor update can leave
+     * autoload.php and composer/autoload_real.php from different generations.
+     */
+    private function assertIncrementalComposerRuntime(array $manifest, string $extractPath): void
+    {
+        if (($manifest['package_mode'] ?? '') !== 'incremental') {
+            return;
+        }
+
+        $filesRoot = rtrim($extractPath, '/') . '/files';
+        $forbidden = [];
+        foreach (['composer.json', 'composer.lock', 'vendor'] as $relative) {
+            if (file_exists($filesRoot . '/' . $relative)) {
+                $forbidden[] = $relative;
+            }
+        }
+        if ($forbidden) {
+            throw new RuntimeException('增量系统包不能包含 Composer 运行时文件，请使用完整安装包发布依赖变更: ' . implode(', ', $forbidden));
+        }
+    }
+
+    private function assertIncrementalSqlDirectorySafe(string $extractPath, array $declaredSql): void
+    {
+        foreach (['sql/data', 'sql/structure'] as $directory) {
+            $root = rtrim($extractPath, '/') . '/' . $directory;
+            if (!is_dir($root)) {
+                continue;
+            }
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($iterator as $item) {
+                if ($item->isLink()) {
+                    throw new RuntimeException('增量系统包 SQL 目录不允许符号链接: ' . $item->getPathname());
+                }
+                if (!$item->isFile() || strtolower($item->getExtension()) !== 'sql') {
+                    continue;
+                }
+                $relative = $this->normalizePackagePath(substr($item->getPathname(), strlen(rtrim($extractPath, '/')) + 1));
+                if ($this->isReadmeSql($relative)) {
+                    continue;
+                }
+                if (strtolower(basename($relative)) === 'install.sql') {
+                    throw new RuntimeException('增量系统包不允许包含全新安装 SQL: ' . $relative);
+                }
+                if (!isset($declaredSql[$relative])) {
+                    throw new RuntimeException('增量系统包 SQL 文件未声明执行顺序: ' . $relative);
+                }
+                $this->assertIncrementalSqlSafe($relative, $item->getPathname());
+            }
+        }
+    }
+
+    private function assertIncrementalSqlSafe(string $relative, string $path): void
+    {
+        $content = (string)file_get_contents($path);
+        $content = preg_replace_callback('/\/\*!\d*\s*([\s\S]*?)\*\//', static fn (array $match) => ' ' . $match[1] . ' ', $content) ?? $content;
+        $content = preg_replace('/\/\*(?!\!)[\s\S]*?\*\//', ' ', $content) ?? $content;
+        $content = preg_replace('/--[ \t][^\r\n]*/', ' ', $content) ?? $content;
+        $content = preg_replace('/#[^\r\n]*/', ' ', $content) ?? $content;
+        if (preg_match('/\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE)\b/i', $content)) {
+            throw new RuntimeException('增量系统包不允许执行破坏性 SQL: ' . $relative);
+        }
+    }
+
+    private function assertIncrementalVersionRange(array $manifest): void
+    {
+        $current = UpdateSourceClient::currentCoreVersion();
+        $baseVersion = (string)($manifest['base_version'] ?? '');
+        $targetVersion = (string)($manifest['target_version'] ?? $manifest['version'] ?? '');
+        $includedVersions = array_map('strval', (array)($manifest['included_versions'] ?? []));
+
+        if ($current === '' || $baseVersion === '' || $targetVersion === '') {
+            return;
+        }
+        if (!version_compare($targetVersion, $current, '>')) {
+            throw new RuntimeException('系统包目标版本必须大于当前系统版本');
+        }
+
+        $isBridgePackage = version_compare($current, self::STEP_UPDATE_BRIDGE_VERSION, '<')
+            && version_compare($targetVersion, self::STEP_UPDATE_BRIDGE_VERSION, '==')
+            && in_array($current, $includedVersions, true);
+        if ($isBridgePackage) {
+            return;
+        }
+
+        if (version_compare($current, self::STEP_UPDATE_BRIDGE_VERSION, '<')) {
+            throw new RuntimeException('旧版本系统必须先升级到桥接版本 ' . self::STEP_UPDATE_BRIDGE_VERSION);
+        }
+        if (version_compare($current, $baseVersion, '!=')) {
+            throw new RuntimeException('系统包起始版本与当前系统版本不一致，请重新获取更新包');
+        }
+    }
+
+    private function applyFullReplaceDirs(string $extractPath, array $manifest): void
+    {
+        $dirs = $manifest['full_replace_dirs'] ?? [];
+        if (!is_array($dirs)) {
+            throw new RuntimeException('full_replace_dirs 格式错误');
+        }
+        $replacements = [];
+        foreach ($dirs as $dir) {
+            $relative = $this->normalizePackagePath((string)$dir);
+            $this->assertSafeUpdatePath($relative, true);
+            if (!in_array($relative, self::FULL_REPLACE_ALLOWED_DIRS, true)) {
+                throw new RuntimeException('不允许全量覆盖目录: ' . $relative);
+            }
+            $source = rtrim($extractPath, '/') . '/files/' . $relative;
+            if (!is_dir($source)) {
+                throw new RuntimeException('全量覆盖目录不存在: ' . $relative);
+            }
+            $target = rtrim(UpgradeLogic::getProjectPath(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $relative;
+            $suffix = '.update-' . bin2hex(random_bytes(8));
+            $stage = $target . $suffix . '.stage';
+            $backup = $target . $suffix . '.backup';
+            $this->copyDirectory($source, $stage);
+            $replacements[] = compact('relative', 'target', 'stage', 'backup');
+        }
+
+        $swapped = [];
+        try {
+            foreach ($replacements as $replacement) {
+                if (file_exists($replacement['target']) && !@rename($replacement['target'], $replacement['backup'])) {
+                    throw new RuntimeException('无法备份全量覆盖目录: ' . $replacement['relative']);
+                }
+                if (!@rename($replacement['stage'], $replacement['target'])) {
+                    if (is_dir($replacement['backup'])) {
+                        @rename($replacement['backup'], $replacement['target']);
+                    }
+                    throw new RuntimeException('无法替换全量覆盖目录: ' . $replacement['relative']);
+                }
+                $swapped[] = $replacement;
+            }
+        } catch (Throwable $e) {
+            foreach (array_reverse($swapped) as $replacement) {
+                $this->removeDirectory($replacement['target']);
+                if (is_dir($replacement['backup'])) {
+                    @rename($replacement['backup'], $replacement['target']);
+                }
+            }
+            throw $e;
+        } finally {
+            foreach ($replacements as $replacement) {
+                $this->removeDirectory($replacement['stage']);
+            }
+        }
+
+        foreach ($swapped as $replacement) {
+            $this->removeDirectory($replacement['backup']);
+        }
+    }
+
+    private function applyDeleteFiles(array $manifest): void
+    {
+        $files = $manifest['delete_files'] ?? [];
+        if (!is_array($files)) {
+            throw new RuntimeException('delete_files 格式错误');
+        }
+        foreach ($files as $file) {
+            $relative = $this->normalizePackagePath((string)$file);
+            $this->assertSafeUpdatePath($relative, false);
+            if (!$this->isDeleteAllowed($relative)) {
+                throw new RuntimeException('不允许删除路径: ' . $relative);
+            }
+            $target = rtrim(UpgradeLogic::getProjectPath(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $relative;
+            if (is_file($target)) {
+                @unlink($target);
+            }
+        }
+    }
+
+    /** Exact signed source identity routes app SQL to its existing two-phase journal. */
+    private function runtimeAppSqlOwners(string $extractPath, array $manifest): array
+    {
+        $candidates=[];
+        $builtin=$this->packagedBuiltinAppCodes($extractPath);
+        // Scan all migration directories first. Missing/non-builtin metadata must
+        // never turn an app SQL mirror into a top-level metadata write.
+        foreach (glob(rtrim($extractPath,'/').'/files/app/apps/*',GLOB_ONLYDIR) ?: [] as $directory) {
+            $code=basename($directory);
+            foreach (glob($directory.'/migrations/*.sql') ?: [] as $file) {
+                $key=basename($file);
+                $candidates[$key][]=['app_code'=>$code,'migration_key'=>$key,'file'=>$file,'sha256'=>hash_file('sha256',$file)];
+            }
+        }
+        $owners=[];
+        foreach ((array)($manifest['sql_order'] ?? []) as $raw) {
+            $relative=$this->normalizePackagePath((string)$raw);
+            if (!isset($candidates[basename($relative)])) continue;
+            if (count($candidates[basename($relative)]) !== 1) throw new RuntimeException('系统包应用迁移归属不唯一: '.$relative);
+            $owner=$candidates[basename($relative)][0];
+            if (!in_array($owner['app_code'],$builtin,true)) throw new RuntimeException('系统包应用迁移缺少内置应用清单: '.$relative);
+            $packagedManifest=rtrim($extractPath,'/').'/files/app/apps/'.$owner['app_code'].'/manifest.json';
+            $candidateManifest=base_path().'apps/'.$owner['app_code'].'/manifest.json';
+            if (!is_file($candidateManifest) || !hash_equals(hash_file('sha256',$packagedManifest),hash_file('sha256',$candidateManifest))) throw new RuntimeException('系统包应用清单与实际运行时字节不一致: '.$relative);
+            $path=rtrim($extractPath,'/').'/'.$relative;
+            $candidate=base_path().'apps/'.$owner['app_code'].'/migrations/'.$owner['migration_key'];
+            if (!is_file($path) || !is_file($candidate) || !hash_equals($owner['sha256'],hash_file('sha256',$path))
+                || !hash_equals($owner['sha256'],hash_file('sha256',$candidate))) throw new RuntimeException('系统包应用迁移与实际运行时字节不一致: '.$relative);
+            // Fail before any top-level SQL if a declared new app migration cannot
+            // be classified; AppRegistry retains the true running/prepared journal.
+            \app\common\service\database\RuntimeMigrationPlan::build((string)file_get_contents($path));
+            unset($owner['file']);
+            $owners[$relative]=$owner;
+        }
+        return $owners;
+    }
+
+    private function applySqlGroup(string $extractPath, array $manifest, string $group, array $appSqlOwners = []): bool
+    {
+        if (($manifest['package_mode'] ?? '') !== 'incremental' || !is_array($manifest['sql_order'] ?? null)) {
+            return UpgradeLogic::upgradeSql(rtrim($extractPath, '/') . '/sql/' . $group . '/');
+        }
+
+        $prefix = 'sql/' . $group . '/';
+        $sqlPrefix = config('database.connections.mysql.prefix');
+        foreach ($manifest['sql_order'] as $file) {
+            $relative = $this->normalizePackagePath((string)$file);
+            if (!str_starts_with($relative, $prefix)) {
+                continue;
+            }
+            $this->assertSafeUpdatePath($relative, false);
+            if ($this->isReadmeSql($relative)) {
+                continue;
+            }
+            $path = rtrim($extractPath, '/') . '/' . $relative;
+            if (!is_file($path)) {
+                throw new RuntimeException('增量系统包 SQL 文件不存在: ' . $relative);
+            }
+            $content = (string)file_get_contents($path);
+            if (isset($appSqlOwners[$relative])) {
+                if (!hash_equals($appSqlOwners[$relative]['sha256'],hash('sha256',$content))) throw new RuntimeException('应用迁移归属校验后内容改变: '.$relative);
+                // AppRegistry prepares DDL and executes metadata DML only in the
+                // final transaction. Never execute the same app SQL here first.
+                continue;
+            }
+            if (trim($content) === '' || SqlMigrationExecutor::split($content) === []) {
+                continue;
+            }
+            SqlMigrationExecutor::execute($content, $sqlPrefix);
+        }
+        return true;
+    }
+
+    private function isReadmeSql(string $path): bool
+    {
+        $filename = strtolower(basename($path));
+        return $filename === 'readme.sql' || str_starts_with($filename, 'readme.');
+    }
+
+    private function clearDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+            return;
+        }
+        $base = realpath($dir);
+        $project = realpath(UpgradeLogic::getProjectPath());
+        if (!$base || !$project || !str_starts_with($base, rtrim($project, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException('全量覆盖目录越界');
+        }
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $item) {
+            if ($item->isLink()) {
+                throw new RuntimeException('全量覆盖目录包含符号链接: ' . $item->getPathname());
+            }
+            if ($item->isDir()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+            }
+        }
+    }
+
+    private function copyDirectory(string $source, string $target): void
+    {
+        if (file_exists($target)) {
+            throw new RuntimeException('全量覆盖临时目录已存在: ' . $target);
+        }
+        if (!@mkdir($target, 0777, true) && !is_dir($target)) {
+            throw new RuntimeException('无法创建全量覆盖临时目录: ' . $target);
+        }
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($source, \FilesystemIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            );
+            foreach ($iterator as $item) {
+                if ($item->isLink()) {
+                    throw new RuntimeException('全量覆盖源目录包含符号链接: ' . $item->getPathname());
+                }
+                $destination = $target . DIRECTORY_SEPARATOR . $iterator->getSubPathName();
+                if ($item->isDir()) {
+                    if (!@mkdir($destination, 0777, true) && !is_dir($destination)) {
+                        throw new RuntimeException('无法创建全量覆盖子目录: ' . $destination);
+                    }
+                } elseif ($item->isFile() && !@copy($item->getPathname(), $destination)) {
+                    throw new RuntimeException('无法复制全量覆盖文件: ' . $item->getPathname());
+                }
+            }
+        } catch (Throwable $e) {
+            $this->removeDirectory($target);
+            throw $e;
+        }
+    }
+
+    private function removeDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $this->clearDirectory($dir);
+        if (!@rmdir($dir)) {
+            throw new RuntimeException('无法清理更新临时目录: ' . $dir);
+        }
+    }
+
+    private function normalizePackagePath(string $path): string
+    {
+        $path = str_replace('\\', '/', trim($path));
+        $path = preg_replace('#/+#', '/', $path) ?: '';
+        return trim($path, '/');
+    }
+
+    private function assertSafeUpdatePath(string $path, bool $allowDirectory): void
+    {
+        if ($path === '' || str_starts_with($path, '/') || preg_match('/^[a-zA-Z]:\//', $path) || str_contains('/' . $path . '/', '/../')) {
+            throw new RuntimeException('更新包包含非法路径: ' . $path);
+        }
+        if (!$allowDirectory && str_ends_with($path, '/')) {
+            throw new RuntimeException('文件路径格式错误: ' . $path);
+        }
+        $isWechatArtifact = (bool)preg_match('#^runtime/wechat-artifacts/\d+\.\d+\.\d+(?:/|$)#', $path);
+        foreach (self::PROTECTED_PATH_PATTERNS as $pattern) {
+            if ($isWechatArtifact && $pattern === '#^runtime(/|$)#') {
+                continue;
+            }
+            if (preg_match($pattern, $path)) {
+                throw new RuntimeException('更新包路径命中保护规则: ' . $path);
+            }
+        }
+    }
+
+    private function isDeleteAllowed(string $path): bool
+    {
+        foreach (self::DELETE_ALLOWED_PREFIXES as $prefix) {
+            if (str_starts_with($path, $prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function assertCoreRequirement(array $manifest): void
+    {
+        $require = trim((string)($manifest['require_core'] ?? ''));
+        if ($require === '') {
+            return;
+        }
+        $current = UpdateSourceClient::currentCoreVersion();
+        preg_match_all('/(>=|<=|==|=|>|<)\s*([0-9][0-9A-Za-z._-]*)/', $require, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $operator = $match[1] === '=' ? '==' : $match[1];
+            if (!version_compare($current, $match[2], $operator)) {
+                throw new RuntimeException('当前系统版本 ' . $current . ' 不满足系统包升级要求: ' . $require);
+            }
+        }
+    }
+
+    private function createTask(UpdatePackage $package, string $action): UpdateTask
+    {
+        return UpdateTask::create([
+            'type' => 'system',
+            'action' => $action,
+            'package_id' => (int)$package['id'],
+            'app_code' => '',
+            'version' => (string)$package['version'],
+            'status' => 'running',
+            'preflight_json' => [],
+            'result_json' => [],
+            'error' => '',
+            'operator_id' => (int)(request()->adminId ?? 0),
+            'create_time' => time(),
+            'update_time' => time(),
+        ]);
+    }
+
+    private function recordTask(
+        string $action,
+        string $version,
+        string $status,
+        int $packageId = 0,
+        array $preflight = [],
+        array $result = [],
+        string $error = ''
+    ): void {
+        UpdateTask::create([
+            'type' => 'system',
+            'action' => $action,
+            'package_id' => $packageId,
+            'app_code' => '',
+            'version' => $version,
+            'status' => $status,
+            'preflight_json' => $preflight,
+            'result_json' => $result,
+            'error' => $error,
+            'operator_id' => (int)(request()->adminId ?? 0),
+            'create_time' => time(),
+            'update_time' => time(),
+        ]);
+    }
+
+    private function finishTask(UpdateTask $task, string $status, array $result = [], string $error = ''): void
+    {
+        $task->save(['status' => $status, 'result_json' => $result, 'error' => $error, 'update_time' => time()]);
+    }
+
+    private function acquireLock(string $name)
+    {
+        $dir = runtime_path() . 'update_locks/';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
+        $handle = fopen($dir . md5($name) . '.lock', 'c');
+        if (!$handle || !flock($handle, LOCK_EX | LOCK_NB)) {
+            return false;
+        }
+        return $handle;
+    }
+
+    private function releaseLock($handle): void
+    {
+        if ($handle) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+}

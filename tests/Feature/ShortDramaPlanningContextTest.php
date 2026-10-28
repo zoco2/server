@@ -1,0 +1,186 @@
+<?php
+
+namespace Tests\Feature;
+
+use app\common\service\app\aigc_short_drama\ShortDramaPlanningBudget;
+use app\common\service\app\aigc_short_drama\ShortDramaPlanningContext;
+use PHPUnit\Framework\TestCase;
+
+class ShortDramaPlanningContextTest extends TestCase
+{
+    public function testCapacityRecoveryRemovesOnlyVerifiedDiagnosticsAndDuplicateMemory(): void
+    {
+        $previous = [['episode_number'=>9,'summary'=>'父亲录音已首次播放','audit_status'=>'verified','warnings'=>[str_repeat('审校诊断',10000)]]];
+        $series = ['continuity'=>['state'=>['radio:status'=>'已修好，已播放录音'],'open_hooks'=>['book'=>'尚未归还手册'],
+            'audit_status'=>'verified','warnings'=>[str_repeat('重复诊断',10000)],'recent_episodes'=>$previous], 'previous_episodes'=>$previous];
+        $task = ['user_prompt'=>'第十集必须归还，不能再次首次播放。','series_context'=>$series];
+        $input = ['system_prompt'=>'保留用户剧情', 'content'=>json_encode(['creative_context'=>json_encode($task, JSON_UNESCAPED_UNICODE),
+            'required_shots'=>[['shot_id'=>'s1','duration_seconds'=>10]]],JSON_UNESCAPED_UNICODE) . "\n以上全局剧情只作参考"];
+        $saved = $input;
+        $budget = \app\common\service\app\aigc_short_drama\ShortDramaPlanningBudget::fitMessages($input, [], 'script', 4096);
+        self::assertSame(4096, $budget['max_tokens']);
+        self::assertLessThan(strlen($saved['content']) / 10, strlen($input['content']));
+        self::assertStringEndsWith("\n以上全局剧情只作参考", $input['content']);
+        $outer = \app\common\service\app\aigc_short_drama\ShortDramaStructuredResponse::decode(['content'=>$input['content']]);
+        $compact = json_decode($outer['creative_context'],true);
+        self::assertSame($task['user_prompt'], $compact['user_prompt']);
+        self::assertSame($series['continuity']['state'], $compact['series_context']['continuity']['state']);
+        self::assertSame($series['continuity']['open_hooks'], $compact['series_context']['continuity']['open_hooks']);
+        self::assertSame('父亲录音已首次播放', $compact['series_context']['continuity']['recent_episodes'][0]['summary']);
+        self::assertArrayNotHasKey('previous_episodes', $compact['series_context']);
+        self::assertSame([['shot_id'=>'s1','duration_seconds'=>10]], $outer['required_shots']);
+    }
+    public function testFittingPaidInputsStayFrozenAndUnresolvedWarningsRemainVisible(): void
+    {
+        $input=['system_prompt'=>'规则','content'=>json_encode(['series_context'=>['continuity'=>[
+            'audit_status'=>'verified','warnings'=>['原诊断'],'state'=>['x'=>'事实']]]],JSON_UNESCAPED_UNICODE)];
+        $original=$input;
+        \app\common\service\app\aigc_short_drama\ShortDramaPlanningBudget::fitMessages($input, [], 'script');
+        self::assertSame($original,$input);
+        $pending=['audit_status'=>'pending_review','warnings'=>['正文冲突尚未确认'],'state'=>['x'=>'旧事实']];
+        self::assertSame($pending, \app\common\service\app\aigc_short_drama\ShortDramaPlanningContext::continuityFacts($pending));
+    }
+    public function testArbitraryCustomCreativeTextCannotBeCutToFit(): void
+    {
+        $input=['system_prompt'=>'规则','content'=>str_repeat('用户明确规定的剧情，',10000)]; $saved=$input;
+        try { \app\common\service\app\aigc_short_drama\ShortDramaPlanningBudget::fitMessages($input, [], 'script'); self::fail('Must not cut creative requirements'); }
+        catch (\RuntimeException $error) { self::assertSame(413,$error->getCode()); }
+        self::assertSame($saved,$input);
+    }
+
+    public function testRoadmapUsesDedicatedSchemaAndKeepsOriginalFacts(): void
+    {
+        $r = \app\common\service\app\aigc_short_drama\ShortDramaInputContract::begin($this->request());
+        $r['_planning_roadmap'] = true;
+        $r['episode_count'] = 20;
+        $r['revision_message'] = '故事设定已确认，请生成分集大纲';
+        $method = new \ReflectionMethod(\app\common\service\app\aigc_short_drama\AigcShortDramaService::class, 'assembleScriptPromptRequest');
+        $method->setAccessible(true);
+        $m = $method->invoke(null, 1, '第10集信B仍在，第11集才被抢走。', $r, '测试');
+        self::assertStringContainsString('"segments"', $m['system_prompt']);
+        self::assertStringNotContainsString('每集仅返回 episode_number', $m['system_prompt']);
+        self::assertStringNotContainsString('JSON 字段结构', $m['content']);
+        $data = json_decode($m['content'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(20, $data['total_episodes']);
+        self::assertSame('第10集信B仍在，第11集才被抢走。', $data['original_requirements']);
+        self::assertSame($r['revision_message'], $data['revision_message']);
+        self::assertArrayNotHasKey('planning_context', $data);
+    }
+
+    public function testInternalPlanningAndRepairDoNotResetOrStreamPublicPreview(): void
+    {
+        foreach (['roadmap', 'roadmap_repair', 'roadmap_timing', 'story_repair', 'outline_11_1_repair_v2'] as $key) {
+            self::assertFalse(\app\common\service\app\aigc_short_drama\ShortDramaStoryGeneration::visibleUnit($key));
+            $seen = [];
+            $sink = \app\common\service\app\aigc_short_drama\ShortDramaStoryGeneration::eventSink($key,
+                static function ($event) use (&$seen) { $seen[] = $event; });
+            foreach (['delta', 'stage', 'story_preview_start', 'heartbeat', 'provider_request', 'app_task'] as $event) $sink($event, []);
+            self::assertSame(['heartbeat', 'provider_request', 'app_task'], $seen);
+        }
+        foreach (['story', 'outline_1_10', 'outline_11_10'] as $key) {
+            self::assertTrue(\app\common\service\app\aigc_short_drama\ShortDramaStoryGeneration::visibleUnit($key));
+        }
+    }
+
+    private function request(): array
+    {
+        return [
+            'workflow_variant' => 'story_outline_v2',
+            'prompt' => '这段原始灵感与附件内容只应在故事设定阶段使用',
+            'multi_episode' => true,
+            'multi_episode_stage' => 'episodes',
+            'episode_count' => 3,
+            'episode_total_count' => 3,
+            'episode_batch_start' => 2,
+            'episode_batch_end' => 2,
+            'confirmed_story_task_id' => 'story_task',
+            'confirmed_story_version' => 4,
+            'locked_subject_references' => [[
+                'id' => '12', 'name' => '美女', 'gender' => 'female', 'category' => 'character',
+                'description' => '独立设计师', 'image' => 'https://cdn.example/subject.png',
+                'three_view_image' => 'https://cdn.example/views.png',
+            ]],
+            'confirmed_story_snapshot' => [
+                'title' => '海风里的约定', 'type_judgement' => '都市情感', 'core_theme' => '信任',
+                'story_outline' => '美女在海边寻找旧信，逐步化解误会。',
+                'subjects' => [['id' => 'subject_1', 'name' => '美女', 'description' => '女主角', 'image_prompt' => str_repeat('镜头', 1000)]],
+                'locations' => [['id' => 'location_1', 'name' => '海边', 'description' => '礁石与灯塔']],
+                'series_bible' => ['series_arc' => '误会到和解', 'continuity_rules' => ['旧信始终由美女保管']],
+            ],
+            'revision_base_result' => [
+                'title' => '海风里的约定', 'story_outline' => '完整故事设定',
+                'episodes' => [[
+                    'episode_number' => 2, 'title' => '旧信', 'story_outline' => '美女找到了旧信。',
+                    'conflict_point' => '林浅拒绝解释。', 'ending_hook' => '信里出现陌生署名。',
+                    'scenes' => [['unneeded' => str_repeat('分镜', 1000)]],
+                ]],
+            ],
+            'episode_batch_context' => [
+                'previous_episodes' => [
+                    ['episode_number' => 1, 'title' => '开始', 'story_outline' => '两人相遇。', 'ending_hook' => '旧信掉落。', 'shots' => [['large' => true]]],
+                ],
+                'previous_batch_ending_hook' => '旧信掉落。',
+            ],
+        ];
+    }
+
+    public function testOutlineContextKeepsIdentityAndContinuityButExcludesVisualUrls(): void
+    {
+        $values = ShortDramaPlanningContext::values($this->request());
+        self::assertSame('美女', $values['subject_references'][0]['name']);
+        self::assertSame('female', $values['subject_references'][0]['gender']);
+        self::assertArrayNotHasKey('image', $values['subject_references'][0]);
+        self::assertArrayNotHasKey('three_view_image', $values['subject_references'][0]);
+        self::assertSame('旧信掉落。', $values['episode_batch_context']['previous_batch_ending_hook']);
+        self::assertArrayNotHasKey('scenes', $values['revision_base_result']['episodes'][0]);
+
+        $template = ShortDramaPlanningContext::templateRequest($this->request());
+        $serialized = json_encode($template, JSON_UNESCAPED_UNICODE);
+        self::assertStringContainsString('美女', $serialized);
+        self::assertStringContainsString('旧信始终由美女保管', $serialized);
+        self::assertStringNotContainsString('https://cdn.example/subject.png', $serialized);
+        self::assertStringNotContainsString('https://cdn.example/views.png', $serialized);
+        self::assertStringNotContainsString('image_prompt', $serialized);
+        self::assertStringNotContainsString('这段原始灵感与附件内容', $serialized);
+        self::assertSame(ShortDramaPlanningContext::VERSION, $template['context_pack_version']);
+    }
+
+    public function testOnlyConfirmedStoryReplacesOriginalInspirationForOutline(): void
+    {
+        $request = $this->request();
+        self::assertSame('', ShortDramaPlanningContext::stagePrompt('一万字原始附件内容', $request));
+        $request['multi_episode_stage'] = 'story';
+        self::assertSame('一万字原始附件内容', ShortDramaPlanningContext::stagePrompt('一万字原始附件内容', $request));
+    }
+
+    public function testMixedUtf8CapacityDoesNotCountEachChineseCharacterAsThreeTokens(): void
+    {
+        $budget = ShortDramaPlanningBudget::calculate(str_repeat('长', 5000), [], 1, false);
+        self::assertSame(5000, $budget['input_estimate']);
+        self::assertSame(15000, $budget['input_bytes']);
+        self::assertSame('mixed_utf8_heuristic', $budget['estimator']);
+    }
+
+    public function testNewOutlineRetainsVerbatimRequirementsWithoutChangingHistoricalRequests(): void
+    {
+        $request = $this->request();
+        $prompt = str_repeat('明确要求不能被摘要替代。', 1000) . '第11集归还钥匙，姐姐仍存活。';
+        self::assertSame('', ShortDramaPlanningContext::stagePrompt($prompt, $request));
+        self::assertSame('', ShortDramaPlanningContext::requirementInstruction($request));
+        $request = \app\common\service\app\aigc_short_drama\ShortDramaInputContract::begin($request);
+        $request['prompt'] = $prompt;
+        self::assertSame($prompt, ShortDramaPlanningContext::stagePrompt($prompt, $request));
+        self::assertSame($prompt, ShortDramaPlanningContext::templateRequest($request)['prompt']);
+        self::assertStringContainsString('后续修改在其指定范围内优先', ShortDramaPlanningContext::requirementInstruction($request));
+        self::assertStringContainsString('确认步骤本身不等于授权改写', ShortDramaPlanningContext::requirementInstruction($request));
+        $request['multi_episode_stage'] = 'story';
+        self::assertSame('', ShortDramaPlanningContext::requirementInstruction($request));
+    }
+
+    public function testOutlineRepairBudgetStaysWithinTheStageContract(): void
+    {
+        $budget = ['output_capacity' => 11818, 'max_tokens' => 1200];
+        self::assertSame(1600, ShortDramaPlanningBudget::repairMaxTokens($budget, 1));
+        self::assertSame(5648, ShortDramaPlanningBudget::repairMaxTokens($budget, 3, true));
+    }
+}

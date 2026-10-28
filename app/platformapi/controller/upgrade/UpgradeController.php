@@ -1,0 +1,289 @@
+<?php
+// +----------------------------------------------------------------------
+// | likeadmin快速开发前后端分离管理后台（PHP版）
+// +----------------------------------------------------------------------
+// | 欢迎阅读学习系统程序代码，建议反馈是我们前进的动力
+// | 开源版本可自由商用，可去除界面版权logo
+// | gitee下载：https://gitee.com/likeshop_gitee/likeadmin
+// | github下载：https://github.com/likeshop-github/likeadmin
+// | 访问官网：https://www.likeadmin.cn
+// | likeadmin团队 版权所有 拥有最终解释权
+// +----------------------------------------------------------------------
+// | author: likeadminTeam
+// +----------------------------------------------------------------------
+namespace app\platformapi\controller\upgrade;
+
+use app\common\service\update\PackageExtractService;
+use app\common\service\update\SystemPackageUpdateService;
+use app\common\service\update\UpdateLicenseService;
+use app\common\service\update\UpdateSourceClient;
+use app\common\service\update\UpdateCustomerMessage;
+use app\platformapi\controller\BaseAdminController;
+use app\platformapi\lists\upgrade\UpgradeLists;
+use app\platformapi\logic\upgrade\UpgradeLogic;
+use app\platformapi\validate\upgrade\downloadPkgValidate;
+use app\platformapi\validate\upgrade\UpgradeValidate;
+use think\response\Json;
+
+/**
+ * 系统更新
+ */
+class UpgradeController extends BaseAdminController
+{
+    private function updateFailure(\Throwable $error): Json
+    {
+        $code = $error instanceof \app\common\service\update\UpdateProtocolException ? $error->errorCode : 'SYSTEM_UPDATE_FAILED';
+        \think\facade\Log::error('[系统更新][' . $code . '] ' . $error->getMessage());
+        return $this->fail(UpdateCustomerMessage::format($error->getMessage(), $code), ['error_code' => $code]);
+    }
+
+    public function overview(): Json
+    {
+        try {
+            return $this->success('获取成功', UpdateCustomerMessage::present((new SystemPackageUpdateService())->overview()));
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function saveAutoUpdate(): Json
+    {
+        try {
+            $enabled = filter_var($this->request->post('enabled', false), FILTER_VALIDATE_BOOLEAN);
+            return $this->success(
+                '自动更新设置已保存',
+                (new SystemPackageUpdateService())->saveAutoUpdateEnabled($enabled),
+                1,
+                1
+            );
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function source(): Json
+    {
+        try {
+            return $this->success('获取成功', UpdateSourceClient::getSource());
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function saveSource(): Json
+    {
+        try {
+            return $this->success('保存成功', UpdateSourceClient::saveSource($this->request->post()), 1, 1);
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function environment(): Json
+    {
+        return $this->success('获取成功', PackageExtractService::environment(root_path()));
+    }
+
+    public function cloudVersions(): Json
+    {
+        try {
+            return $this->success('获取成功', UpdateCustomerMessage::present((new SystemPackageUpdateService())->versions($this->request->get())));
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function downloadCloudPackage(): Json
+    {
+        try {
+            if (!filter_var($this->request->post('backup_confirmed', false), FILTER_VALIDATE_BOOLEAN)) {
+                return $this->fail('请先确认已完成站点文件和数据库备份');
+            }
+            $targetVersion = (string)$this->request->post('target_version', '');
+            $currentVersion = (string)$this->request->post('current_version', '');
+            return $this->success('下载成功', (new SystemPackageUpdateService())->downloadPackage($targetVersion, $currentVersion), 1, 1);
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function preflightPackage(): Json
+    {
+        try {
+            return $this->success('预检完成', UpdateCustomerMessage::present((new SystemPackageUpdateService())->preflight((int)$this->request->post('package_id', 0))));
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function applyPackage(): Json
+    {
+        try {
+            return $this->success('系统更新成功', (new SystemPackageUpdateService())->apply((int)$this->request->post('package_id', 0)), 1, 1);
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function ignoreVersion(): Json
+    {
+        try {
+            $version = (string)$this->request->post('version', '');
+            return $this->success('忽略成功', (new SystemPackageUpdateService())->ignoreVersion($version), 1, 1);
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function rollbackVersions(): Json
+    {
+        try {
+            return $this->success('获取成功', (new SystemPackageUpdateService())->rollbackVersions());
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function rollbackVersion(): Json
+    {
+        try {
+            return $this->success(
+                '版本标记已回退',
+                (new SystemPackageUpdateService())->rollbackVersion((string)$this->request->post('version', '')),
+                1,
+                1
+            );
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function licenseInfo(): Json
+    {
+        try {
+            return $this->success('获取成功', (new UpdateLicenseService())->info());
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function licenseRefresh(): Json
+    {
+        try {
+            $admin = $this->request->adminInfo;
+            if ((int)($admin['root'] ?? 0) !== 1) {
+                $permission = (string)\think\facade\Db::name('system_menu')->where('source_menu_key','core_update_license')->value('perms');
+                $uris = (new \app\common\cache\AdminAuthCache($admin['admin_id']))->getAdminUri();
+                $normalize = static fn($uri) => strtolower(\think\helper\Str::camel($uri));
+                if ($permission === '' || !in_array($normalize($permission), array_map($normalize,$uris ?: []),true)) throw new \RuntimeException('权限不足，无法刷新授权');
+            }
+            $service = new UpdateLicenseService();
+            $params = $this->request->post();
+            if (array_key_exists('site_ip', $params)) $service->saveSiteIp((string)$params['site_ip']);
+            (new \app\common\service\license\SiteLicenseAccessService())->refresh(true, true, true);
+            return $this->success('授权状态已刷新', $service->info());
+        } catch (\Throwable $e) { return $this->updateFailure($e); }
+    }
+
+    public function machineCode(): Json
+    {
+        try {
+            return $this->success('获取成功', (new UpdateLicenseService())->machineCode());
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function licenseImport(): Json
+    {
+        return $this->handleLicenseImport();
+    }
+
+    public function importLicense(): Json
+    {
+        return $this->handleLicenseImport();
+    }
+
+    public function import_license(): Json
+    {
+        return $this->handleLicenseImport();
+    }
+
+    public function license_import(): Json
+    {
+        return $this->handleLicenseImport();
+    }
+
+    private function handleLicenseImport(): Json
+    {
+        try {
+            $file = $this->request->file('file');
+            if (!$file) {
+                return $this->fail('请上传授权文件');
+            }
+            $dir = runtime_path() . 'update_license/';
+            if (!is_dir($dir)) {
+                mkdir($dir, 0777, true);
+            }
+            $saveName = date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.json';
+            $file->move($dir, $saveName);
+            return $this->success('导入成功', (new UpdateLicenseService())->import($dir . $saveName), 1, 1);
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    public function logs(): Json
+    {
+        try {
+            return $this->data((new SystemPackageUpdateService())->versionLogs($this->request->get()));
+        } catch (\Exception $e) {
+            return $this->updateFailure($e);
+        }
+    }
+
+    /**
+     * @notes 查看系统更新列表
+     * @return Json
+     * @author 段誉
+     * @date 2021/8/14 17:17
+     */
+    public function lists(): Json
+    {
+        return $this->dataLists(new UpgradeLists());
+    }
+
+    /**
+     * @notes 执行系统更新
+     * @return Json
+     * @author 段誉
+     * @date 2021/8/14 16:51
+     */
+    public function upgrade(): Json
+    {
+        $params = $this->request->post();
+        if ((int)($params['id'] ?? 0) <= 0) return $this->fail('请选择更新源版本');
+        $params['update_type'] = 1; // 一键更新类型
+        $params['backup_confirmed'] = $this->request->post('backup_confirmed', false);
+        if (true === UpgradeLogic::upgrade($params)) {
+            return $this->success('更新成功', [], 1, 1);
+        }
+        return $this->updateFailure(new \RuntimeException(UpgradeLogic::getError()));
+    }
+
+    /**
+     * @notes 下载更新包
+     * @return Json
+     * @author 段誉
+     * @date 2021/10/8 14:23
+     */
+    public function downloadPkg(): Json
+    {
+        $params = (new downloadPkgValidate())->post()->goCheck();
+        $result = UpgradeLogic::getPkgLine($params);
+        if (false === $result) {
+            return $this->updateFailure(new \RuntimeException(UpgradeLogic::getError()));
+        }
+        return $this->success('', $result);
+    }
+}

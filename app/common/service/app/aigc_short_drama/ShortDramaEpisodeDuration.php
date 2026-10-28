@@ -1,0 +1,183 @@
+<?php
+namespace app\common\service\app\aigc_short_drama;
+
+use RuntimeException;
+
+/** Immutable editorial timing policy. Does not describe provider video capabilities. */
+final class ShortDramaEpisodeDuration
+{
+    public const VERSION = 1;
+
+    public static function defaults(): array
+    {
+        return ['enabled' => true, 'target_seconds' => 120, 'min_seconds' => 110, 'max_seconds' => 130];
+    }
+
+    public static function normalize(array $rule): array
+    {
+        $rule = array_replace(self::defaults(), $rule);
+        foreach (['target_seconds', 'min_seconds', 'max_seconds'] as $key) {
+            if (!is_numeric($rule[$key]) || $rule[$key] < 1 || $rule[$key] > 3600) {
+                throw new RuntimeException('每集时长必须在1至3600秒之间', 422);
+            }
+            $rule[$key] = (int)$rule[$key];
+        }
+        if ($rule['min_seconds'] > $rule['target_seconds'] || $rule['target_seconds'] > $rule['max_seconds']) {
+            throw new RuntimeException('每集时长须满足：下限 ≤ 目标 ≤ 上限', 422);
+        }
+        return array_intersect_key(array_replace($rule, ['enabled' => (bool)$rule['enabled']]), self::defaults());
+    }
+
+    public static function policy(array $request): array
+    {
+        return (array)($request['episode_duration_policy'] ?? $request['generation_settings']['episode_duration_policy'] ?? []);
+    }
+
+    /** An automatic target is a planning ceiling, not time to pad into shots. */
+    public static function modelPolicy(array $request): array
+    {
+        $policy = self::policy($request);
+        if (($policy['source'] ?? '') === 'default') {
+            unset($policy['target_seconds'], $policy['min_seconds']);
+        }
+        return $policy;
+    }
+
+    public static function active(array $request): bool
+    {
+        return (int)(self::policy($request)['version'] ?? 0) === self::VERSION;
+    }
+
+    public static function localRevision(array $request): bool
+    {
+        return (!empty($request['revision_message']) || !empty($request['revision_target']))
+            && ($request['revision_policy']['mode'] ?? 'local_only') !== 'full_replan';
+    }
+
+    public static function snapshot(array $rule, float $selected, float $textDuration, array $timeline, bool $seriesTotal = false): array
+    {
+        $rule = self::normalize($rule);
+        $timelineDuration = 0.0;
+        $lastEnd = null;
+        foreach ($timeline as $segment) {
+            $duration = (float)($segment['duration_seconds'] ?? 0);
+            $start = (float)($segment['start_seconds'] ?? 0);
+            $end = (float)($segment['end_seconds'] ?? ($start + $duration));
+            if (!is_finite($duration) || !is_finite($start) || !is_finite($end) || $duration <= 0 || $start < 0
+                || abs($end - $start - $duration) > 0.001 || ($lastEnd !== null && abs($start - $lastEnd) > 0.001)) {
+                throw new RuntimeException('时间码存在重叠、空档或无效时长，请调整后提交', 422);
+            }
+            $lastEnd = $end;
+            $timelineDuration += $duration;
+        }
+        $explicit = array_values(array_filter([$timelineDuration, $selected, $textDuration], static fn($v) => $v > 0));
+        if ($explicit && max($explicit) - min($explicit) > 0.001) {
+            throw new RuntimeException('时间码、输入时长与所选时长不一致，请统一后提交', 422);
+        }
+        $target = $explicit[0] ?? $rule['target_seconds'];
+        return [
+            'version' => self::VERSION,
+            'source' => $timeline ? 'timeline' : ($explicit ? 'user' : 'default'),
+            'scope' => $seriesTotal ? 'series' : 'episode',
+            'target_seconds' => $target,
+            'min_seconds' => $explicit ? $target : $rule['min_seconds'],
+            'max_seconds' => $explicit ? $target : $rule['max_seconds'],
+            'timeline_segments' => $timeline,
+        ];
+    }
+
+    /** Provider coercion must not silently rewrite an editorial duration. */
+    public static function assertRenderableDuration(float $planned, float $effective): void
+    {
+        if ($planned <= 0 || !is_finite($planned) || abs($planned - $effective) > 0.001) {
+            throw new RuntimeException('当前视频模型不支持分镜要求的' . $planned . '秒（当前规格为' . $effective . '秒），请更换支持该时长的模型，或明确调整视频生成时长；剧本时长保持不变', 422);
+        }
+    }
+
+    public static function instruction(array $request): string
+    {
+        $policy = self::policy($request);
+        if (!self::active($request)) return '';
+        $default = ($policy['source'] ?? '') === 'default';
+        return '本次采用时间预算策略。' . (($policy['scope'] ?? '') === 'series' ? '整部总时长' : '每集时长')
+            . ($default
+                ? '未指定目标时长，仅以' . $policy['max_seconds'] . '秒作为参考上限；剧情自然结束即可短于该值，不补时长。'
+                : '用户指定目标' . $policy['target_seconds'] . '秒，允许' . $policy['min_seconds'] . '-' . $policy['max_seconds'] . '秒。')
+            . '具体时间码和对应剧情必须完整保留。剧情类型只提供节奏参考，忽略旧模板的分镜数量上下限、按场景最少几个镜头及固定单集默认时长。'
+            . '按实际对白、动作和情绪安排时长与镜头数，不追加镜头凑时长，不通过仅修改秒数压缩对白。默认时长不足时正常返回，默认下限仅为参考，不补长、不重试；明确用户时长仍严格遵守。'
+            . '骨架先分配各场时间预算，再展开分镜。明确时间码可短于通常片段下限；每个未超过单镜头上限的时间码段必须恰好对应一个分镜，只有超过上限的长片段才允许连续拆分，并且不得改变原时间边界。'
+            . (self::localRevision($request) ? '当前为局部修改，保留未选中内容及其时长，不执行整集时间再平衡。' : '')
+            . "\n时间策略=" . json_encode(self::modelPolicy($request), JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    }
+
+    /** Validate semantic output before normalization can clamp or pad it. */
+    public static function assertPlan(array $plan, array $request): void
+    {
+        if (!self::active($request) || self::localRevision($request)) return;
+        $policy = self::policy($request);
+        $shots = (array)($plan['storyboard'] ?? []);
+        $total = 0.0;
+        $boundaries = [0.0];
+        foreach ($shots as $shot) {
+            $duration = (float)($shot['recommended_duration_seconds'] ?? 0);
+            if ($duration <= 0 || !is_finite($duration)) throw new RuntimeException('分镜缺少有效时长', 422);
+            $total += $duration;
+            $boundaries[] = $total;
+        }
+        $referenceOnly = ($policy['source'] ?? '') === 'default' && ShortDramaInputContract::recoveryEnabled($request);
+        if (!$shots || (($policy['source'] ?? '') !== 'default' && $total < $policy['min_seconds'] - 0.001)
+            || (!$referenceOnly && $total > $policy['max_seconds'] + 0.001)) {
+            throw new RuntimeException('分镜总时长' . round($total, 3) . '秒不符合本集' . $policy['min_seconds'] . '-' . $policy['max_seconds'] . '秒要求', 422);
+        }
+        $timeline = (array)($policy['timeline_segments'] ?? []);
+        if (empty($timeline)) {
+            return;
+        }
+        if (ShortDramaDialogueSplit::enabled($request)) {
+            $end = 0.0; $previousIndex = 0;
+            $max = ShortDramaShotDuration::rule($request)['max_seconds'];
+            foreach ($timeline as $segment) {
+                $end += (float)$segment['duration_seconds']; $matched = null;
+                foreach ($boundaries as $index => $boundary) if (abs($boundary - $end) <= 0.001) {$matched = $index; break;}
+                if ($matched === null || ((float)$segment['duration_seconds'] <= $max && $matched !== $previousIndex + 1)) {
+                    throw new RuntimeException('分镜未按用户时间码逐段对齐', 422);
+                }
+                $previousIndex = $matched;
+            }
+            return;
+        }
+        $shotIndex = 0;
+        foreach ($timeline as $segment) {
+            foreach (self::timelineShotDurations((float)($segment['duration_seconds'] ?? 0), $request) as $duration) {
+                $shot = (array)($shots[$shotIndex] ?? []);
+                if (abs((float)($shot['recommended_duration_seconds'] ?? 0) - $duration) > 0.001) {
+                    throw new RuntimeException('分镜未按用户时间码逐段对齐', 422);
+                }
+                $shotIndex++;
+            }
+        }
+        if ($shotIndex !== count($shots)) {
+            throw new RuntimeException('分镜未按用户时间码逐段对齐', 422);
+        }
+    }
+
+    /**
+     * Timecode is an editorial contract: retain one card per segment whenever
+     * possible, and split only a segment that exceeds the active per-shot cap.
+     */
+    public static function timelineShotDurations(float $duration, array $request): array
+    {
+        if (!is_finite($duration) || $duration <= 0) {
+            throw new RuntimeException('时间码片段缺少有效时长', 422);
+        }
+        $maxSeconds = max(0.001, (float)(ShortDramaShotDuration::rule($request)['max_seconds'] ?? ShortDramaShotDuration::MAX));
+        if ($duration <= $maxSeconds + 0.001) {
+            return [$duration];
+        }
+        $parts = max(2, (int)ceil($duration / $maxSeconds));
+        $base = round($duration / $parts, 3);
+        $durations = array_fill(0, $parts, $base);
+        $durations[$parts - 1] = round($duration - ($base * ($parts - 1)), 3);
+        return $durations;
+    }
+}

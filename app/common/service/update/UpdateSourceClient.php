@@ -1,0 +1,351 @@
+<?php
+
+namespace app\common\service\update;
+
+use app\common\model\update\UpdateSource;
+use RuntimeException;
+use think\facade\Db;
+use WpOrg\Requests\Requests;
+
+class UpdateSourceClient
+{
+    public const PRODUCT_CODE = 'likeadmin_aigc_saas';
+    private const API_REQUEST_TIMEOUT = 15;
+    private const PACKAGE_DOWNLOAD_TIMEOUT = 600;
+
+    public static function getSource(): array
+    {
+        self::ensureSchema();
+        $source = UpdateSource::where('status', 1)->order('id', 'desc')->findOrEmpty();
+        if ($source->isEmpty()) {
+            return [
+                'base_url' => '',
+                'license_key' => '',
+                'api_key' => '',
+                'online_base_url' => '',
+                'online_license_key' => '',
+                'dev_mode' => 0,
+                'ssl_verify' => 0,
+                'active_base_url' => '',
+                'active_api_key' => '',
+                'public_key' => '',
+            ];
+        }
+        $data = $source->toArray();
+        $data['dev_mode'] = (int)($data['dev_mode'] ?? 0);
+        $data['ssl_verify'] = (int)($data['ssl_verify'] ?? 0);
+        $data['base_url'] = self::normalizeBaseUrl((string)($data['base_url'] ?? ''));
+        $data['license_key'] = trim((string)($data['license_key'] ?? ''));
+        $data['online_base_url'] = self::normalizeBaseUrl((string)($data['online_base_url'] ?? ''));
+        $data['online_license_key'] = trim((string)($data['online_license_key'] ?? ''));
+        $data['online_base_url'] = $data['online_base_url'] ?: $data['base_url'];
+        $data['online_license_key'] = $data['online_license_key'] ?: $data['license_key'];
+        $data['active_base_url'] = self::activeBaseUrl($data);
+        $data['active_api_key'] = self::activeApiKey($data);
+        $data['api_key'] = $data['active_api_key'];
+        return $data;
+    }
+
+    public static function saveSource(array $params): array
+    {
+        $before = self::getSource();
+        $data = [
+            'name' => trim((string)($params['name'] ?? '授权系统')),
+            'base_url' => self::normalizeBaseUrl((string)($params['base_url'] ?? '')),
+            'license_key' => trim((string)($params['license_key'] ?? ($params['api_key'] ?? ''))),
+            'online_base_url' => self::normalizeBaseUrl((string)($params['online_base_url'] ?? '')),
+            'online_license_key' => trim((string)($params['online_license_key'] ?? '')),
+            'dev_mode' => (int)($params['dev_mode'] ?? 0) === 1 ? 1 : 0,
+            'ssl_verify' => (int)($params['ssl_verify'] ?? 0) === 1 ? 1 : 0,
+            'public_key' => trim((string)($params['public_key'] ?? '')),
+            'status' => (int)($params['status'] ?? 1),
+            'update_time' => time(),
+        ];
+        if ($data['dev_mode'] === 0) {
+            $data['online_base_url'] = $data['online_base_url'] ?: $data['base_url'];
+            $data['online_license_key'] = $data['online_license_key'] ?: $data['license_key'];
+        } else {
+            $data['base_url'] = $data['base_url'] ?: $data['online_base_url'];
+            $data['license_key'] = $data['license_key'] ?: $data['online_license_key'];
+        }
+        if ($data['dev_mode'] === 1 && $data['base_url'] === '') {
+            throw new RuntimeException('请填写开发模式接口地址');
+        }
+        if ($data['dev_mode'] === 1 && $data['license_key'] === '') {
+            throw new RuntimeException('请填写开发模式 API Key');
+        }
+        if ($data['dev_mode'] === 0 && $data['online_base_url'] === '') {
+            throw new RuntimeException('关闭开发模式时请填写线上接口地址');
+        }
+        if ($data['dev_mode'] === 0 && $data['online_license_key'] === '') {
+            throw new RuntimeException('关闭开发模式时请填写线上 API Key');
+        }
+        $row = UpdateSource::where('id', (int)($params['id'] ?? 0))->findOrEmpty();
+        if ($row->isEmpty()) {
+            $data['create_time'] = time();
+            $row = UpdateSource::create($data);
+        } else {
+            $row->save($data);
+        }
+        $after = self::getSource();
+        if (array_intersect_key($before,array_flip(['active_base_url','active_api_key','public_key','ssl_verify'])) !== array_intersect_key($after,array_flip(['active_base_url','active_api_key','public_key','ssl_verify']))) {
+            \app\common\service\license\SiteLicenseAccessService::invalidate();
+            (new \app\common\service\license\SiteLicenseAccessService())->refresh(true);
+        }
+        return $after;
+    }
+
+    public function request(string $path, array $payload = []): array
+    {
+        $source = self::getSource();
+        if (empty($source['active_base_url'])) {
+            throw new RuntimeException('未配置接口渠道');
+        }
+        $license = new UpdateLicenseService();
+        $context = $license->requestContext();
+        $payload = array_merge([
+            'product_code' => self::PRODUCT_CODE,
+            'core_version' => self::currentCoreVersion(),
+            'domain' => $context['domain'],
+            'license_key' => $source['active_api_key'] ?? '',
+            'machine_fingerprint_hash' => $context['machine_fingerprint_hash'],
+            'timestamp' => time(),
+            'nonce' => bin2hex(random_bytes(8)),
+            'license' => $context['license'],
+        ], $payload);
+        $url = self::buildUrl((string)$source['active_base_url'], $path);
+        $headers = [
+            'Content-Type' => 'application/json',
+            'X-AIGC-Domain' => (string)$payload['domain'],
+            'X-AIGC-Machine-Fingerprint' => (string)$payload['machine_fingerprint_hash'],
+        ];
+        $apiKey = trim((string)($source['active_api_key'] ?? $source['api_key'] ?? $source['license_key'] ?? ''));
+        if ($apiKey !== '') {
+            $headers['Authorization'] = 'Bearer ' . $apiKey;
+        }
+        $response = Requests::post($url, $headers, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), [
+            'timeout' => self::API_REQUEST_TIMEOUT,
+            'verify' => self::sslVerify($source),
+        ]);
+        $body = json_decode($response->body, true);
+        if (!is_array($body)) {
+            $contentType = strtolower((string)($response->headers['content-type'] ?? ''));
+            $preview = mb_substr(trim(strip_tags((string)$response->body)), 0, 120);
+            if (str_contains($contentType, 'text/html') || str_contains((string)$response->body, '<html')) {
+                throw new RuntimeException('更新源响应格式错误：接口渠道返回了 HTML 页面，请确认填写的是服务端接口域名，不是 PC 前端页面域名');
+            }
+            throw new RuntimeException('更新源响应格式错误' . ($preview !== '' ? '：' . $preview : ''));
+        }
+        if (!empty($source['public_key']) && !self::verifyResponse($body, (string)$source['public_key'])) {
+            throw new RuntimeException('更新源响应签名校验失败');
+        }
+        if ((int)($body['code'] ?? 0) !== 1) {
+            $errorCode = (string)($body['data']['error_code'] ?? '');
+            $message = (string)($body['msg'] ?? '更新源请求失败');
+            throw new RuntimeException($errorCode !== '' ? $message . ' (' . $errorCode . ')' : $message);
+        }
+        return $body['data'] ?? [];
+    }
+
+    public static function path(string $endpoint): string
+    {
+        return '/aigc/v1/' . ltrim($endpoint, '/');
+    }
+
+    /** System permissions require a trusted signature, including signed refusals. */
+    public function systemRequest(string $endpoint, array $params = [], bool $allowRefresh = true): array
+    {
+        $license = new UpdateLicenseService();
+        $license->assertSystemUpdateAllowed();
+        $context = $license->verifiedSiteContext();
+        $source = self::getSource();
+        if (empty($source['public_key']) || empty($source['active_base_url']) || empty($source['active_api_key'])) {
+            throw new UpdateProtocolException('LICENSE_SOURCE_MISSING', '请配置可信更新源、API Key 和验签公钥');
+        }
+        $contextKey = SystemUpdateProtocol::contextKey($context, $source);
+        $nonce = bin2hex(random_bytes(16));
+        $payload = array_merge($params, [
+            'product_code' => self::PRODUCT_CODE, 'core_version' => self::currentCoreVersion(),
+            'domain' => $context['domain'], 'machine_fingerprint_hash' => $context['machine_fingerprint_hash'],
+            'license' => $context['raw_certificate'], 'timestamp' => time(), 'nonce' => $nonce,
+        ]);
+        if ($context['ip'] !== '') $payload['ip'] = $context['ip'];
+        $raw = $this->sendSystem($endpoint, $payload, $source);
+        $body = SystemUpdateProtocol::envelope($raw, $source['public_key'], time());
+        $after = $license->verifiedSiteContext();
+        if (empty($after['verified']) || SystemUpdateProtocol::contextKey($after, self::getSource()) !== $contextKey) {
+            throw new UpdateProtocolException('SYSTEM_CONTEXT_CHANGED', '请求期间授权或更新源已变更，请重试');
+        }
+        if (($body['code'] ?? null) !== 1) {
+            \app\common\service\license\SignedLicenseProtocol::response($raw, $source['public_key'], $context, $nonce);
+            $error = (string)($body['data']['error_code'] ?? 'SYSTEM_REQUEST_FAILED');
+            if ($error === 'LICENSE_REDOWNLOAD_REQUIRED' && $allowRefresh) {
+                \app\common\service\license\SiteLicenseAccessService::invalidate();
+                (new \app\common\service\license\SiteLicenseAccessService())->refresh(true, true, true);
+                $current = $license->verifiedSiteContext();
+                if (!empty($current['verified']) && ($current['license_version'] ?? 0) > $context['license_version']) {
+                    return $this->systemRequest($endpoint, $params, false);
+                }
+            }
+            throw new UpdateProtocolException($error, (string)($body['msg'] ?? '更新源拒绝请求'));
+        }
+        return ['data' => $body['data'], 'response_json' => $raw, 'context_key' => $contextKey];
+    }
+
+    protected function sendSystem(string $endpoint, array $payload, array $source): string
+    {
+        try {
+            $response = Requests::post(self::buildUrl($source['active_base_url'], self::path($endpoint)), [
+                'Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $source['active_api_key'],
+                'X-AIGC-Domain' => $payload['domain'], 'X-AIGC-Machine-Fingerprint' => $payload['machine_fingerprint_hash'],
+            ], \app\common\service\license\SignedLicenseProtocol::json($payload), [
+                'timeout' => self::API_REQUEST_TIMEOUT, 'verify' => self::sslVerify($source),
+            ]);
+        } catch (\WpOrg\Requests\Exception $e) {
+            throw new UpdateProtocolException('LICENSE_NETWORK_UNAVAILABLE', '更新源连接失败，请稍后重试');
+        }
+        if (in_array((int)$response->status_code, [502,503,504], true) && !str_contains((string)$response->body, '"signature"')) {
+            throw new UpdateProtocolException('LICENSE_NETWORK_UNAVAILABLE', '更新源暂时不可用');
+        }
+        return (string)$response->body;
+    }
+
+    private static function activeBaseUrl(array $source): string
+    {
+        $devMode = (int)($source['dev_mode'] ?? 0) === 1;
+        $baseUrl = $devMode ? (string)($source['base_url'] ?? '') : (string)($source['online_base_url'] ?? '');
+        if ($baseUrl === '') {
+            $baseUrl = $devMode ? (string)($source['online_base_url'] ?? '') : (string)($source['base_url'] ?? '');
+        }
+        return self::normalizeBaseUrl($baseUrl);
+    }
+
+    private static function activeApiKey(array $source): string
+    {
+        $devMode = (int)($source['dev_mode'] ?? 0) === 1;
+        $key = $devMode ? (string)($source['license_key'] ?? '') : (string)($source['online_license_key'] ?? '');
+        if ($key === '') {
+            $key = $devMode ? (string)($source['online_license_key'] ?? '') : (string)($source['license_key'] ?? '');
+        }
+        return trim($key);
+    }
+
+    private static function ensureSchema(): void
+    {
+        static $checked = false;
+        if ($checked) {
+            return;
+        }
+        $checked = true;
+        $table = str_replace('`', '``', (new UpdateSource())->db()->getTable());
+        $columns = Db::query('SHOW COLUMNS FROM `' . $table . '`');
+        $fields = array_column($columns, 'Field');
+        $sql = [];
+        if (!in_array('online_base_url', $fields, true)) {
+            $sql[] = "ADD COLUMN `online_base_url` varchar(255) NOT NULL DEFAULT '' COMMENT '线上授权系统接口地址' AFTER `license_key`";
+        }
+        if (!in_array('online_license_key', $fields, true)) {
+            $sql[] = "ADD COLUMN `online_license_key` varchar(255) NOT NULL DEFAULT '' COMMENT '线上API Key/授权key' AFTER `online_base_url`";
+        }
+        if (!in_array('dev_mode', $fields, true)) {
+            $sql[] = "ADD COLUMN `dev_mode` tinyint NOT NULL DEFAULT 0 COMMENT '开发模式：1开启 0关闭' AFTER `online_license_key`";
+        } else {
+            foreach ($columns as $column) {
+                if (($column['Field'] ?? '') === 'dev_mode' && (string)($column['Default'] ?? '') !== '0') {
+                    $sql[] = "MODIFY COLUMN `dev_mode` tinyint NOT NULL DEFAULT 0 COMMENT '开发模式：1开启 0关闭'";
+                    break;
+                }
+            }
+        }
+        if (!in_array('ssl_verify', $fields, true)) {
+            $sql[] = "ADD COLUMN `ssl_verify` tinyint NOT NULL DEFAULT 0 COMMENT 'SSL证书校验：1开启 0关闭' AFTER `dev_mode`";
+        }
+        if ($sql) {
+            Db::execute('ALTER TABLE `' . $table . '` ' . implode(', ', $sql));
+        }
+    }
+
+    private static function normalizeBaseUrl(string $baseUrl): string
+    {
+        $baseUrl = rtrim(trim($baseUrl), '/');
+        if ($baseUrl !== '' && !preg_match('#^[a-z][a-z0-9+.-]*://#i', $baseUrl)) {
+            $baseUrl = 'https://' . $baseUrl;
+        }
+        return (string)preg_replace('#/aigc/v1$#i', '', $baseUrl);
+    }
+
+    private static function buildUrl(string $baseUrl, string $path): string
+    {
+        $baseUrl = self::normalizeBaseUrl($baseUrl);
+        $path = '/' . ltrim($path, '/');
+        return $baseUrl . $path;
+    }
+
+    public static function currentCoreVersion(): string
+    {
+        $local = function_exists('local_version') ? local_version() : [];
+        $version = is_array($local) ? (string)($local['version'] ?? '') : '';
+        return $version !== '' ? $version : (string)config('project.version');
+    }
+
+    public static function verifyResponse(array $body, string $publicKey): bool
+    {
+        if (empty($body['signature'])) {
+            return false;
+        }
+        $payload = [
+            'code' => $body['code'] ?? null,
+            'msg' => $body['msg'] ?? '',
+            'data' => $body['data'] ?? [],
+            'request_id' => $body['request_id'] ?? '',
+            'server_time' => $body['server_time'] ?? 0,
+        ];
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $key = openssl_pkey_get_public($publicKey);
+        if (!$key) {
+            return false;
+        }
+        return openssl_verify($json, base64_decode((string)$body['signature']), $key, OPENSSL_ALGO_SHA256) === 1;
+    }
+
+    public static function download(string $url, string $sha256 = '', string $format = 'zip'): array
+    {
+        if ($url === '') {
+            throw new RuntimeException('下载地址为空');
+        }
+        $dir = runtime_path() . 'update_packages/';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
+        $ext = $format === 'tar.gz' ? 'tar.gz' : pathinfo(parse_url($url, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION);
+        $filename = date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.' . ($ext ?: 'zip');
+        $path = $dir . $filename;
+        $response = Requests::get($url, [], [
+            'timeout' => self::PACKAGE_DOWNLOAD_TIMEOUT,
+            'verify' => self::sslVerify(self::getSource()),
+        ]);
+        if ((int)$response->status_code !== 200) {
+            if (in_array((int)$response->status_code, [401,403,410], true)) {
+                throw new UpdateProtocolException('SYSTEM_DOWNLOAD_REAUTHORIZE', '下载凭证失效，需要重新获取');
+            }
+            throw new RuntimeException('下载更新包失败');
+        }
+        file_put_contents($path, $response->body);
+        $hash = hash_file('sha256', $path);
+        if ($sha256 !== '' && $hash !== $sha256) {
+            @unlink($path);
+            throw new RuntimeException('更新包 checksum 校验失败');
+        }
+        return [
+            'path' => $path,
+            'sha256' => $hash,
+            'size' => filesize($path),
+            'format' => $format ?: 'zip',
+        ];
+    }
+
+    public static function sslVerify(array $source = []): bool
+    {
+        return (int)($source['ssl_verify'] ?? 0) === 1;
+    }
+}

@@ -1,0 +1,356 @@
+<?php
+
+namespace app\tenantapi\controller;
+
+use app\common\model\app\App;
+use app\common\model\app\TenantApp;
+use app\common\model\app\TenantAppOrder;
+use app\common\service\app\AppAccessService;
+use app\common\service\app\AppDisplayConfigService;
+use app\common\service\app\AppRegistryService;
+use app\common\service\app\AppFrontendManifestService;
+use app\common\service\app\AppPlanService;
+use app\common\service\app\DefaultAppService;
+use app\common\service\FileService;
+use Exception;
+
+class AppController extends BaseAdminController
+{
+    private const DISPLAY_MANAGED_APP_CODES = [
+        'aigc_geo',
+    ];
+
+    public function market()
+    {
+        $name = trim((string)$this->request->get('name', ''));
+        $isBuyFilter = $this->request->get('is_buy', '');
+        $apps = App::where('status', 'installed')->order(['sort' => 'desc', 'id' => 'desc'])->select()->toArray();
+        $tenantApps = TenantApp::where('tenant_id', $this->tenantId)->column('*', 'app_code');
+        $paidOrderExpires = self::paidOrderExpireMap($this->tenantId);
+        $displayMap = AppDisplayConfigService::map($this->tenantId, array_column($apps, 'code') ?: []);
+        $rows = [];
+        foreach ($apps as &$app) {
+            $tenantApp = $tenantApps[$app['code']] ?? [];
+            $display = $displayMap[$app['code']] ?? [];
+            $app['display_config'] = $display;
+            $app['market_profile'] = AppDisplayConfigService::marketProfile((string)$app['code']);
+            $app['cover_url'] = self::firstImageUrl(
+                $display['cover_url'] ?? '',
+                $display['cover_uri'] ?? '',
+                $app['cover'] ?? ''
+            );
+            $app['icon_url'] = self::imageUrl((string)($app['icon'] ?? ''));
+            $isBuiltin = DefaultAppService::isDefaultApp((string)$app['code']);
+            $canShelf = AppAccessService::isShelfableDefaultApp((string)$app['code']);
+            if (!$isBuiltin && !self::isValidPaidTenantApp($tenantApp, $paidOrderExpires)) {
+                $tenantApp = [];
+            } elseif (!$isBuiltin && !empty($tenantApp)) {
+                $tenantApp['expire_time'] = max((int)($tenantApp['expire_time'] ?? 0), (int)($paidOrderExpires[$app['code']] ?? 0));
+            }
+            $app['is_builtin'] = $isBuiltin ? 1 : 0;
+            $app['can_shelf'] = (!$isBuiltin || $canShelf) ? 1 : 0;
+            $app['expire_policy'] = $isBuiltin ? AppPlanService::EXPIRE_ALLOW : ($app['expire_policy'] ?? AppPlanService::EXPIRE_BLOCK);
+            $app['is_buy'] = $isBuiltin ? 1 : (empty($tenantApp) ? 0 : 1);
+            $app['shelf_status'] = $isBuiltin && !$canShelf ? AppAccessService::SHELF_ON : ($tenantApp['shelf_status'] ?? ($canShelf ? 'on' : 'off'));
+            $app['enable_status'] = $isBuiltin && !$canShelf ? AppAccessService::ENABLED : ($tenantApp['enable_status'] ?? ($canShelf ? 'enabled' : 'disabled'));
+            $app['expire_time'] = $isBuiltin ? 0 : ($tenantApp['expire_time'] ?? 0);
+            $app = AppPlanService::enrichApp($app, $tenantApp, true);
+            if ($name !== '') {
+                $keyword = mb_strtolower($name);
+                $appName = mb_strtolower((string)($app['name'] ?? ''));
+                $appCode = mb_strtolower((string)($app['code'] ?? ''));
+                if (!str_contains($appName, $keyword) && !str_contains($appCode, $keyword)) {
+                    continue;
+                }
+            }
+            if ($isBuyFilter !== '' && (int)$app['is_buy'] !== (int)$isBuyFilter) {
+                continue;
+            }
+            $rows[] = $app;
+        }
+        foreach (self::DISPLAY_MANAGED_APP_CODES as $appCode) {
+            if (in_array($appCode, array_column($rows, 'code'), true)) {
+                continue;
+            }
+            $app = $this->displayManagedApp($appCode);
+            if ($name !== '') {
+                $keyword = mb_strtolower($name);
+                $appName = mb_strtolower((string)($app['name'] ?? ''));
+                $appCodeValue = mb_strtolower((string)($app['code'] ?? ''));
+                if (!str_contains($appName, $keyword) && !str_contains($appCodeValue, $keyword)) {
+                    continue;
+                }
+            }
+            if ($isBuyFilter !== '' && (int)$app['is_buy'] !== (int)$isBuyFilter) {
+                continue;
+            }
+            $rows[] = $app;
+        }
+        return $this->success('获取成功', $rows);
+    }
+
+    public function my()
+    {
+        $lists = TenantApp::where('tenant_id', $this->tenantId)->order('id', 'desc')->select()->toArray();
+        $paidOrderExpires = self::paidOrderExpireMap($this->tenantId);
+        $lists = array_values(array_filter($lists, function ($item) use ($paidOrderExpires) {
+            $appCode = (string)($item['app_code'] ?? '');
+            return self::isDisplayManagedApp($appCode)
+                || DefaultAppService::isDefaultApp($appCode)
+                || self::isValidPaidTenantApp($item, $paidOrderExpires);
+        }));
+        $apps = App::whereIn('code', array_column($lists, 'app_code') ?: [''])->column('*', 'code');
+        $builtinApps = App::where('status', 'installed')
+            ->whereIn('code', AppAccessService::DEFAULT_APP_CODES)
+            ->order(['sort' => 'desc', 'id' => 'desc'])
+            ->select()
+            ->toArray();
+        $displayMap = AppDisplayConfigService::map($this->tenantId, array_values(array_unique(array_merge(
+            array_column($apps, 'code') ?: [],
+            array_column($builtinApps, 'code') ?: []
+        ))));
+        $listedCodes = [];
+        foreach ($lists as &$item) {
+            $app = $apps[$item['app_code']] ?? [];
+            $display = $displayMap[$item['app_code']] ?? [];
+            $isBuiltin = DefaultAppService::isDefaultApp((string)$item['app_code']);
+            $canShelf = AppAccessService::isShelfableDefaultApp((string)$item['app_code']);
+            $listedCodes[] = (string)$item['app_code'];
+            if (self::isDisplayManagedApp((string)$item['app_code'])) {
+                $item = $this->displayManagedApp((string)$item['app_code']);
+                continue;
+            }
+            $item['name'] = $app['name'] ?? $item['app_code'];
+            $item['icon'] = $app['icon'] ?? '';
+            $item['cover_url'] = self::firstImageUrl(
+                $display['cover_url'] ?? '',
+                $display['cover_uri'] ?? '',
+                $app['cover'] ?? ''
+            );
+            $item['icon_url'] = self::imageUrl((string)($app['icon'] ?? ''));
+            $item['display_config'] = $display;
+            $item['market_profile'] = AppDisplayConfigService::marketProfile((string)$item['app_code']);
+            $item['description'] = $app['description'] ?? '';
+            $item['platform_status'] = $app['status'] ?? 'removed';
+            $item['is_builtin'] = $isBuiltin ? 1 : 0;
+            $item['can_shelf'] = (!$isBuiltin || $canShelf) ? 1 : 0;
+            $item['expire_policy'] = $isBuiltin ? AppPlanService::EXPIRE_ALLOW : ($app['expire_policy'] ?? AppPlanService::EXPIRE_BLOCK);
+            if ($isBuiltin && !$canShelf) {
+                $item['buy_status'] = AppAccessService::BUY_PAID;
+                $item['shelf_status'] = AppAccessService::SHELF_ON;
+                $item['enable_status'] = AppAccessService::ENABLED;
+                $item['expire_time'] = 0;
+            } else {
+                $item['expire_time'] = max((int)($item['expire_time'] ?? 0), (int)($paidOrderExpires[$item['app_code']] ?? 0));
+            }
+            $item = AppPlanService::enrichApp(array_merge($app, $item), $item, true);
+            $item['app_code'] = $item['app_code'] ?? ($app['code'] ?? '');
+        }
+        foreach ($builtinApps as $app) {
+            if (in_array((string)$app['code'], $listedCodes, true)) {
+                continue;
+            }
+            array_unshift($lists, [
+                'id' => 0,
+                'tenant_id' => $this->tenantId,
+                'app_code' => $app['code'],
+                'version' => $app['current_version'],
+                'buy_status' => 'paid',
+                'shelf_status' => 'on',
+                'enable_status' => 'enabled',
+                'expire_time' => 0,
+                'name' => $app['name'],
+                'icon' => $app['icon'],
+                'cover_url' => self::firstImageUrl(
+                    $displayMap[$app['code']]['cover_url'] ?? '',
+                    $displayMap[$app['code']]['cover_uri'] ?? '',
+                    $app['cover'] ?? ''
+                ),
+                'icon_url' => self::imageUrl((string)($app['icon'] ?? '')),
+                'display_config' => $displayMap[$app['code']] ?? [],
+                'description' => $app['description'],
+                'platform_status' => $app['status'],
+                'is_builtin' => 1,
+                'can_shelf' => AppAccessService::isShelfableDefaultApp((string)$app['code']) ? 1 : 0,
+                'expire_policy' => AppPlanService::EXPIRE_ALLOW,
+                'is_expired' => 0,
+                'can_renew' => 0,
+                'plans' => [],
+            ]);
+        }
+        foreach (self::DISPLAY_MANAGED_APP_CODES as $appCode) {
+            if (in_array($appCode, $listedCodes, true)) {
+                continue;
+            }
+            $lists[] = $this->displayManagedApp($appCode);
+        }
+        return $this->success('获取成功', $lists);
+    }
+
+    public function buy()
+    {
+        try {
+            $appCode = (string)$this->request->post('app_code', '');
+            if ($this->isDefaultOpenedApp($appCode)) {
+                return $this->success('系统默认应用已开通', [
+                    'app_code' => $appCode,
+                    'order_type' => AppPlanService::ORDER_OPEN,
+                    'points_amount' => '0.00',
+                    'before_expire_time' => 0,
+                    'after_expire_time' => 0,
+                ], 1, 1);
+            }
+            $planId = (int)$this->request->post('plan_id', 0);
+            if ($planId <= 0) {
+                return $this->fail('请选择套餐');
+            }
+            $result = AppPlanService::openOrRenew($this->tenantId, $this->adminId, $appCode, $planId);
+            return $this->success($result['order_type'] === AppPlanService::ORDER_RENEW ? '续签成功' : '开通成功', $result, 1, 1);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function shelf()
+    {
+        $appCode = (string)$this->request->post('app_code', '');
+        if ($appCode === 'system_default' || ($this->isDefaultOpenedApp($appCode) && !AppAccessService::isShelfableDefaultApp($appCode))) {
+            return $this->fail('系统默认应用不允许上下架');
+        }
+        $status = (string)$this->request->post('shelf_status', AppAccessService::SHELF_ON);
+        if (!in_array($status, [AppAccessService::SHELF_ON, 'off'], true)) {
+            return $this->fail('应用上下架状态不正确');
+        }
+        if (self::isDisplayManagedApp($appCode)) {
+            AppDisplayConfigService::save($this->tenantId, $appCode, [
+                'status' => $status === AppAccessService::SHELF_ON ? 1 : 0,
+            ]);
+            TenantApp::where([
+                'tenant_id' => $this->tenantId,
+                'app_code' => $appCode,
+            ])->update([
+                'shelf_status' => $status,
+                'update_time' => time(),
+            ]);
+            return $this->success('操作成功', [], 1, 1);
+        }
+        $row = TenantApp::where(['tenant_id' => $this->tenantId, 'app_code' => $appCode])->findOrEmpty();
+        if ($row->isEmpty() && AppAccessService::isShelfableDefaultApp($appCode)) {
+            DefaultAppService::ensureTenantDefaultApp($this->tenantId, $appCode);
+            $row = TenantApp::where(['tenant_id' => $this->tenantId, 'app_code' => $appCode])->findOrEmpty();
+        }
+        if ($row->isEmpty()) {
+            return $this->fail('应用未购买');
+        }
+        $row->shelf_status = $status;
+        $row->update_time = time();
+        $row->save();
+        return $this->success('操作成功', [], 1, 1);
+    }
+
+    public function frontend()
+    {
+        $terminal = (string)$this->request->get('terminal', 'tenant');
+        return $this->success('获取成功', AppFrontendManifestService::tenantEntries($this->tenantId, $terminal));
+    }
+
+    private function isDefaultOpenedApp(string $appCode): bool
+    {
+        if ($appCode === '' || !DefaultAppService::isDefaultApp($appCode)) {
+            return false;
+        }
+        return AppRegistryService::isInstalled($appCode);
+    }
+
+    private static function isDisplayManagedApp(string $appCode): bool
+    {
+        return in_array($appCode, self::DISPLAY_MANAGED_APP_CODES, true);
+    }
+
+    private function displayManagedApp(string $appCode): array
+    {
+        $display = AppDisplayConfigService::detail($this->tenantId, $appCode);
+        $shelfStatus = (int)($display['status'] ?? 1) === 1
+            ? AppAccessService::SHELF_ON
+            : 'off';
+
+        return [
+            'id' => 0,
+            'tenant_id' => $this->tenantId,
+            'code' => $appCode,
+            'app_code' => $appCode,
+            'name' => $display['title'] ?? $appCode,
+            'icon' => $display['icon_uri'] ?? '',
+            'icon_url' => $display['icon_url'] ?? '',
+            'cover' => $display['cover_uri'] ?? '',
+            'cover_url' => $display['cover_url'] ?? '',
+            'description' => $display['description'] ?? '',
+            'category' => 'aigc',
+            'current_version' => '-',
+            'version' => '-',
+            'platform_status' => 'installed',
+            'status' => 'installed',
+            'buy_status' => AppAccessService::BUY_PAID,
+            'is_buy' => 1,
+            'is_builtin' => 0,
+            'expire_policy' => AppPlanService::EXPIRE_ALLOW,
+            'shelf_status' => $shelfStatus,
+            'enable_status' => $shelfStatus === AppAccessService::SHELF_ON
+                ? AppAccessService::ENABLED
+                : 'disabled',
+            'expire_time' => 0,
+            'is_expired' => 0,
+            'can_renew' => 0,
+            'plans' => [],
+            'display_config' => $display,
+            'market_profile' => AppDisplayConfigService::marketProfile($appCode),
+            'display_config_only' => 1,
+            'sort' => (int)($display['sort'] ?? 0),
+            'install_time' => 0,
+            'update_time' => (int)($display['update_time'] ?? 0),
+        ];
+    }
+
+    private static function paidOrderExpireMap(int $tenantId): array
+    {
+        return TenantAppOrder::where('tenant_id', $tenantId)
+            ->where('pay_status', AppPlanService::PAY_PAID)
+            ->group('app_code')
+            ->column('MAX(after_expire_time)', 'app_code');
+    }
+
+    private static function isValidPaidTenantApp(array $tenantApp, array $paidOrderExpires): bool
+    {
+        if (empty($tenantApp)) {
+            return false;
+        }
+        $appCode = (string)($tenantApp['app_code'] ?? '');
+        if ($appCode === '') {
+            return false;
+        }
+        return max((int)($tenantApp['expire_time'] ?? 0), (int)($paidOrderExpires[$appCode] ?? 0)) > 0;
+    }
+
+    private static function imageUrl(string $uri): string
+    {
+        $uri = trim($uri);
+        return $uri === '' ? '' : FileService::getFileUrl($uri);
+    }
+
+    private static function firstImageValue(...$values): string
+    {
+        foreach ($values as $value) {
+            $text = trim((string)$value);
+            if ($text !== '' && !preg_match('/^(el-icon-|local-icon-)/', $text)) {
+                return $text;
+            }
+        }
+        return '';
+    }
+
+    private static function firstImageUrl(...$values): string
+    {
+        $image = self::firstImageValue(...$values);
+        return $image === '' ? '' : self::imageUrl($image);
+    }
+}

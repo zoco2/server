@@ -1,0 +1,634 @@
+<?php
+
+namespace Tests\Feature;
+
+use app\common\service\app\aigc_short_drama\AigcShortDramaService;
+use app\common\service\app\aigc_video\AigcVideoReferenceAssetService;
+use app\common\service\power\MarketVideoRuntimeService;
+use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+
+class ShortDramaVideoReferenceContractTest extends TestCase
+{
+    public function testQuoteReceivesTheServerOwnedMediaForEveryStoryboardReferenceMode(): void
+    {
+        foreach (['multi_frame', 'start_end', 'image_to_video', 'omni_reference'] as $mode) {
+            $selected = [[
+                'asset' => ['id' => 101, 'uri' => 'uploads/first.png', 'url' => 'https://example.test/first.png'],
+                'role' => in_array($mode, ['start_end', 'image_to_video'], true) ? 'first_frame_image' : 'reference_image',
+            ]];
+            if (in_array($mode, ['multi_frame', 'start_end'], true)) {
+                $selected[] = [
+                    'asset' => ['id' => 102, 'uri' => 'uploads/second.png', 'url' => 'https://example.test/second.png'],
+                    'role' => $mode === 'start_end' ? 'last_frame_image' : 'reference_image',
+                ];
+            }
+            $contract = $this->invoke(AigcShortDramaService::class, 'shortDramaVideoReferenceContractPayload',
+                $mode, $selected, [], []);
+            // Browsers submit IDs, which the market runtime cannot resolve.
+            // Stale URL aliases must not add media outside the server plan.
+            $client = [
+                'model_id' => 'market_video_model:94',
+                'input_asset_ids' => [999],
+                'reference_assets' => [['type' => 'video', 'url' => 'https://example.test/stale.mp4']],
+                'reference_images' => ['https://example.test/stale.png'],
+                'image' => 'https://example.test/stale.png',
+                'image_urls' => ['https://example.test/stale.png'],
+                'video_urls' => ['https://example.test/stale.mp4'],
+                'audio_urls' => ['https://example.test/stale.mp3'],
+                'first_frame_image' => 'https://example.test/stale-first.png',
+                'last_frame_image' => 'https://example.test/stale-last.png',
+            ];
+            foreach ([false, true] as $nested) {
+                $params = $client;
+                if ($nested) $params['params'] = $client;
+                $prepared = $this->invoke(AigcShortDramaService::class, 'applyShortDramaVideoReferenceContract', $params, $contract);
+                $quote = $this->invoke(AigcShortDramaService::class, 'marketVideoSelection', $prepared) + $prepared;
+                self::assertSame($contract['input_asset_ids'], $quote['input_asset_ids']);
+                self::assertSame($mode === 'start_end' ? [] : $contract['input_asset_ids'], $quote['reference_asset_ids']);
+                self::assertSame($contract['reference_plan'], $quote['reference_plan']);
+                $assets = AigcVideoReferenceAssetService::normalize($quote);
+                self::assertSame(array_column($selected, 'role'), array_column($assets, 'role'));
+                self::assertSame(array_column(array_column($selected, 'asset'), 'url'), array_column($assets, 'url'));
+                if ($nested) {
+                    foreach (['reference_assets', 'reference_images', 'first_frame_image', 'last_frame_image', 'generation_method', 'input_asset_ids', 'reference_asset_ids', 'reference_plan'] as $key) {
+                        self::assertSame($prepared[$key], $prepared['params'][$key]);
+                    }
+                }
+                // Exercise the exact validation that rejected online submits.
+                $this->invoke(MarketVideoRuntimeService::class, 'assertAssets', ['product' => [
+                    'upstream_model_code' => 'wan3.0-video',
+                    'source_payload' => ['market_metadata' => [
+                        'supported_asset_types' => ['image', 'video', 'audio'],
+                        'max_reference_images' => 10,
+                        'max_reference_videos' => 5,
+                        'max_reference_audios' => 5,
+                        'max_reference_assets' => 20,
+                    ]],
+                ]], $quote);
+            }
+        }
+    }
+
+    public function testStorageAndUrlAliasesKeepExactlyTwoFrameSlotsAcrossModels(): void
+    {
+        $selected = [
+            ['asset'=>['id'=>1,'uri'=>'uploads/first.png','url'=>'https://media.example/first.png'],'role'=>'first_frame_image'],
+            ['asset'=>['id'=>2,'uri'=>'uploads/last.png','url'=>'https://media.example/last.png'],'role'=>'last_frame_image'],
+        ];
+        foreach ([false,true] as $swapped) {
+            if ($swapped) {
+                [$selected[0]['asset'],$selected[1]['asset']]=[$selected[1]['asset'],$selected[0]['asset']];
+            }
+            $request=$this->invoke(AigcShortDramaService::class,'shortDramaVideoReferenceContractPayload','start_end',$selected,[],[]);
+            $request['prompt']='frame contract fixture';
+            $normalized=AigcVideoReferenceAssetService::normalize($request);
+            self::assertCount(2,$normalized);
+            self::assertSame(['first_frame_image','last_frame_image'],array_column($normalized,'role'));
+            self::assertSame(array_column(array_column($selected,'asset'),'url'),array_column($normalized,'url'));
+            self::assertSame($normalized,AigcVideoReferenceAssetService::normalize(['reference_assets'=>$normalized]+$request));
+            foreach ([['resource_type'=>'model_api','upstream_model_code'=>'wan3.0-video'],['resource_type'=>'model_api','upstream_model_code'=>'h3-video'],['resource_type'=>'app_api','upstream_app_code'=>'full_video']] as $product) {
+                $product['source_payload']=['market_metadata'=>['supported_asset_types'=>['image','video','audio'],'max_reference_images'=>10,'max_reference_assets'=>10]];
+                $this->invoke(MarketVideoRuntimeService::class,'assertAssets',['product'=>$product],$request);
+            }
+            $content=$this->invoke(MarketVideoRuntimeService::class,'h3Content',$request,'fixture');
+            self::assertSame(['first_frame','last_frame'],array_column(array_slice($content,1),'role'));
+        }
+    }
+
+    public function testSameSourceCanFillBothSlotsButConflictingRolesAndIndependentFilesStayVisible(): void
+    {
+        $first=['type'=>'image','uri'=>'uploads/shared.png','url'=>'https://media.example/shared.png','role'=>'first_frame_image'];
+        $last=array_replace($first,['role'=>'last_frame_image']);
+        $request=['generation_method'=>'start_end','reference_assets'=>[$first,$last],
+            'reference_images'=>[$first['url']], 'first_frame_image'=>$first['url'],'last_frame_image'=>$last['url']];
+        self::assertCount(2,AigcVideoReferenceAssetService::normalize($request));
+        $this->invoke(MarketVideoRuntimeService::class,'assertAssets',['product'=>['upstream_model_code'=>'wan3.0-video','source_payload'=>['market_metadata'=>['supported_asset_types'=>['image'],'max_reference_images'=>10]]]],$request);
+        $other=array_replace($first,['url'=>'https://other.example/shared.png']);
+        self::assertCount(2,AigcVideoReferenceAssetService::normalize(['reference_assets'=>[$first,$other]]));
+        $extra=array_replace($first,['role'=>'reference_image']);
+        self::assertCount(3,AigcVideoReferenceAssetService::normalize(['reference_assets'=>[$first,$last,$extra]]));
+        $this->expectExceptionMessage('full_video first/last frame mode cannot be mixed with reference media mode');
+        $this->invoke(MarketVideoRuntimeService::class,'assertAssets',['product'=>['resource_type'=>'app_api','upstream_app_code'=>'full_video']],
+            ['generation_method'=>'start_end','reference_assets'=>[$first,$last,$extra]]);
+    }
+
+    public function testFfmpegExportDefersOnlyWhenTheWebSapiCannotExecuteCommands(): void
+    {
+        self::assertTrue($this->invoke(
+            AigcShortDramaService::class,
+            'shouldDeferFfmpegExport',
+            'export_video',
+            false,
+            'fpm-fcgi'
+        ));
+        self::assertFalse($this->invoke(
+            AigcShortDramaService::class,
+            'shouldDeferFfmpegExport',
+            'export_video',
+            true,
+            'fpm-fcgi'
+        ));
+        self::assertFalse($this->invoke(
+            AigcShortDramaService::class,
+            'shouldDeferFfmpegExport',
+            'export_video',
+            false,
+            'cli'
+        ));
+        self::assertFalse($this->invoke(
+            AigcShortDramaService::class,
+            'shouldDeferFfmpegExport',
+            'export_package',
+            false,
+            'fpm-fcgi'
+        ));
+    }
+
+    public function testMultiFramePlanKeepsOnlyReferenceRolesAndRecordsTrimmedAssets(): void
+    {
+        $payload = $this->invoke(
+            AigcShortDramaService::class,
+            'shortDramaVideoReferenceContractPayload',
+            'multi_frame',
+            [
+                ['asset' => ['id' => 101, 'uri' => 'uploads/first.png', 'url' => 'https://example.test/first.png'], 'role' => 'reference_image'],
+                ['asset' => ['id' => 102, 'url' => 'https://example.test/main-three-view.png'], 'role' => 'reference_image'],
+            ],
+            [
+                ['asset' => ['id' => 103, 'url' => 'https://example.test/secondary-three-view.png'], 'role' => 'reference_image'],
+            ],
+            ['generation_modes' => ['omni_reference', 'multi_frame'], 'max_reference_images' => 2, 'max_reference_assets' => 2]
+        );
+
+        self::assertSame('multi_frame', $payload['generation_method']);
+        self::assertSame([101, 102], $payload['input_asset_ids']);
+        self::assertSame(['reference_image', 'reference_image'], array_column($payload['reference_assets'], 'role'));
+        self::assertSame([103], $payload['reference_plan']['trimmed_asset_ids']);
+    }
+
+    public function testStartEndPlanContainsExactlyTheTwoFrameRoles(): void
+    {
+        $payload = $this->invoke(
+            AigcShortDramaService::class,
+            'shortDramaVideoReferenceContractPayload',
+            'start_end',
+            [
+                ['asset' => ['id' => 201, 'url' => 'https://example.test/first.png'], 'role' => 'first_frame_image'],
+                ['asset' => ['id' => 202, 'url' => 'https://example.test/last.png'], 'role' => 'last_frame_image'],
+            ],
+            [],
+            ['generation_modes' => ['omni_reference', 'start_end'], 'supports_first_last_frame' => true, 'max_reference_images' => 15, 'max_reference_assets' => 15]
+        );
+
+        self::assertSame('start_end', $payload['generation_method']);
+        self::assertSame(['first_frame_image', 'last_frame_image'], array_column($payload['reference_assets'], 'role'));
+        self::assertSame([201, 202], $payload['input_asset_ids']);
+        self::assertSame([], $payload['reference_plan']['trimmed_asset_ids']);
+    }
+
+    public function testOmniFallbackPlanSubmitsOnlyTheFirstFrame(): void
+    {
+        $payload = $this->invoke(
+            AigcShortDramaService::class,
+            'shortDramaVideoReferenceContractPayload',
+            'omni_reference',
+            [
+                ['asset' => ['id' => 301, 'url' => 'https://example.test/first.png'], 'role' => 'reference_image'],
+            ],
+            [
+                ['asset' => ['id' => 302, 'url' => 'https://example.test/three-view.png'], 'role' => 'reference_image'],
+            ],
+            ['generation_modes' => ['omni_reference'], 'max_reference_images' => 1, 'max_reference_assets' => 1]
+        );
+
+        self::assertSame('omni_reference', $payload['generation_method']);
+        self::assertSame([301], $payload['input_asset_ids']);
+        self::assertSame([302], $payload['reference_plan']['trimmed_asset_ids']);
+    }
+
+    public function testNormalReferenceCandidatesUseOnlyTheStoryboardPriorityContract(): void
+    {
+        $candidates = $this->invoke(
+            AigcShortDramaService::class,
+            'shortDramaVideoReferenceCandidates',
+            ['id' => 501, 'url' => 'https://example.test/first.png'],
+            [
+                ['id' => 502, 'url' => 'https://example.test/hero-three-view.png'],
+                ['id' => 503, 'url' => 'https://example.test/partner-three-view.png'],
+            ],
+            [['id' => 504, 'url' => 'https://example.test/scene.png']],
+            [['id' => 506, 'url' => 'https://example.test/mentioned-shot.png']]
+        );
+
+        self::assertSame([501, 502, 503, 504, 506], array_map(
+            static fn(array $candidate): int => (int)$candidate['asset']['id'],
+            $candidates
+        ));
+        self::assertSame([
+            'first_frame', 'character_reference', 'character_reference',
+            'scene_image', 'mentioned_shot',
+        ], array_column($candidates, 'logical_role'));
+    }
+
+    public function testBoundSubjectReferenceFallsBackToTheMainImageWhenNoTurnaroundExists(): void
+    {
+        $source = (string)file_get_contents(dirname(__DIR__, 2) . '/app/common/service/app/aigc_short_drama/AigcShortDramaService.php');
+        self::assertStringContainsString("whereIn('asset_type', ['three_view', 'subject_image'])", $source);
+        self::assertStringContainsString("\$bySubject['three_view'][\$subjectId] ?? \$bySubject['subject_image'][\$subjectId] ?? null", $source);
+    }
+
+    public function testH3UsesItsDocumentedNineImageFallbackWhenMarketMetadataIsMissing(): void
+    {
+        $product = ['upstream_model_code' => 'h3-video'];
+        self::assertSame(9, $this->invoke(MarketVideoRuntimeService::class, 'referenceLimit', $product, [], 'image'));
+        self::assertSame(9, $this->invoke(MarketVideoRuntimeService::class, 'advertisedReferenceLimit', $product, [], 'image'));
+        self::assertSame(9, $this->invoke(MarketVideoRuntimeService::class, 'referenceAssetLimit', $product, []));
+        self::assertSame(9, $this->invoke(MarketVideoRuntimeService::class, 'advertisedReferenceAssetLimit', $product, []));
+        self::assertSame(['image'], $this->invoke(MarketVideoRuntimeService::class, 'supportedAssetTypes', $product, []));
+
+        // Explicit market capability data remains authoritative for every
+        // model, including H3 variants with a provider-specific limit.
+        self::assertSame(6, $this->invoke(
+            MarketVideoRuntimeService::class,
+            'referenceLimit',
+            $product,
+            ['max_reference_images' => 6],
+            'image'
+        ));
+    }
+
+    public function testH3ReferenceContractAcceptsNineImagesAndRejectsTheTenth(): void
+    {
+        $market = ['product' => ['upstream_model_code' => 'h3-video']];
+        $references = array_map(static fn(int $id): array => [
+            'type' => 'image',
+            'url' => 'https://example.test/reference-' . $id . '.png',
+            'role' => 'reference_image',
+        ], range(1, 9));
+
+        $this->invoke(MarketVideoRuntimeService::class, 'assertAssets', $market, [
+            'generation_method' => 'multi_frame',
+            'reference_assets' => $references,
+        ]);
+
+        $references[] = [
+            'type' => 'image',
+            'url' => 'https://example.test/reference-10.png',
+            'role' => 'reference_image',
+        ];
+        try {
+            $this->invoke(MarketVideoRuntimeService::class, 'assertAssets', $market, [
+                'generation_method' => 'multi_frame',
+                'reference_assets' => $references,
+            ]);
+            self::fail('The H3 contract accepted more than nine image references.');
+        } catch (\Exception $error) {
+            self::assertStringContainsString('at most 9 reference image', $error->getMessage());
+        }
+    }
+
+    public function testAllMultiImageModelsAdvertiseMultiFrameButOnlyH3AdvertisesStartEnd(): void
+    {
+        $h3Modes = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'generationModes',
+            ['upstream_model_code' => 'h3-video'],
+            []
+        );
+        $genericModes = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'generationModes',
+            ['upstream_model_code' => 'generic-video'],
+            ['generation_modes' => ['omni_reference', 'start_end'], 'max_reference_images' => 2, 'max_reference_assets' => 2]
+        );
+        $singleImageModes = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'generationModes',
+            ['upstream_model_code' => 'single-image-video'],
+            ['generation_modes' => ['omni_reference'], 'max_reference_images' => 1, 'max_reference_assets' => 1]
+        );
+
+        self::assertSame(['omni_reference', 'start_end', 'multi_frame'], $h3Modes);
+        self::assertSame(['omni_reference', 'multi_frame'], $genericModes);
+        self::assertSame(['omni_reference'], $singleImageModes);
+    }
+
+    public function testWanThreeAdvertisesItsDocumentedFrameAndReferenceModes(): void
+    {
+        $modes = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'generationModes',
+            ['upstream_model_code' => 'wan3.0-video'],
+            ['generation_modes' => ['text_to_video', 'start_end']]
+        );
+
+        self::assertSame([
+            'text_to_video', 'omni_reference', 'image_to_video', 'start_end',
+            'image_reference', 'video_edit', 'multi_frame', 'audio_reference',
+        ], $modes);
+        self::assertTrue($this->invoke(
+            MarketVideoRuntimeService::class,
+            'frameAndReferenceMutuallyExclusive',
+            ['upstream_model_code' => 'wan3.0-video'],
+            []
+        ));
+    }
+
+    public function testWanThreeSingleFirstFrameUsesTheProviderFirstFrameMediaRole(): void
+    {
+        $request = [
+            'generation_method' => 'image_to_video',
+            'reference_assets' => [[
+                'type' => 'image',
+                'url' => 'https://example.test/first.png',
+                'role' => 'first_frame_image',
+            ]],
+        ];
+
+        $this->invoke(
+            MarketVideoRuntimeService::class,
+            'assertAssets',
+            ['product' => [
+                'upstream_model_code' => 'wan3.0-video',
+                'source_payload' => [
+                    'market_metadata' => [
+                        'supported_asset_types' => ['image', 'video', 'audio'],
+                        'max_reference_images' => 10,
+                        'max_reference_videos' => 5,
+                        'max_reference_audios' => 5,
+                        'max_reference_assets' => 20,
+                    ],
+                ],
+            ]],
+            $request
+        );
+        self::assertSame([[
+            'type' => 'first_frame',
+            'url' => 'https://example.test/first.png',
+        ]], $this->invoke(MarketVideoRuntimeService::class, 'structuredModelMedia', $request));
+    }
+
+    public function testSingleFrameShortDramaPlanKeepsTheFirstFrameRole(): void
+    {
+        $payload = $this->invoke(
+            AigcShortDramaService::class,
+            'shortDramaVideoReferenceContractPayload',
+            'image_to_video',
+            [[
+                'asset' => ['id' => 401, 'url' => 'https://example.test/first.png'],
+                'role' => 'first_frame_image',
+            ]],
+            [],
+            ['generation_modes' => ['image_to_video'], 'max_reference_images' => 1, 'max_reference_assets' => 1]
+        );
+
+        self::assertSame('image_to_video', $payload['generation_method']);
+        self::assertSame(['first_frame_image'], array_column($payload['reference_assets'], 'role'));
+        self::assertSame('https://example.test/first.png', $payload['first_frame_image']);
+    }
+
+    public function testH3PayloadKeepsFirstAndLastFrameRoles(): void
+    {
+        $content = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'h3Content',
+            [
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/first.png', 'role' => 'first_frame_image'],
+                    ['type' => 'image', 'url' => 'https://example.test/last.png', 'role' => 'last_frame_image'],
+                ],
+            ],
+            'animate the transition'
+        );
+
+        self::assertSame('first_frame', $content[1]['role']);
+        self::assertSame('last_frame', $content[2]['role']);
+    }
+
+    public function testH3PayloadKeepsMultipleImagesAsOrdinaryReferences(): void
+    {
+        $content = $this->invoke(
+            MarketVideoRuntimeService::class,
+            'h3Content',
+            [
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/first.png', 'role' => 'reference_image'],
+                    ['type' => 'image', 'url' => 'https://example.test/hero-three-view.png', 'role' => 'reference_image'],
+                    ['type' => 'image', 'url' => 'https://example.test/lead-three-view.png', 'role' => 'reference_image'],
+                ],
+            ],
+            'animate the scene'
+        );
+
+        self::assertSame(['reference_image', 'reference_image', 'reference_image'], array_column(array_slice($content, 1), 'role'));
+    }
+
+    public function testHappyHorseVideoEditPayloadIncludesVideoAndUsesAdvertisedModel(): void
+    {
+        $snapshot = ['app_code' => 'happy_horse', 'model_code' => '', 'locked_params' => ['resolution' => '720p']];
+        $payload = $this->invoke(MarketVideoRuntimeService::class, 'appPayload', $snapshot, [
+            'prompt' => 'Edit the scene', 'duration' => 5,
+            'reference_assets' => [
+                ['type' => 'video', 'url' => 'https://example.test/input.mp4', 'role' => 'reference_video'],
+                ['type' => 'image', 'url' => 'https://example.test/look.png', 'role' => 'reference_image'],
+            ],
+        ], 'fixture-key');
+        self::assertSame('happyhorse-1.0-video-edit', $payload['model']);
+        self::assertSame([
+            ['url' => 'https://example.test/input.mp4', 'type' => 'video'],
+            ['url' => 'https://example.test/look.png', 'type' => 'image'],
+        ], $payload['media']);
+        self::assertSame('fixture-key', $payload['idempotency_key']);
+        $text = $this->invoke(MarketVideoRuntimeService::class, 'appPayload', $snapshot, ['prompt' => 'A new scene'], 'text-key');
+        self::assertSame('happyhorse-1.1-t2v', $text['model']);
+    }
+
+    public function testFfmpegCandidatesCoverWindowsLinuxAndMacos(): void
+    {
+        $windows = $this->invoke(AigcShortDramaService::class, 'ffmpegPlatformCandidates', 'Windows');
+        $linux = $this->invoke(AigcShortDramaService::class, 'ffmpegPlatformCandidates', 'Linux');
+        $macos = $this->invoke(AigcShortDramaService::class, 'ffmpegPlatformCandidates', 'Darwin');
+
+        self::assertContains('C:\\ffmpeg\\bin\\ffmpeg.exe', $windows);
+        self::assertContains('/usr/local/bin/ffmpeg', $linux);
+        self::assertContains('/opt/homebrew/bin/ffmpeg', $macos);
+        self::assertContains('ffmpeg', $linux);
+    }
+
+    public function testRuntimeRejectsIncompleteStartEndContract(): void
+    {
+        $this->expectExceptionMessage('start/end frame generation requires both first and last frame images');
+        $this->invoke(
+            MarketVideoRuntimeService::class,
+            'assertAssets',
+            ['product' => ['upstream_model_code' => 'h3-video']],
+            [
+                'generation_method' => 'start_end',
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/first.png', 'role' => 'first_frame_image'],
+                ],
+            ]
+        );
+    }
+
+    public function testProviderPromptMapsNamesUsingNormalizedReferenceOrder(): void
+    {
+        $prompt = AigcVideoReferenceAssetService::promptWithReferenceAliases(
+            '@林浅看向@顾言，配合@雨声和@片段',
+            [
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/lin.png', 'name' => '林浅'],
+                    ['type' => 'audio', 'url' => 'https://example.test/rain.mp3', 'name' => '雨声'],
+                    ['type' => 'image', 'url' => 'https://example.test/gu.png', 'name' => '顾言'],
+                    ['type' => 'video', 'url' => 'https://example.test/clip.mp4', 'name' => '片段'],
+                ],
+            ]
+        );
+
+        self::assertSame('@图片1看向@图片2，配合@音频1和@视频1', $prompt);
+    }
+
+    public function testProviderPromptDoesNotMapAmbiguousOrStandardAliases(): void
+    {
+        $prompt = AigcVideoReferenceAssetService::promptWithReferenceAliases(
+            '@图片1与@角色互动',
+            [
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/one.png', 'name' => '角色'],
+                    ['type' => 'image', 'url' => 'https://example.test/two.png', 'name' => '角色'],
+                ],
+            ]
+        );
+
+        self::assertSame('@图片1与@角色互动', $prompt);
+    }
+
+    public function testProviderPromptUsesSubjectNamesFromShortDramaReferenceMetadata(): void
+    {
+        $prompt = AigcVideoReferenceAssetService::promptWithReferenceAliases(
+            '@林浅与@顾言查看@契约合约',
+            [
+                'reference_assets' => [
+                    ['type' => 'image', 'url' => 'https://example.test/first.png', 'title' => '分镜首帧'],
+                    ['type' => 'image', 'url' => 'https://example.test/lin.png', 'title' => '三视图', 'meta' => ['subject_name' => '林浅']],
+                    ['type' => 'image', 'url' => 'https://example.test/gu.png', 'title' => '三视图', 'meta' => ['subject_name' => '顾言']],
+                    ['type' => 'image', 'url' => 'https://example.test/contract.png', 'title' => '三视图', 'meta' => ['item_name' => '契约合约']],
+                ],
+            ]
+        );
+
+        self::assertSame('@图片2与@图片3查看@图片4', $prompt);
+    }
+
+    public function testStoryboardImageTaskKeepsOnlyOneProviderResult(): void
+    {
+        $results = $this->invoke(
+            AigcShortDramaService::class,
+            'storyboardImageResultsForStorage',
+            ['task_type' => 'shot_image'],
+            [
+                ['image_uri' => 'uploads/aigc_image/first.png'],
+                ['image_uri' => 'uploads/aigc_image/second.png'],
+            ]
+        );
+
+        self::assertSame([['image_uri' => 'uploads/aigc_image/first.png']], $results);
+    }
+
+    public function testThreeViewTaskKeepsAllProviderResults(): void
+    {
+        $results = $this->invoke(
+            AigcShortDramaService::class,
+            'storyboardImageResultsForStorage',
+            ['task_type' => 'three_view'],
+            [
+                ['image_uri' => 'uploads/aigc_image/first.png'],
+                ['image_uri' => 'uploads/aigc_image/second.png'],
+            ]
+        );
+
+        self::assertCount(2, $results);
+    }
+
+    public function testExportPackageFilePlanUsesReadableLocalAssets(): void
+    {
+        $this->ensureShortDramaPublicPathHelper();
+        $dir = dirname(__DIR__, 2) . '/public/uploads/phpunit_short_drama_export';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $path = $dir . '/shot.mp4';
+        file_put_contents($path, 'video-bytes');
+
+        try {
+            $files = $this->invoke(
+                AigcShortDramaService::class,
+                'prepareExportPackageFiles',
+                [[
+                    'id' => 7001,
+                    'uri' => 'uploads/phpunit_short_drama_export/shot.mp4',
+                    'asset_type' => 'shot_video',
+                    'shot_id' => 'shot-001',
+                    'duration' => 3,
+                ]],
+                sys_get_temp_dir() . DIRECTORY_SEPARATOR
+            );
+
+            self::assertSame(str_replace('\\', '/', $path), str_replace('\\', '/', $files[0]['path']));
+            self::assertSame('shots/001_shot-001.mp4', $files[0]['zip_name']);
+        } finally {
+            @unlink($path);
+            @rmdir($dir);
+        }
+    }
+
+    public function testExportPackageFilePlanReportsMaterialFailureBeforeZipOpen(): void
+    {
+        try {
+            $this->invoke(
+                AigcShortDramaService::class,
+                'prepareExportPackageFiles',
+                [[
+                    'id' => 7002,
+                    'uri' => '',
+                    'asset_type' => 'shot_image',
+                    'shot_id' => 'missing-shot',
+                ]],
+                sys_get_temp_dir() . DIRECTORY_SEPARATOR
+            );
+            self::fail('Expected export package material validation to fail.');
+        } catch (\Exception $e) {
+            self::assertStringContainsString('missing-shot', $e->getMessage());
+            self::assertStringNotContainsString('Cannot destroy the zip context', $e->getMessage());
+        }
+    }
+
+    public function testStoryboardSourcePreservesTheSingleFirstFrameContract(): void
+    {
+        $projectRoot = dirname(__DIR__, 2);
+        $source = (string) \Tests\Support\CompiledAssets::source('pc/components/short-drama/StoryboardCreationWorkbench.vue');
+
+        self::assertStringContainsString("type VideoGenerationMethod = 'omni_reference' | 'image_to_video' | 'multi_frame' | 'start_end'", $source);
+        self::assertStringContainsString("['omni_reference', 'image_to_video', 'multi_frame', 'start_end']", $source);
+        self::assertStringContainsString("const supportsSingleFirstFrame = videoModelSupportsGenerationMethod(model, 'image_to_video')", $source);
+        self::assertStringContainsString("generationMethod: (supportsSingleFirstFrame ? 'image_to_video' : 'omni_reference')", $source);
+        self::assertSame(2, substr_count($source, "['start_end', 'image_to_video'].includes(budget?.generationMethod || '') ? firstFrameId : 0"));
+    }
+
+    private function invoke(string $class, string $method, mixed ...$arguments): mixed
+    {
+        $reflection = new ReflectionMethod($class, $method);
+        $reflection->setAccessible(true);
+        return $reflection->invokeArgs(null, $arguments);
+    }
+
+    private function ensureShortDramaPublicPathHelper(): void
+    {
+        if (function_exists('app\\common\\service\\app\\aigc_short_drama\\public_path')) {
+            return;
+        }
+        $publicRoot = rtrim(str_replace('\\', '/', dirname(__DIR__, 2) . '/public'), '/') . '/';
+        eval('namespace app\\common\\service\\app\\aigc_short_drama; function public_path() { return ' . var_export($publicRoot, true) . '; }');
+    }
+}

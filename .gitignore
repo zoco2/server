@@ -1,0 +1,20 @@
+/.idea
+/.vscode
+*.log
+/.phpunit.result.cache
+/.env
+/.env.docker
+/public/.user.ini
+/public/uploads/*
+!/public/uploads/index.html
+/runtime/*
+!/runtime/index.html
+/config/install.lock
+/skill/*
+/vendor/
+
+# Generated PC cover copies; source assets belong to the web repository.
+/public/likeadmin-home/
+
+# Tenant-authored local decoration artwork is exported separately.
+/public/resource/image/decoration/logic-ai/

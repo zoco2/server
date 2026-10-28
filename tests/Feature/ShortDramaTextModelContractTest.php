@@ -1,0 +1,132 @@
+<?php
+
+namespace Tests\Feature;
+
+use app\common\service\app\aigc_short_drama\AigcShortDramaService;
+use Exception;
+use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+
+class ShortDramaTextModelContractTest extends TestCase
+{
+    public function testPlanParserAcceptsReasoningAndChoosesTheCompletePlanObject(): void
+    {
+        $plan = $this->planPayload();
+        $content = "<think>prepare the plan</think>\n```json\n"
+            . json_encode($plan, JSON_UNESCAPED_UNICODE)
+            . "\n```\n{" . '"diagnostic":"done"' . "}";
+
+        $decoded = $this->invoke('decodeLlmJsonObject', $content);
+
+        self::assertSame('City at Night', $decoded['title']);
+        self::assertCount(1, $decoded['subjects']);
+        self::assertCount(1, $decoded['locations']);
+        self::assertCount(1, $decoded['storyboard']);
+    }
+
+    public function testPlanParserUnwrapsAProviderContentEnvelope(): void
+    {
+        $plan = $this->planPayload();
+        $content = json_encode([
+            'code' => 0,
+            'data' => ['content' => json_encode($plan, JSON_UNESCAPED_UNICODE)],
+        ], JSON_UNESCAPED_UNICODE);
+
+        $decoded = $this->invoke('decodeLlmJsonObject', $content);
+
+        self::assertSame('location_1', $decoded['storyboard'][0]['scene_ref_id']);
+    }
+
+    public function testSelectedTextModelCanBeResolvedBySku(): void
+    {
+        $matched = $this->invoke('matchModelOption', [[
+            'id' => '901',
+            'market_sku_id' => 902,
+            'model_code' => 'glm-5.2',
+        ]], ['market_sku_id' => 902]);
+
+        self::assertSame('901', $matched['id']);
+    }
+
+    public function testAdminCatalogKeepsEveryTextModelSelectable(): void
+    {
+        $groups = $this->invoke('applyDefaultTextModel', [[
+            'key' => 'script_plan',
+            'default' => '901',
+            'options' => [
+                ['id' => '901', 'model_code' => 'glm-5.2', 'supports_vision' => false],
+                ['id' => '902', 'model_code' => 'gpt-5.2', 'supports_vision' => true],
+            ],
+        ]], ['id' => '902']);
+
+        self::assertSame('902', $groups[0]['default']);
+        self::assertCount(2, $groups[0]['options']);
+        self::assertFalse($groups[0]['options'][0]['supports_vision']);
+    }
+
+    public function testAdminSelectorUsesAllTextModelsForTheDefault(): void
+    {
+        $asset = file_get_contents(dirname(__DIR__, 2) . '/app/common/service/app/aigc_short_drama/AigcShortDramaService.php');
+
+        self::assertIsString($asset);
+        self::assertStringContainsString('default_text_model_id', $asset);
+        self::assertStringContainsString("'script_plan'", $asset);
+        self::assertStringContainsString("'剧本策划文本模型'", $asset);
+        self::assertStringContainsString('暂无租户可用的文本模型', $asset);
+        self::assertStringContainsString('MarketTextModelRuntimeService::resolveModel($tenantId, $defaultTextModelId, false)', $asset);
+    }
+
+    public function testUnsupportedModelParameterHasAnActionableSafeMessage(): void
+    {
+        self::assertSame(
+            '文本模型不支持当前请求参数，请联系管理员同步模型能力',
+            $this->invoke('scriptPlanProviderError', 'invalid_request_error: Unsupported parameter: input_pricing_sku_key')
+        );
+    }
+
+    public function testLongContinuityDiagnosticsCannotOverflowTaskErrorColumns(): void
+    {
+        $message = '连续性事实缺少匹配含义的镜头证据：[' . str_repeat('审校证据', 1000) . ']';
+        $safe = $this->invoke('scriptPlanProviderError', $message);
+        self::assertSame('连续性事实缺少匹配含义的镜头证据（完整审校证据已保留）', $safe);
+        self::assertLessThanOrEqual(200, mb_strlen($safe));
+        self::assertSame(str_repeat('错', 200), $this->invoke('scriptPlanProviderError', str_repeat('错', 1000)));
+        self::assertSame('普通任务失败', $this->invoke('scriptPlanProviderError', '普通任务失败'));
+    }
+
+    private function planPayload(): array
+    {
+        return [
+            'title' => 'City at Night',
+            'type_judgement' => 'drama',
+            'core_theme' => 'choice',
+            'story_outline' => 'A character makes a difficult choice.',
+            'script_lines' => ['A character enters the street.'],
+            'art_style' => ['base_style' => 'cinematic'],
+            'subjects' => [[
+                'id' => 'subject_1',
+                'name' => 'Lead',
+                'description' => 'main character',
+                'category' => 'character',
+            ]],
+            'locations' => [[
+                'id' => 'location_1',
+                'name' => 'Street',
+                'description' => 'night street',
+            ]],
+            'storyboard' => [[
+                'shot_id' => '1',
+                'scene_ref_id' => 'location_1',
+                'subject_ref_ids' => ['subject_1'],
+                'visual_description' => 'Lead walks through the street.',
+            ]],
+        ];
+    }
+
+    private function invoke(string $method, mixed ...$arguments): mixed
+    {
+        $reflection = new ReflectionMethod(AigcShortDramaService::class, $method);
+        $reflection->setAccessible(true);
+        return $reflection->invokeArgs(null, $arguments);
+    }
+}

@@ -1,0 +1,334 @@
+{
+  "app_code": "aigc_llm",
+  "apis": [
+    {
+      "api_path": "app.aigc_llm.config/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:config:user",
+      "scene": "user",
+      "need_login": 0,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.session/lists",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:session:lists:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.session/create",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:session:create:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.session/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:session:detail:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.session/rename",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:session:rename:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.session/delete",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:session:delete:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.message/lists",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:message:lists:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.chat/stream",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:chat:stream:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.chat/stop",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:chat:stop:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.config/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:config:detail",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.config/setup",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:config:setup",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.admin_session/lists",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:session:lists",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.admin_session/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:session:detail",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.admin/stat",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:stat",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.admin/sensitiveWord",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:sensitive_word:lists",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.admin/sensitiveWord",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:sensitive_word:save",
+      "scene": "tenant_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.config/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:config:detail:platform",
+      "scene": "platform_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.config/setup",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:config:setup:platform",
+      "scene": "platform_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.tenant/stat",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:tenant_usage:platform",
+      "scene": "platform_admin",
+      "need_login": 1,
+      "need_role_permission": 1
+    },
+    {
+      "api_path": "app.aigc_llm.agent/config",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:config:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/detail",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:detail:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/stream",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:stream:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/events",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:events:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/runs",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:runs:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/artifacts",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:artifacts:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/preferences",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:preferences:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/submit",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:submit:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/confirm",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:confirm:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/stop",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:stop:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/favorite",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:favorite:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/upload",
+      "description": "上传图片、视频、音频（最大50MB）或 TXT、Markdown、CSV、DOCX（最大10MB、正文20万字）；文档校验后存储，由当前会话按需分段读取",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:upload:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/subjects",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:subjects:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/planEditor",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:planEditor:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/editPlan",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:editPlan:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/retryStep",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:retryStep:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/checkStep",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:checkStep:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/resumeReading",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:resumeReading:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/sessions",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:sessions:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/messages",
+      "api_method": "GET",
+      "permission_key": "aigc_llm:agent:messages:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/renameSession",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:renameSession:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    },
+    {
+      "api_path": "app.aigc_llm.agent/deleteSession",
+      "api_method": "POST",
+      "permission_key": "aigc_llm:agent:deleteSession:user",
+      "scene": "user",
+      "need_login": 1,
+      "need_role_permission": 0
+    }
+  ]
+}

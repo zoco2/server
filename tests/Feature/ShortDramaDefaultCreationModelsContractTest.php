@@ -1,0 +1,116 @@
+<?php
+
+namespace Tests\Feature;
+
+use app\common\service\app\aigc_short_drama\AigcShortDramaService;
+use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+
+class ShortDramaDefaultCreationModelsContractTest extends TestCase
+{
+    public function testConfiguredImageAndVideoDefaultsAreAppliedToTheirGroups(): void
+    {
+        $groups = $this->invoke('applyDefaultCreationModels', $this->groups(), [
+            'default_image_model_id' => 'image-b',
+            'default_video_model_id' => 'video-b',
+        ]);
+
+        self::assertSame('image-b', $groups[0]['default']);
+        self::assertSame('video-b', $groups[1]['default']);
+        self::assertSame('image-b', $groups[0]['options'][0]['id']);
+        self::assertSame('video-b', $groups[1]['options'][0]['id']);
+    }
+
+    public function testUnavailableConfiguredDefaultFallsBackToFirstAvailableModel(): void
+    {
+        $groups = $this->groups();
+        $groups[0]['options'][1]['available'] = false;
+
+        $resolved = $this->invoke('applyDefaultCreationModels', $groups, [
+            'default_image_model_id' => 'image-b',
+        ]);
+
+        self::assertSame('image-a', $resolved[0]['default']);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testUnspecifiedProjectSelectionUsesConfiguredCreationDefaults(): void
+    {
+        $groups = $this->invoke('applyDefaultCreationModels', $this->groups(), [
+            'default_image_model_id' => 'image-b',
+            'default_video_model_id' => 'video-b',
+        ]);
+        require __DIR__.'/../fixtures/short_drama_tenant_text_model.php';
+        $selected = $this->invoke('resolveSelectedModels', 701, [], ['model_groups' => $groups]);
+
+        self::assertSame('image-b', $selected['image']['id']);
+        self::assertSame('video-b', $selected['video']['id']);
+    }
+
+    public function testUserScriptModelPresentationUsesOnlyThePowerMarketDisplayFields(): void
+    {
+        $option = $this->invoke('formatUserModelOption', [
+            'id' => 'market-text-1',
+            'product_id' => 19,
+            'name' => '市场模型名称',
+            'description' => '市场模型介绍',
+            // This is the old short-drama fallback and must never be presented
+            // as the selected market model icon.
+            'image' => 'resource/image/common/menu_generator.png',
+        ]);
+
+        self::assertSame('市场模型名称', $option['name']);
+        self::assertSame('市场模型介绍', $option['description']);
+        self::assertSame('', $option['display_icon']);
+        self::assertSame($option['display_icon'], $option['image']);
+
+        $withoutMarketIcon = $this->invoke('formatUserModelOption', [
+            'id' => 'market-text-2',
+            'name' => '无图标市场模型',
+            'image' => 'resource/image/common/menu_generator.png',
+        ]);
+        self::assertSame('', $withoutMarketIcon['display_icon']);
+        self::assertSame('', $withoutMarketIcon['image']);
+    }
+
+    public function testTenantAdminConfigContainsBothCreationModelSelectors(): void
+    {
+        $asset = (string)\Tests\Support\CompiledAssets::vitePage('admin', 'apps/aigc_short_drama/config');
+
+        self::assertStringContainsString('default_image_model_id', $asset);
+        self::assertStringContainsString('default_video_model_id', $asset);
+        self::assertStringContainsString('默认图片模型', $asset);
+        self::assertStringContainsString('默认视频模型', $asset);
+    }
+
+    private function groups(): array
+    {
+        return [
+            [
+                'key' => 'image',
+                'default' => 'image-a',
+                'options' => [
+                    ['id' => 'image-a', 'name' => 'Image A', 'enabled' => true, 'available' => true, 'status' => 1],
+                    ['id' => 'image-b', 'name' => 'Image B', 'enabled' => true, 'available' => true, 'status' => 1],
+                ],
+            ],
+            [
+                'key' => 'video',
+                'default' => 'video-a',
+                'options' => [
+                    ['id' => 'video-a', 'name' => 'Video A', 'enabled' => true, 'available' => true, 'status' => 1],
+                    ['id' => 'video-b', 'name' => 'Video B', 'enabled' => true, 'available' => true, 'status' => 1],
+                ],
+            ],
+        ];
+    }
+
+    private function invoke(string $method, mixed ...$arguments): mixed
+    {
+        $reflection = new ReflectionMethod(AigcShortDramaService::class, $method);
+        $reflection->setAccessible(true);
+        return $reflection->invokeArgs(null, $arguments);
+    }
+}

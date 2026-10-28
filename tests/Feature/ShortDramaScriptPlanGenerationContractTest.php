@@ -1,0 +1,369 @@
+<?php
+
+namespace Tests\Feature;
+
+use app\common\service\app\aigc_short_drama\AigcShortDramaService;
+use app\common\service\app\aigc_short_drama\ShortDramaPromptWorkspace;
+use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
+use think\Container;
+
+/** Exercises the real script-plan assembly/normalization/repair path with a fake provider only. */
+class ShortDramaScriptPlanGenerationContractTest extends TestCase
+{
+    public function testRealProviderStructuredGenreDoesNotDiscardCompleteStoryboard(): void
+    {
+        $fixture = json_decode(file_get_contents(__DIR__ . '/../fixtures/short_drama_real_structured_genre.json'), true, 512, JSON_THROW_ON_ERROR);
+        Container::getInstance()->instance('config', new \think\Config());
+        $method = new ReflectionMethod(AigcShortDramaService::class, 'normalizeGeneratedPlanResult');
+        $method->setAccessible(true);
+        $result = $method->invoke(null, $fixture['payload'], $fixture['request']['prompt'], $fixture['request'], '雨停再走');
+        self::assertSame('都市温情短剧', $result['type_judgement']);
+        self::assertSame(array_column($fixture['payload']['storyboard'], 'dialogue'), array_column($result['storyboard'], 'dialogue'));
+        self::assertSame(array_column($fixture['payload']['storyboard'], 'shot_id'), array_column($result['storyboard'], 'shot_id'));
+        self::assertSame([$fixture['payload']['script_lines']], $result['script_lines']);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testContinuityReviewBypassesWholeScriptPromptAndPreservesSavedProductionFields(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        Container::getInstance()->instance('config', new \think\Config());
+        $this->silenceLog();
+        $base = $this->generate(['_generation_version'=>3,'multi_episode'=>false,'episode_count'=>1,'quality_review_enabled'=>false])['result'];
+        foreach ($base['storyboard'] as &$shot) $shot['video_prompt'] = str_repeat('已保存的制作提示', 3000);
+        unset($shot);
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        $result = $this->generate(['_generation_version'=>3,'multi_episode'=>false,'episode_count'=>1,
+            '_continuity_review_only'=>true,'revision_base_result'=>$base,'episode_number'=>2,
+            'series_context'=>['continuity'=>['previous_digest'=>'previous'],'outline'=>['title'=>'故事']]])['result'];
+        self::assertSame($base['storyboard'],$result['storyboard']);
+        self::assertSame('previous',$result['_continuity']['previous_digest']);
+        self::assertCount(6,\app\common\service\power\MarketTextModelRuntimeService::$requests);
+        foreach (\app\common\service\power\MarketTextModelRuntimeService::$requests as $params) {
+            self::assertStringNotContainsString('已保存的制作提示',$params['content']);
+            self::assertStringNotContainsString('revision_base_result',$params['content']);
+        }
+    }
+
+    public function testQualityFailureNamesTheFirstBlockingIssue(): void
+    {
+        $method = new ReflectionMethod(AigcShortDramaService::class, 'planQualityFailureMessage');
+        $method->setAccessible(true);
+        self::assertSame('剧本计划质检未通过：分镜 7 场景引用不存在', $method->invoke(null, [
+            'issues' => [
+                ['severity' => 'warning', 'message' => '仅供参考'],
+                ['severity' => 'blocking', 'message' => '分镜 7 场景引用不存在'],
+            ],
+        ]));
+        self::assertSame('剧本计划质检未通过，请检查生成内容后重试', $method->invoke(null, []));
+    }
+
+    public function testDisabledQualityReviewDoesNotReappearWhenAPlanIsEnhanced(): void
+    {
+        $plan = ['subjects' => [], 'locations' => [], 'storyboard' => [],
+            'generation_settings' => ['quality_review_enabled' => false]];
+        $enhance = new ReflectionMethod(AigcShortDramaService::class, 'enhancePlanResult');
+        $enhance->setAccessible(true);
+        $result = $enhance->invoke(null, $plan);
+        self::assertTrue($result['review_report']['skipped']);
+        self::assertSame(0, $result['review_report']['blocking_count']);
+        self::assertSame('skipped', $result['quality_check']['status']);
+
+        $review = new ReflectionMethod(AigcShortDramaService::class, 'reviewAndRepairPlanResult');
+        $review->setAccessible(true);
+        $result = $review->invoke(null, $plan);
+        self::assertTrue($result['review_report']['skipped']);
+        self::assertSame(0, $result['review_report']['blocking_count']);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testCompactStageContextPreservesNarrativeAndOmitsSchema(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        Container::getInstance()->instance('config', new \think\Config());
+        $method = new ReflectionMethod(AigcShortDramaService::class, 'buildCompactScriptPlanPrompt');
+        $method->setAccessible(true);
+        $request = ['multi_episode' => false, 'series_context' => ['current_episode' => ['story_outline' => '必须重逢']],
+            'revision_base_result' => ['dialogue' => '']];
+        $full = $method->invoke(null, '找回信件', $request, '信件');
+        $compact = $method->invoke(null, '找回信件', $request, '信件', false, true);
+        $context = json_decode($compact, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('找回信件', $context['user_prompt']);
+        self::assertSame('必须重逢', $context['series_context']['current_episode']['story_outline']);
+        self::assertArrayNotHasKey('revision_message', $context);
+        self::assertFalse($context['multi_episode']);
+        self::assertLessThan(strlen($full), strlen($compact));
+        self::assertStringNotContainsString('JSON schema:', $compact);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testV3SingleAndEpisodeUseRealNormalizationAndContinuityBoundary(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        Container::getInstance()->instance('config', new \think\Config());
+        $this->silenceLog();
+        foreach ([false, true] as $episode) {
+            \app\common\service\power\MarketTextModelRuntimeService::reset();
+            $request = ['_generation_version' => 3, 'multi_episode' => false, 'episode_count' => 1];
+            if ($episode) {
+                $request['episode_id'] = 5; $request['episode_number'] = 2;
+                $request['series_context'] = ['current_episode' => ['story_outline' => '主角找到线索'],
+                    'continuity' => ['previous_digest' => 'previous']];
+            }
+            $generated = $this->generate($request);
+            self::assertCount(12, $generated['result']['storyboard']);
+            self::assertSame(0, $generated['result']['review_report']['blocking_count']);
+            self::assertCount($episode ? 7 : 1, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+            if ($episode) {
+                $evidenceInput = json_decode(\app\common\service\power\MarketTextModelRuntimeService::$requests[2]['content'], true);
+                self::assertArrayHasKey('checks', $evidenceInput['response_contract']);
+                self::assertCount(4, $evidenceInput['storyboard']);
+                $reviewedIds = [];
+                foreach ([2, 4, 6] as $index) {
+                    $block = json_decode(\app\common\service\power\MarketTextModelRuntimeService::$requests[$index]['content'], true);
+                    array_push($reviewedIds, ...array_column($block['storyboard'], 'shot_id'));
+                    self::assertStringNotContainsString('video_prompt', json_encode($block));
+                }
+                self::assertSame(array_column($generated['result']['storyboard'], 'shot_id'), $reviewedIds);
+            }
+            if ($episode) self::assertSame('previous', $generated['result']['_continuity']['previous_digest']);
+            else self::assertArrayNotHasKey('_continuity', $generated['result']);
+            self::assertTrue(\app\common\service\power\MarketTextModelRuntimeService::$requests[0]['_disable_transient_retry']);
+        }
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testDisabledQualityReviewSkipsRepairAndBothContinuityModelCalls(): void
+    {
+        $this->assertGenerationSkipsQualityReview(['quality_review_enabled' => false]);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testHistoricalCanvasTaskSkipsQualityReviewOnResume(): void
+    {
+        $this->assertGenerationSkipsQualityReview(['quality_review_enabled' => true,
+            '_submission_key' => hash('sha256', 'canvas-production:397:807:episode_1'),
+            '_prompt_snapshot' => ['canvas_creative_policy' => ['version' => '2026-10-10.1', 'stages' => []]]]);
+    }
+
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testCanvasRevisionSkipsQualityReview(): void
+    {
+        $this->assertGenerationSkipsQualityReview(['quality_review_enabled' => true,
+            '_submission_key' => 'canvas-revision:1285:task']);
+    }
+
+    private function assertGenerationSkipsQualityReview(array $reviewSettings): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        Container::getInstance()->instance('config', new \think\Config());
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        \app\common\service\power\MarketTextModelRuntimeService::$missingSpeaker = true;
+        $generated = $this->generate($reviewSettings + ['_generation_version' => 3, 'multi_episode' => false,
+            'episode_count' => 1, 'episode_number' => 2,
+            'series_context' => ['current_episode' => ['story_outline' => '主角找到线索'],
+                'continuity' => ['state' => ['subject_1:location' => '旧宅'], 'previous_digest' => 'previous']]]);
+
+        self::assertCount(1, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        self::assertTrue($generated['result']['review_report']['skipped']);
+        self::assertSame(false, $generated['result']['generation_settings']['quality_review_enabled']);
+        self::assertSame('skipped', $generated['result']['_continuity']['audit_status']);
+        self::assertSame('previous', $generated['result']['_continuity']['previous_digest']);
+        self::assertSame(['subject_1:location' => '旧宅'], $generated['result']['_continuity']['state']);
+        self::assertSame([], $generated['repair_llm']);
+    }
+    /** @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testMissingSpeakerTriggersRepairAndSurvivesSavedResult(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        \app\common\service\power\MarketTextModelRuntimeService::$missingSpeaker = true;
+        $generated = $this->generate(['multi_episode' => false, 'episode_count' => 1]);
+        self::assertCount(2, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        self::assertSame('script_plan_dialogue_repair', \app\common\service\power\MarketTextModelRuntimeService::$requests[1]['action_code']);
+        self::assertLessThanOrEqual(512, \app\common\service\power\MarketTextModelRuntimeService::$requests[1]['model_config']['max_tokens']);
+        self::assertSame($generated['result']['subjects'][0]['name'], $generated['result']['storyboard'][0]['voice_role']);
+        self::assertSame(0, $generated['result']['review_report']['blocking_count']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testAutomaticSingleDurationPreservesProviderShotCount(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        $generated = $this->generate(['multi_episode' => false, 'episode_count' => 1,
+            'target_duration_seconds' => 0, 'duration_source' => 'auto']);
+        self::assertCount(12, $generated['result']['storyboard']);
+        self::assertSame(0, $generated['result']['generation_settings']['target_duration_seconds']);
+        self::assertSame('auto', $generated['result']['generation_settings']['duration_source']);
+        self::assertSame(0, $generated['result']['review_report']['blocking_count']);
+        self::assertCount(1, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testInvalidSpeakerPatchFallsBackToTheExistingFullQualityRepair(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        \app\common\service\power\MarketTextModelRuntimeService::$missingSpeaker = true;
+        \app\common\service\power\MarketTextModelRuntimeService::$invalidDialogueRepair = true;
+
+        $generated = $this->generate(['multi_episode' => false, 'episode_count' => 1]);
+
+        self::assertCount(3, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        self::assertSame('script_plan_dialogue_repair', \app\common\service\power\MarketTextModelRuntimeService::$requests[1]['action_code']);
+        self::assertSame('script_plan_repair', \app\common\service\power\MarketTextModelRuntimeService::$requests[2]['action_code']);
+        self::assertSame(0, $generated['result']['review_report']['blocking_count']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testSingleAndShortSeriesCompleteThroughTheProviderBoundary(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+
+        $raw = \app\common\service\power\MarketTextModelRuntimeService::generate(701, 23, []);
+        $normalizer = new ReflectionMethod(AigcShortDramaService::class, 'normalizeGeneratedPlanResult');
+        $normalizer->setAccessible(true);
+        $enhance = new ReflectionMethod(AigcShortDramaService::class, 'enhancePlanResult');
+        $enhance->setAccessible(true);
+        $review = new ReflectionMethod(AigcShortDramaService::class, 'reviewPlanResult');
+        $review->setAccessible(true);
+        $normalized = $enhance->invoke(null, $normalizer->invoke(null, json_decode($raw['content'], true), '模拟测试故事', ['target_duration_seconds' => 12], '模拟测试'));
+        $report = $review->invoke(null, $normalized);
+        self::assertSame(0, $report['blocking_count'], json_encode($report['issues'], JSON_UNESCAPED_UNICODE));
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+
+        $single = $this->generate(['target_duration_seconds' => 12]);
+        self::assertNotEmpty($single['result']['storyboard']);
+        self::assertSame(1, count(\app\common\service\power\MarketTextModelRuntimeService::$requests));
+
+        foreach ([2, 3, 9] as $episodeCount) {
+            \app\common\service\power\MarketTextModelRuntimeService::reset();
+            $generated = $this->generate([
+                'multi_episode' => true,
+                'episode_count' => $episodeCount,
+                'multi_episode_stage' => 'episodes',
+            ]);
+            self::assertSame($episodeCount, $generated['result']['episode_count']);
+            self::assertCount($episodeCount, $generated['result']['episodes']);
+            self::assertSame(range(1, $episodeCount), array_column($generated['result']['episodes'], 'episode_number'));
+            self::assertCount(1, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        }
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testLongOutlinesThroughTheFiveHundredEpisodeLimitAreBoundedIntoSafeProviderBatches(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        foreach ([10 => 2, 50 => 5, 100 => 10, 500 => 50] as $episodeCount => $expectedRequests) {
+            \app\common\service\power\MarketTextModelRuntimeService::reset();
+            $generated = $this->generate([
+                'multi_episode' => true,
+                'episode_count' => $episodeCount,
+                'multi_episode_stage' => 'episodes',
+            ]);
+            self::assertCount($episodeCount, $generated['result']['episodes']);
+            self::assertSame(range(1, $episodeCount), array_column($generated['result']['episodes'], 'episode_number'));
+            self::assertCount($expectedRequests, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        }
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testIncompleteOutlineInvokesRepairAndOnlyReturnsAfterEveryEpisodeIsComplete(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        \app\common\service\power\MarketTextModelRuntimeService::$returnIncompleteFirstOutline = true;
+
+        $generated = $this->generate([
+            'multi_episode' => true,
+            'episode_count' => 3,
+            'multi_episode_stage' => 'episodes',
+        ]);
+
+        self::assertCount(3, $generated['result']['episodes']);
+        self::assertSame(0, $generated['result']['review_report']['blocking_count']);
+        self::assertCount(2, \app\common\service\power\MarketTextModelRuntimeService::$requests);
+        self::assertSame('script_plan_repair', \app\common\service\power\MarketTextModelRuntimeService::$requests[1]['action_code']);
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function testUnrepairableOutlineFailsInsteadOfReturningPartialEpisodes(): void
+    {
+        require __DIR__ . '/../fixtures/short_drama_script_plan_fake_provider.php';
+        $this->silenceLog();
+        \app\common\service\power\MarketTextModelRuntimeService::reset();
+        \app\common\service\power\MarketTextModelRuntimeService::$returnIncompleteEveryOutline = true;
+
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('剧本计划质检未通过');
+        $this->generate([
+            'multi_episode' => true,
+            'episode_count' => 3,
+            'multi_episode_stage' => 'episodes',
+        ]);
+    }
+
+    private function generate(array $request): array
+    {
+        // Supply an in-memory prompt snapshot so the contract test stops at
+        // the fake provider rather than reading tenant configuration.
+        $request['_prompt_snapshot'] = array_replace(ShortDramaPromptWorkspace::resolve(701, ['mode' => 'workspace'], []), $request['_prompt_snapshot'] ?? []);
+        $method = new ReflectionMethod(AigcShortDramaService::class, 'generateScriptPlanResult');
+        $method->setAccessible(true);
+        return $method->invoke(null, 701, 23, '模拟测试故事', $request, '模拟测试', [
+            'id' => 'fake-script-model',
+            'model_code' => 'fake-script-model',
+        ]);
+    }
+
+    private function silenceLog(): void
+    {
+        Container::getInstance()->instance('log', new class {
+            public function write(string $message, string $type = 'log'): void
+            {
+            }
+        });
+    }
+}
