@@ -1,4 +1,3 @@
-
 FROM php:8.3-fpm
 
 COPY php.ini /usr/local/etc/php/
@@ -9,22 +8,26 @@ COPY .bashrc /root/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# ---- apt 源换阿里云（bookworm 是 deb822 格式的 debian.sources）----
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+ && apt-get update
+
 # mix
-RUN apt-get update \
-  && apt-get install -y build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev \
-  && docker-php-ext-install zip pdo_mysql pdo_pgsql pgsql bcmath mysqli pcntl
+RUN apt-get install -y --no-install-recommends \
+      build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev \
+ && docker-php-ext-install zip pdo_mysql pdo_pgsql pgsql bcmath mysqli pcntl
 
 # intl
-RUN apt-get install -y libicu-dev \
-  && docker-php-ext-configure intl \
-  && docker-php-ext-install intl
+RUN apt-get install -y --no-install-recommends libicu-dev \
+ && docker-php-ext-configure intl \
+ && docker-php-ext-install intl
 
 # gd
-RUN apt-get install -y libfreetype6-dev libjpeg62-turbo-dev libpng-dev && \
-docker-php-ext-configure gd --with-freetype=/usr/include/ --with-jpeg=/usr/include/ && \
-docker-php-ext-install gd
+RUN apt-get install -y --no-install-recommends libfreetype6-dev libjpeg62-turbo-dev libpng-dev \
+ && docker-php-ext-configure gd --with-freetype=/usr/include/ --with-jpeg=/usr/include/ \
+ && docker-php-ext-install gd
 
-# redis
+# redis（pecl 阿里云无镜像，慢就构建时传 --build-arg http_proxy=...）
 RUN pecl install redis && docker-php-ext-enable redis
 
 # pcov
@@ -35,30 +38,33 @@ RUN pecl install pcov && docker-php-ext-enable pcov
 # && docker-php-ext-enable xdebug \
 # && echo ";zend_extension=xdebug" > /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
 
-# Node.js, NPM, Yarn
-RUN curl -sL https://deb.nodesource.com/setup_22.x | bash -
-RUN apt-get install -y nodejs
-RUN npm install npm@latest -g
-RUN npm install yarn -g
+# ---- Node.js / npm / yarn：阿里云 nodesource + npmmirror ----
+RUN curl -sL https://mirrors.aliyun.com/nodesource/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+RUN npm config set registry https://registry.npmmirror.com \
+ && npm install npm@latest -g \
+ && npm install yarn -g \
+ && yarn config set registry https://registry.npmmirror.com
 
-# Composer
-RUN php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-RUN php composer-setup.php
-RUN php -r "unlink('composer-setup.php');"
-RUN mv composer.phar /usr/local/bin/composer
+# ---- Composer：阿里云 phar + 阿里云 packagist 镜像 ----
+RUN curl -sS https://mirrors.aliyun.com/composer/composer.phar -o /usr/local/bin/composer \
+ && chmod +x /usr/local/bin/composer \
+ && composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
 
 ENV COMPOSER_ALLOW_SUPERUSER 1
 ENV COMPOSER_HOME /composer
 ENV PATH $PATH:/composer/vendor/bin
-RUN composer config --global process-timeout 3600
-RUN composer global require "laravel/installer"
+RUN composer config --global process-timeout 3600 \
+ && composer global require "laravel/installer"
 
+# 这个源是 GitHub，阿里云没有镜像；网络不通时构建前临时挂代理
 WORKDIR /root
 RUN git clone https://github.com/seebi/dircolors-solarized
 
 EXPOSE 5173
 WORKDIR /var/www
 
-#entrypoint
+# entrypoint
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["php-fpm"]
