@@ -27,8 +27,8 @@ class StoreValidate extends BaseValidate
         'poi_id' => 'max:64',
         'intro' => 'max:1000',
         'logo_url' => 'max:500|checkUrl',
-        'page' => 'integer|gt:0',
-        'limit' => 'integer|between:1,50',
+        'page_no' => 'integer|gt:0',
+        'page_size' => 'integer|between:1,50',
         'keyword' => 'max:100',
     ];
 
@@ -78,7 +78,7 @@ class StoreValidate extends BaseValidate
      */
     public function sceneLists()
     {
-        return $this->only(['page', 'limit', 'keyword', 'brand_id', 'status'])
+        return $this->only(['page_no', 'page_size', 'keyword', 'brand_id', 'status'])
             ->remove('brand_id', 'require');
     }
 

@@ -14,8 +14,8 @@ class StaffValidate extends BaseValidate
         'store_id' => 'require|integer|gt:0',
         'name' => 'require|length:1,60',
         'mobile' => 'require|regex:/^1\d{10}$/',
-        'page' => 'integer|gt:0',
-        'limit' => 'integer|between:1,50',
+        'page_no' => 'integer|gt:0',
+        'page_size' => 'integer|between:1,50',
         'keyword' => 'max:60',
     ];
 
@@ -65,7 +65,7 @@ class StaffValidate extends BaseValidate
      */
     public function sceneLists()
     {
-        return $this->only(['page', 'limit', 'keyword', 'store_id'])
+        return $this->only(['page_no', 'page_size', 'keyword', 'store_id'])
             ->remove('store_id', 'require');
     }
 }

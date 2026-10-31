@@ -20,8 +20,8 @@ class BrandValidate extends BaseValidate
         'address' => 'max:255',
         'logo_url' => 'max:500|checkUrl',
         'cover_url' => 'max:500|checkUrl',
-        'page' => 'integer|gt:0',
-        'limit' => 'integer|between:1,50',
+        'page_no' => 'integer|gt:0',
+        'page_size' => 'integer|between:1,50',
         'keyword' => 'max:100',
     ];
 
@@ -72,7 +72,7 @@ class BrandValidate extends BaseValidate
      */
     public function sceneLists()
     {
-        return $this->only(['page', 'limit', 'keyword']);
+        return $this->only(['page_no', 'page_size', 'keyword']);
     }
 
     /**

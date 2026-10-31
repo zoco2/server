@@ -12,42 +12,33 @@ use app\api\validate\merchant\StoreValidate;
 class StoreController extends BaseApiController
 {
     /**
+     * @notes 门店列表
      * @return \think\response\Json
      */
     public function lists()
     {
         $params = (new StoreValidate())->get()->goCheck('lists');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        return $this->data(StoreLogic::lists($tenantId, $userId, $params));
+        return $this->data(StoreLogic::lists((int)$this->request->tenantId, $this->userId, $params));
     }
 
     /**
+     * @notes 门店下拉
      * @return \think\response\Json
      */
     public function choices()
     {
         $params = (new StoreValidate())->get()->goCheck('choices');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        return $this->data(StoreLogic::choices($tenantId, $userId, (int)($params['brand_id'] ?? 0)));
+        return $this->data(StoreLogic::choices((int)$this->request->tenantId, $this->userId, (int)($params['brand_id'] ?? 0)));
     }
 
     /**
+     * @notes 门店详情
      * @return \think\response\Json
      */
     public function detail()
     {
         $params = (new StoreValidate())->get()->goCheck('detail');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        $result = StoreLogic::detail($tenantId, $userId, (int)$params['id']);
+        $result = StoreLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
         if ($result === [] && StoreLogic::hasError()) {
             return $this->fail(StoreLogic::getError());
         }
@@ -55,58 +46,41 @@ class StoreController extends BaseApiController
     }
 
     /**
+     * @notes 创建门店
      * @return \think\response\Json
      */
     public function add()
     {
         $params = (new StoreValidate())->post()->goCheck('add');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StoreLogic::add($tenantId, $userId, $params)) {
+        if (!StoreLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(StoreLogic::getError());
         }
-        return $this->success('创建成功');
+        return $this->success('创建成功', [], 1, 1);
     }
 
     /**
+     * @notes 编辑门店
      * @return \think\response\Json
      */
     public function edit()
     {
         $params = (new StoreValidate())->post()->goCheck('edit');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StoreLogic::edit($tenantId, $userId, $params)) {
+        if (!StoreLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(StoreLogic::getError());
         }
-        return $this->success('保存成功');
+        return $this->success('保存成功', [], 1, 1);
     }
 
     /**
+     * @notes 删除门店
      * @return \think\response\Json
      */
     public function delete()
     {
         $params = (new StoreValidate())->post()->goCheck('delete');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StoreLogic::delete($tenantId, $userId, (int)$params['id'])) {
+        if (!StoreLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
             return $this->fail(StoreLogic::getError());
         }
-        return $this->success('删除成功');
-    }
-
-    /**
-     * @return array{0:int,1:int}
-     */
-    private function owner(): array
-    {
-        return [(int)($this->request->tenantId ?? 0), $this->userId];
+        return $this->success('删除成功', [], 1, 1);
     }
 }

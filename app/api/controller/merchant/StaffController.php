@@ -12,29 +12,23 @@ use app\api\validate\merchant\StaffValidate;
 class StaffController extends BaseApiController
 {
     /**
+     * @notes 员工列表
      * @return \think\response\Json
      */
     public function lists()
     {
         $params = (new StaffValidate())->get()->goCheck('lists');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        return $this->data(StaffLogic::lists($tenantId, $userId, $params));
+        return $this->data(StaffLogic::lists((int)$this->request->tenantId, $this->userId, $params));
     }
 
     /**
+     * @notes 员工详情
      * @return \think\response\Json
      */
     public function detail()
     {
         $params = (new StaffValidate())->get()->goCheck('detail');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        $result = StaffLogic::detail($tenantId, $userId, (int)$params['id']);
+        $result = StaffLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
         if ($result === [] && StaffLogic::hasError()) {
             return $this->fail(StaffLogic::getError());
         }
@@ -42,58 +36,41 @@ class StaffController extends BaseApiController
     }
 
     /**
+     * @notes 添加员工
      * @return \think\response\Json
      */
     public function add()
     {
         $params = (new StaffValidate())->post()->goCheck('add');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StaffLogic::add($tenantId, $userId, $params)) {
+        if (!StaffLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(StaffLogic::getError());
         }
-        return $this->success('添加成功');
+        return $this->success('添加成功', [], 1, 1);
     }
 
     /**
+     * @notes 编辑员工
      * @return \think\response\Json
      */
     public function edit()
     {
         $params = (new StaffValidate())->post()->goCheck('edit');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StaffLogic::edit($tenantId, $userId, $params)) {
+        if (!StaffLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(StaffLogic::getError());
         }
-        return $this->success('保存成功');
+        return $this->success('保存成功', [], 1, 1);
     }
 
     /**
+     * @notes 删除员工
      * @return \think\response\Json
      */
     public function delete()
     {
         $params = (new StaffValidate())->post()->goCheck('delete');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!StaffLogic::delete($tenantId, $userId, (int)$params['id'])) {
+        if (!StaffLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
             return $this->fail(StaffLogic::getError());
         }
-        return $this->success('删除成功');
-    }
-
-    /**
-     * @return array{0:int,1:int}
-     */
-    private function owner(): array
-    {
-        return [(int)($this->request->tenantId ?? 0), $this->userId];
+        return $this->success('删除成功', [], 1, 1);
     }
 }

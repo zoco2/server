@@ -12,41 +12,32 @@ use app\api\validate\merchant\BrandValidate;
 class BrandController extends BaseApiController
 {
     /**
+     * @notes 品牌列表
      * @return \think\response\Json
      */
     public function lists()
     {
         $params = (new BrandValidate())->get()->goCheck('lists');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        return $this->data(BrandLogic::lists($tenantId, $userId, $params));
+        return $this->data(BrandLogic::lists((int)$this->request->tenantId, $this->userId, $params));
     }
 
     /**
+     * @notes 品牌下拉
      * @return \think\response\Json
      */
     public function choices()
     {
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        return $this->data(BrandLogic::choices($tenantId, $userId));
+        return $this->data(BrandLogic::choices((int)$this->request->tenantId, $this->userId));
     }
 
     /**
+     * @notes 品牌详情
      * @return \think\response\Json
      */
     public function detail()
     {
         $params = (new BrandValidate())->get()->goCheck('detail');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        $result = BrandLogic::detail($tenantId, $userId, (int)$params['id']);
+        $result = BrandLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
         if ($result === [] && BrandLogic::hasError()) {
             return $this->fail(BrandLogic::getError());
         }
@@ -54,58 +45,41 @@ class BrandController extends BaseApiController
     }
 
     /**
+     * @notes 创建品牌
      * @return \think\response\Json
      */
     public function add()
     {
         $params = (new BrandValidate())->post()->goCheck('add');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!BrandLogic::add($tenantId, $userId, $params)) {
+        if (!BrandLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(BrandLogic::getError());
         }
-        return $this->success('创建成功');
+        return $this->success('创建成功', [], 1, 1);
     }
 
     /**
+     * @notes 编辑品牌
      * @return \think\response\Json
      */
     public function edit()
     {
         $params = (new BrandValidate())->post()->goCheck('edit');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!BrandLogic::edit($tenantId, $userId, $params)) {
+        if (!BrandLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
             return $this->fail(BrandLogic::getError());
         }
-        return $this->success('保存成功');
+        return $this->success('保存成功', [], 1, 1);
     }
 
     /**
+     * @notes 删除品牌
      * @return \think\response\Json
      */
     public function delete()
     {
         $params = (new BrandValidate())->post()->goCheck('delete');
-        [$tenantId, $userId] = $this->owner();
-        if ($tenantId <= 0) {
-            return $this->fail('请先登录');
-        }
-        if (!BrandLogic::delete($tenantId, $userId, (int)$params['id'])) {
+        if (!BrandLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
             return $this->fail(BrandLogic::getError());
         }
-        return $this->success('删除成功');
-    }
-
-    /**
-     * @return array{0:int,1:int}
-     */
-    private function owner(): array
-    {
-        return [(int)($this->request->tenantId ?? 0), $this->userId];
+        return $this->success('删除成功', [], 1, 1);
     }
 }

@@ -20,8 +20,8 @@ class StaffLogic extends BaseLogic
      */
     public static function lists(int $tenantId, int $userId, array $params): array
     {
-        $page = max(1, (int)($params['page'] ?? 1));
-        $limit = self::limit($params);
+        $page = max(1, (int)($params['page_no'] ?? 1));
+        $limit = self::pageSize($params);
         $query = MerchantScope::query(MerchantStaff::class, $tenantId, $userId);
         if ((int)($params['store_id'] ?? 0) > 0) {
             $query->where('store_id', (int)$params['store_id']);
@@ -35,7 +35,7 @@ class StaffLogic extends BaseLogic
         }
         $count = (clone $query)->count();
         $lists = $query->order('id', 'desc')->page($page, $limit)->select()->toArray();
-        return ['lists' => $lists, 'count' => $count, 'page' => $page, 'limit' => $limit];
+        return ['lists' => $lists, 'count' => $count, 'page_no' => $page, 'page_size' => $limit];
     }
 
     /**
@@ -184,9 +184,9 @@ class StaffLogic extends BaseLogic
      * @param array $params
      * @return int
      */
-    private static function limit(array $params): int
+    private static function pageSize(array $params): int
     {
-        $limit = (int)($params['limit'] ?? 20);
+        $limit = (int)($params['page_size'] ?? 20);
         return ($limit >= 1 && $limit <= 50) ? $limit : 20;
     }
 }
