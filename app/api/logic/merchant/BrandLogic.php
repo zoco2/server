@@ -93,7 +93,7 @@ class BrandLogic extends BaseLogic
         }
         try {
             $fields = self::fields($params);
-            unset($fields['create_time'], $fields['delete_time']);
+            unset($fields['create_time']);
             $row->save($fields);
             return true;
         } catch (Throwable $e) {
@@ -118,7 +118,7 @@ class BrandLogic extends BaseLogic
             self::setError('请先删除该品牌下的门店');
             return false;
         }
-        $row->save(['delete_time' => time(), 'update_time' => time()]);
+        $row->delete();
         return true;
     }
 
@@ -141,7 +141,6 @@ class BrandLogic extends BaseLogic
             'cover_url' => trim((string)($params['cover_url'] ?? '')),
             'create_time' => time(),
             'update_time' => time(),
-            'delete_time' => 0,
         ];
     }
 

@@ -4,7 +4,7 @@
 
 品牌到门店、门店到员工都是一对多，用外键列表示，不建中间表。
 
-迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。
+迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。已经按旧脚本建过表的库，再执行 `upgrade/20261031_merchant_soft_delete.sql`。
 
 ## 关系
 
@@ -24,7 +24,7 @@
 | 约定 | 做法 |
 |---|---|
 | 主键 | `bigint unsigned` 自增 |
-| 时间 | Unix 秒。`delete_time = 0` 表示未删除 |
+| 时间 | Unix 秒。`delete_time` 为空表示未删除，模型使用 ThinkPHP `SoftDelete` |
 | 图片 | 直接存 URL。空字符串表示未上传 |
 | 坐标 | 表单「纬度,经度」拆成 `latitude`、`longitude`。未填为 `NULL` |
 | 字符集 | `utf8mb4`，InnoDB |
@@ -49,7 +49,7 @@
 | `cover_url` | varchar(500) | 品牌封面 | 图片 URL。横图，建议 1200×500 以上，JPG / PNG / WebP，不超过 5MB |
 | `create_time` | int unsigned | — | |
 | `update_time` | int unsigned | — | |
-| `delete_time` | int unsigned | — | `0` 为未删除 |
+| `delete_time` | int unsigned，可空 | — | 未删除为 `NULL`。删除时由 `SoftDelete` 写入时间戳 |
 
 索引：
 
@@ -83,7 +83,7 @@
 | `logo_url` | varchar(500) | 门店 Logo | 图片 URL |
 | `create_time` | int unsigned | — | |
 | `update_time` | int unsigned | — | |
-| `delete_time` | int unsigned | — | `0` 为未删除 |
+| `delete_time` | int unsigned，可空 | — | 未删除为 `NULL`。删除时由 `SoftDelete` 写入时间戳 |
 
 索引：
 
@@ -107,7 +107,7 @@
 | `openid` | varchar(128)，可空 | — | 该公众号下的 OpenID。创建员工时留空 |
 | `create_time` | int unsigned | — | |
 | `update_time` | int unsigned | — | |
-| `delete_time` | int unsigned | — | `0` 为未删除 |
+| `delete_time` | int unsigned，可空 | — | 未删除为 `NULL`。删除时由 `SoftDelete` 写入时间戳 |
 
 索引：
 

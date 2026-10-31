@@ -101,7 +101,7 @@ class StoreLogic extends BaseLogic
         }
         try {
             $fields = self::fields($params, false);
-            unset($fields['create_time'], $fields['delete_time']);
+            unset($fields['create_time']);
             $row->save($fields);
             return true;
         } catch (Throwable $e) {
@@ -121,8 +121,7 @@ class StoreLogic extends BaseLogic
             self::setError('门店不存在或无权限');
             return false;
         }
-        $now = time();
-        $row->save(['delete_time' => $now, 'update_time' => $now]);
+        $row->delete();
         return true;
     }
 
@@ -164,7 +163,6 @@ class StoreLogic extends BaseLogic
         ];
         if ($creating) {
             $fields['create_time'] = time();
-            $fields['delete_time'] = 0;
         }
         return $fields;
     }

@@ -75,7 +75,6 @@ class StaffLogic extends BaseLogic
                 'openid' => null,
                 'create_time' => time(),
                 'update_time' => time(),
-                'delete_time' => 0,
             ]);
             return true;
         } catch (Throwable $e) {
@@ -129,13 +128,12 @@ class StaffLogic extends BaseLogic
             self::setError('员工不存在或无权限');
             return false;
         }
-        $now = time();
         $row->save([
-            'delete_time' => $now,
-            'update_time' => $now,
+            'update_time' => time(),
             'appid' => null,
             'openid' => null,
         ]);
+        $row->delete();
         return true;
     }
 

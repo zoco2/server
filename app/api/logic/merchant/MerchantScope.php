@@ -16,7 +16,6 @@ class MerchantScope
      */
     public static function query(string $model)
     {
-        return $model::where('user_id', (int)request()->userId)
-            ->where('delete_time', 0);
+        return $model::where('user_id', (int)request()->userId);
     }
 }
