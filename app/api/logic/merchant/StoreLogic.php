@@ -13,16 +13,14 @@ use Throwable;
 class StoreLogic extends BaseLogic
 {
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return array
      */
-    public static function lists(int $tenantId, int $userId, array $params): array
+    public static function lists(array $params): array
     {
         $page = max(1, (int)($params['page_no'] ?? 1));
         $limit = self::pageSize($params);
-        $query = MerchantScope::query(MerchantStore::class, $tenantId, $userId);
+        $query = MerchantScope::query(MerchantStore::class);
         $keyword = trim((string)($params['keyword'] ?? ''));
         if ($keyword !== '') {
             $query->whereLike('name', '%' . self::like($keyword) . '%');
@@ -39,14 +37,12 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $brandId
      * @return array
      */
-    public static function choices(int $tenantId, int $userId, int $brandId = 0): array
+    public static function choices(int $brandId = 0): array
     {
-        $query = MerchantScope::query(MerchantStore::class, $tenantId, $userId)->field('id,brand_id,name');
+        $query = MerchantScope::query(MerchantStore::class)->field('id,brand_id,name');
         if ($brandId > 0) {
             $query->where('brand_id', $brandId);
         }
@@ -54,14 +50,12 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return array
      */
-    public static function detail(int $tenantId, int $userId, int $id): array
+    public static function detail(int $id): array
     {
-        $row = MerchantScope::query(MerchantStore::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantStore::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('门店不存在或无权限');
             return [];
@@ -72,19 +66,17 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function add(int $tenantId, int $userId, array $params): bool
+    public static function add(array $params): bool
     {
-        if (!self::brandOwned($tenantId, $userId, (int)$params['brand_id'])) {
+        if (!self::brandOwned((int)$params['brand_id'])) {
             self::setError('所属品牌不存在或无权限');
             return false;
         }
         try {
-            MerchantStore::create(self::fields($tenantId, $userId, $params, true));
+            MerchantStore::create(self::fields($params, true));
             return true;
         } catch (Throwable $e) {
             self::setError($e instanceof \InvalidArgumentException ? $e->getMessage() : '门店保存失败');
@@ -93,24 +85,22 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function edit(int $tenantId, int $userId, array $params): bool
+    public static function edit(array $params): bool
     {
-        $row = MerchantScope::query(MerchantStore::class, $tenantId, $userId)->where('id', (int)$params['id'])->findOrEmpty();
+        $row = MerchantScope::query(MerchantStore::class)->where('id', (int)$params['id'])->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('门店不存在或无权限');
             return false;
         }
-        if (!self::brandOwned($tenantId, $userId, (int)$params['brand_id'])) {
+        if (!self::brandOwned((int)$params['brand_id'])) {
             self::setError('所属品牌不存在或无权限');
             return false;
         }
         try {
-            $fields = self::fields($tenantId, $userId, $params, false);
+            $fields = self::fields($params, false);
             unset($fields['create_time'], $fields['delete_time']);
             $row->save($fields);
             return true;
@@ -121,14 +111,12 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return bool
      */
-    public static function delete(int $tenantId, int $userId, int $id): bool
+    public static function delete(int $id): bool
     {
-        $row = MerchantScope::query(MerchantStore::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantStore::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('门店不存在或无权限');
             return false;
@@ -139,29 +127,24 @@ class StoreLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $brandId
      * @return bool
      */
-    private static function brandOwned(int $tenantId, int $userId, int $brandId): bool
+    private static function brandOwned(int $brandId): bool
     {
-        return MerchantScope::query(MerchantBrand::class, $tenantId, $userId)->where('id', $brandId)->count() > 0;
+        return MerchantScope::query(MerchantBrand::class)->where('id', $brandId)->count() > 0;
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @param bool $creating
      * @return array
      */
-    private static function fields(int $tenantId, int $userId, array $params, bool $creating): array
+    private static function fields(array $params, bool $creating): array
     {
         [$latitude, $longitude] = self::coordinates($params);
         $fields = [
-            'tenant_id' => $tenantId,
-            'user_id' => $userId,
+            'user_id' => (int)request()->userId,
             'brand_id' => (int)$params['brand_id'],
             'name' => trim((string)$params['name']),
             'status' => isset($params['status']) && $params['status'] !== '' ? (int)$params['status'] : 1,

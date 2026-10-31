@@ -13,16 +13,14 @@ use Throwable;
 class BrandLogic extends BaseLogic
 {
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return array
      */
-    public static function lists(int $tenantId, int $userId, array $params): array
+    public static function lists(array $params): array
     {
         $page = max(1, (int)($params['page_no'] ?? 1));
         $limit = self::pageSize($params);
-        $query = MerchantScope::query(MerchantBrand::class, $tenantId, $userId);
+        $query = MerchantScope::query(MerchantBrand::class);
         $keyword = trim((string)($params['keyword'] ?? ''));
         if ($keyword !== '') {
             $query->whereLike('name', '%' . self::like($keyword) . '%');
@@ -33,13 +31,11 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @return array
      */
-    public static function choices(int $tenantId, int $userId): array
+    public static function choices(): array
     {
-        return MerchantScope::query(MerchantBrand::class, $tenantId, $userId)
+        return MerchantScope::query(MerchantBrand::class)
             ->field('id,name')
             ->order('id', 'desc')
             ->select()
@@ -47,14 +43,12 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return array
      */
-    public static function detail(int $tenantId, int $userId, int $id): array
+    public static function detail(int $id): array
     {
-        $row = MerchantScope::query(MerchantBrand::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantBrand::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('品牌不存在或无权限');
             return [];
@@ -63,19 +57,17 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function add(int $tenantId, int $userId, array $params): bool
+    public static function add(array $params): bool
     {
-        if (self::nameTaken($tenantId, $userId, $params['name'])) {
+        if (self::nameTaken($params['name'])) {
             self::setError('品牌名称已存在');
             return false;
         }
         try {
-            MerchantBrand::create(self::fields($tenantId, $userId, $params));
+            MerchantBrand::create(self::fields($params));
             return true;
         } catch (Throwable $e) {
             self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
@@ -84,25 +76,23 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function edit(int $tenantId, int $userId, array $params): bool
+    public static function edit(array $params): bool
     {
         $id = (int)$params['id'];
-        $row = MerchantScope::query(MerchantBrand::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantBrand::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('品牌不存在或无权限');
             return false;
         }
-        if (self::nameTaken($tenantId, $userId, $params['name'], $id)) {
+        if (self::nameTaken($params['name'], $id)) {
             self::setError('品牌名称已存在');
             return false;
         }
         try {
-            $fields = self::fields($tenantId, $userId, $params);
+            $fields = self::fields($params);
             unset($fields['create_time'], $fields['delete_time']);
             $row->save($fields);
             return true;
@@ -113,19 +103,17 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return bool
      */
-    public static function delete(int $tenantId, int $userId, int $id): bool
+    public static function delete(int $id): bool
     {
-        $row = MerchantScope::query(MerchantBrand::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantBrand::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('品牌不存在或无权限');
             return false;
         }
-        $storeCount = MerchantScope::query(MerchantStore::class, $tenantId, $userId)->where('brand_id', $id)->count();
+        $storeCount = MerchantScope::query(MerchantStore::class)->where('brand_id', $id)->count();
         if ($storeCount > 0) {
             self::setError('请先删除该品牌下的门店');
             return false;
@@ -135,16 +123,13 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return array
      */
-    private static function fields(int $tenantId, int $userId, array $params): array
+    private static function fields(array $params): array
     {
         return [
-            'tenant_id' => $tenantId,
-            'user_id' => $userId,
+            'user_id' => (int)request()->userId,
             'name' => trim((string)$params['name']),
             'industry' => trim((string)($params['industry'] ?? '')),
             'contact_name' => trim((string)($params['contact_name'] ?? '')),
@@ -161,15 +146,13 @@ class BrandLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param string $name
      * @param int $exceptId
      * @return bool
      */
-    private static function nameTaken(int $tenantId, int $userId, string $name, int $exceptId = 0): bool
+    private static function nameTaken(string $name, int $exceptId = 0): bool
     {
-        $query = MerchantScope::query(MerchantBrand::class, $tenantId, $userId)->where('name', trim($name));
+        $query = MerchantScope::query(MerchantBrand::class)->where('name', trim($name));
         if ($exceptId > 0) {
             $query->where('id', '<>', $exceptId);
         }

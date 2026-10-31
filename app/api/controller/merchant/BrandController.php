@@ -18,7 +18,7 @@ class BrandController extends BaseApiController
     public function lists()
     {
         $params = (new BrandValidate())->get()->goCheck('lists');
-        return $this->data(BrandLogic::lists((int)$this->request->tenantId, $this->userId, $params));
+        return $this->data(BrandLogic::lists($params));
     }
 
     /**
@@ -27,7 +27,7 @@ class BrandController extends BaseApiController
      */
     public function choices()
     {
-        return $this->data(BrandLogic::choices((int)$this->request->tenantId, $this->userId));
+        return $this->data(BrandLogic::choices());
     }
 
     /**
@@ -37,7 +37,7 @@ class BrandController extends BaseApiController
     public function detail()
     {
         $params = (new BrandValidate())->get()->goCheck('detail');
-        $result = BrandLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
+        $result = BrandLogic::detail((int)$params['id']);
         if ($result === [] && BrandLogic::hasError()) {
             return $this->fail(BrandLogic::getError());
         }
@@ -51,7 +51,7 @@ class BrandController extends BaseApiController
     public function add()
     {
         $params = (new BrandValidate())->post()->goCheck('add');
-        if (!BrandLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!BrandLogic::add($params)) {
             return $this->fail(BrandLogic::getError());
         }
         return $this->success('创建成功', [], 1, 1);
@@ -64,7 +64,7 @@ class BrandController extends BaseApiController
     public function edit()
     {
         $params = (new BrandValidate())->post()->goCheck('edit');
-        if (!BrandLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!BrandLogic::edit($params)) {
             return $this->fail(BrandLogic::getError());
         }
         return $this->success('保存成功', [], 1, 1);
@@ -77,7 +77,7 @@ class BrandController extends BaseApiController
     public function delete()
     {
         $params = (new BrandValidate())->post()->goCheck('delete');
-        if (!BrandLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
+        if (!BrandLogic::delete((int)$params['id'])) {
             return $this->fail(BrandLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);

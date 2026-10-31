@@ -13,16 +13,14 @@ use Throwable;
 class StaffLogic extends BaseLogic
 {
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return array
      */
-    public static function lists(int $tenantId, int $userId, array $params): array
+    public static function lists(array $params): array
     {
         $page = max(1, (int)($params['page_no'] ?? 1));
         $limit = self::pageSize($params);
-        $query = MerchantScope::query(MerchantStaff::class, $tenantId, $userId);
+        $query = MerchantScope::query(MerchantStaff::class);
         if ((int)($params['store_id'] ?? 0) > 0) {
             $query->where('store_id', (int)$params['store_id']);
         }
@@ -39,14 +37,12 @@ class StaffLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return array
      */
-    public static function detail(int $tenantId, int $userId, int $id): array
+    public static function detail(int $id): array
     {
-        $row = MerchantScope::query(MerchantStaff::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantStaff::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('员工不存在或无权限');
             return [];
@@ -55,26 +51,23 @@ class StaffLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function add(int $tenantId, int $userId, array $params): bool
+    public static function add(array $params): bool
     {
         $storeId = (int)$params['store_id'];
-        if (!self::storeOwned($tenantId, $userId, $storeId)) {
+        if (!self::storeOwned($storeId)) {
             self::setError('所属门店不存在或无权限');
             return false;
         }
-        if (self::mobileTaken($tenantId, $userId, $storeId, $params['mobile'])) {
+        if (self::mobileTaken($storeId, $params['mobile'])) {
             self::setError('该门店已有此手机号');
             return false;
         }
         try {
             MerchantStaff::create([
-                'tenant_id' => $tenantId,
-                'user_id' => $userId,
+                'user_id' => (int)request()->userId,
                 'store_id' => $storeId,
                 'name' => trim((string)$params['name']),
                 'mobile' => trim((string)$params['mobile']),
@@ -92,24 +85,22 @@ class StaffLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param array $params
      * @return bool
      */
-    public static function edit(int $tenantId, int $userId, array $params): bool
+    public static function edit(array $params): bool
     {
-        $row = MerchantScope::query(MerchantStaff::class, $tenantId, $userId)->where('id', (int)$params['id'])->findOrEmpty();
+        $row = MerchantScope::query(MerchantStaff::class)->where('id', (int)$params['id'])->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('员工不存在或无权限');
             return false;
         }
         $storeId = (int)$params['store_id'];
-        if (!self::storeOwned($tenantId, $userId, $storeId)) {
+        if (!self::storeOwned($storeId)) {
             self::setError('所属门店不存在或无权限');
             return false;
         }
-        if (self::mobileTaken($tenantId, $userId, $storeId, $params['mobile'], (int)$row['id'])) {
+        if (self::mobileTaken($storeId, $params['mobile'], (int)$row['id'])) {
             self::setError('该门店已有此手机号');
             return false;
         }
@@ -128,14 +119,12 @@ class StaffLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $id
      * @return bool
      */
-    public static function delete(int $tenantId, int $userId, int $id): bool
+    public static function delete(int $id): bool
     {
-        $row = MerchantScope::query(MerchantStaff::class, $tenantId, $userId)->where('id', $id)->findOrEmpty();
+        $row = MerchantScope::query(MerchantStaff::class)->where('id', $id)->findOrEmpty();
         if ($row->isEmpty()) {
             self::setError('员工不存在或无权限');
             return false;
@@ -151,27 +140,23 @@ class StaffLogic extends BaseLogic
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $storeId
      * @return bool
      */
-    private static function storeOwned(int $tenantId, int $userId, int $storeId): bool
+    private static function storeOwned(int $storeId): bool
     {
-        return MerchantScope::query(MerchantStore::class, $tenantId, $userId)->where('id', $storeId)->count() > 0;
+        return MerchantScope::query(MerchantStore::class)->where('id', $storeId)->count() > 0;
     }
 
     /**
-     * @param int $tenantId
-     * @param int $userId
      * @param int $storeId
      * @param string $mobile
      * @param int $exceptId
      * @return bool
      */
-    private static function mobileTaken(int $tenantId, int $userId, int $storeId, string $mobile, int $exceptId = 0): bool
+    private static function mobileTaken(int $storeId, string $mobile, int $exceptId = 0): bool
     {
-        $query = MerchantScope::query(MerchantStaff::class, $tenantId, $userId)
+        $query = MerchantScope::query(MerchantStaff::class)
             ->where('store_id', $storeId)
             ->where('mobile', trim($mobile));
         if ($exceptId > 0) {

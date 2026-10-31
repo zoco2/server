@@ -18,7 +18,7 @@ class StoreController extends BaseApiController
     public function lists()
     {
         $params = (new StoreValidate())->get()->goCheck('lists');
-        return $this->data(StoreLogic::lists((int)$this->request->tenantId, $this->userId, $params));
+        return $this->data(StoreLogic::lists($params));
     }
 
     /**
@@ -28,7 +28,7 @@ class StoreController extends BaseApiController
     public function choices()
     {
         $params = (new StoreValidate())->get()->goCheck('choices');
-        return $this->data(StoreLogic::choices((int)$this->request->tenantId, $this->userId, (int)($params['brand_id'] ?? 0)));
+        return $this->data(StoreLogic::choices((int)($params['brand_id'] ?? 0)));
     }
 
     /**
@@ -38,7 +38,7 @@ class StoreController extends BaseApiController
     public function detail()
     {
         $params = (new StoreValidate())->get()->goCheck('detail');
-        $result = StoreLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
+        $result = StoreLogic::detail((int)$params['id']);
         if ($result === [] && StoreLogic::hasError()) {
             return $this->fail(StoreLogic::getError());
         }
@@ -52,7 +52,7 @@ class StoreController extends BaseApiController
     public function add()
     {
         $params = (new StoreValidate())->post()->goCheck('add');
-        if (!StoreLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!StoreLogic::add($params)) {
             return $this->fail(StoreLogic::getError());
         }
         return $this->success('创建成功', [], 1, 1);
@@ -65,7 +65,7 @@ class StoreController extends BaseApiController
     public function edit()
     {
         $params = (new StoreValidate())->post()->goCheck('edit');
-        if (!StoreLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!StoreLogic::edit($params)) {
             return $this->fail(StoreLogic::getError());
         }
         return $this->success('保存成功', [], 1, 1);
@@ -78,7 +78,7 @@ class StoreController extends BaseApiController
     public function delete()
     {
         $params = (new StoreValidate())->post()->goCheck('delete');
-        if (!StoreLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
+        if (!StoreLogic::delete((int)$params['id'])) {
             return $this->fail(StoreLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);

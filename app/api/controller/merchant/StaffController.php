@@ -18,7 +18,7 @@ class StaffController extends BaseApiController
     public function lists()
     {
         $params = (new StaffValidate())->get()->goCheck('lists');
-        return $this->data(StaffLogic::lists((int)$this->request->tenantId, $this->userId, $params));
+        return $this->data(StaffLogic::lists($params));
     }
 
     /**
@@ -28,7 +28,7 @@ class StaffController extends BaseApiController
     public function detail()
     {
         $params = (new StaffValidate())->get()->goCheck('detail');
-        $result = StaffLogic::detail((int)$this->request->tenantId, $this->userId, (int)$params['id']);
+        $result = StaffLogic::detail((int)$params['id']);
         if ($result === [] && StaffLogic::hasError()) {
             return $this->fail(StaffLogic::getError());
         }
@@ -42,7 +42,7 @@ class StaffController extends BaseApiController
     public function add()
     {
         $params = (new StaffValidate())->post()->goCheck('add');
-        if (!StaffLogic::add((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!StaffLogic::add($params)) {
             return $this->fail(StaffLogic::getError());
         }
         return $this->success('添加成功', [], 1, 1);
@@ -55,7 +55,7 @@ class StaffController extends BaseApiController
     public function edit()
     {
         $params = (new StaffValidate())->post()->goCheck('edit');
-        if (!StaffLogic::edit((int)$this->request->tenantId, $this->userId, $params)) {
+        if (!StaffLogic::edit($params)) {
             return $this->fail(StaffLogic::getError());
         }
         return $this->success('保存成功', [], 1, 1);
@@ -68,7 +68,7 @@ class StaffController extends BaseApiController
     public function delete()
     {
         $params = (new StaffValidate())->post()->goCheck('delete');
-        if (!StaffLogic::delete((int)$this->request->tenantId, $this->userId, (int)$params['id'])) {
+        if (!StaffLogic::delete((int)$params['id'])) {
             return $this->fail(StaffLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);
