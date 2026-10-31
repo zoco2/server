@@ -15,6 +15,4 @@ class MerchantBrand extends BaseModel
     protected $name = 'merchant_brand';
 
     protected $deleteTime = 'delete_time';
-
-    protected $autoWriteTimestamp = false;
 }

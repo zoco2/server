@@ -3,6 +3,7 @@
 namespace app\api\controller\merchant;
 
 use app\api\controller\BaseApiController;
+use app\api\lists\merchant\BrandLists;
 use app\api\logic\merchant\BrandLogic;
 use app\api\validate\merchant\BrandValidate;
 
@@ -17,8 +18,7 @@ class BrandController extends BaseApiController
      */
     public function lists()
     {
-        $params = (new BrandValidate())->get()->goCheck('lists');
-        return $this->data(BrandLogic::lists($params));
+        return $this->dataLists(new BrandLists());
     }
 
     /**

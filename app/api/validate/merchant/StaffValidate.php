@@ -14,9 +14,6 @@ class StaffValidate extends BaseValidate
         'store_id' => 'require|integer|gt:0',
         'name' => 'require|length:1,60',
         'mobile' => 'require|regex:/^1\d{10}$/',
-        'page_no' => 'integer|gt:0',
-        'page_size' => 'integer|between:1,50',
-        'keyword' => 'max:60',
     ];
 
     protected $message = [
@@ -58,14 +55,5 @@ class StaffValidate extends BaseValidate
     public function sceneDelete()
     {
         return $this->only(['id']);
-    }
-
-    /**
-     * @return StaffValidate
-     */
-    public function sceneLists()
-    {
-        return $this->only(['page_no', 'page_size', 'keyword', 'store_id'])
-            ->remove('store_id', 'require');
     }
 }

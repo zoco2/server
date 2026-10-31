@@ -13,30 +13,6 @@ use Throwable;
 class StaffLogic extends BaseLogic
 {
     /**
-     * @param array $params
-     * @return array
-     */
-    public static function lists(array $params): array
-    {
-        $page = max(1, (int)($params['page_no'] ?? 1));
-        $limit = self::pageSize($params);
-        $query = MerchantScope::query(MerchantStaff::class);
-        if ((int)($params['store_id'] ?? 0) > 0) {
-            $query->where('store_id', (int)$params['store_id']);
-        }
-        $keyword = trim((string)($params['keyword'] ?? ''));
-        if ($keyword !== '') {
-            $safe = str_replace(['%', '_'], ['\%', '\_'], $keyword);
-            $query->where(function ($inner) use ($safe) {
-                $inner->whereLike('name', '%' . $safe . '%')->whereOr('mobile', 'like', '%' . $safe . '%');
-            });
-        }
-        $count = (clone $query)->count();
-        $lists = $query->order('id', 'desc')->page($page, $limit)->select()->toArray();
-        return ['lists' => $lists, 'count' => $count, 'page_no' => $page, 'page_size' => $limit];
-    }
-
-    /**
      * @param int $id
      * @return array
      */
@@ -73,8 +49,6 @@ class StaffLogic extends BaseLogic
                 'mobile' => trim((string)$params['mobile']),
                 'appid' => null,
                 'openid' => null,
-                'create_time' => time(),
-                'update_time' => time(),
             ]);
             return true;
         } catch (Throwable $e) {
@@ -108,7 +82,6 @@ class StaffLogic extends BaseLogic
                 'store_id' => $storeId,
                 'name' => trim((string)$params['name']),
                 'mobile' => trim((string)$params['mobile']),
-                'update_time' => time(),
             ]);
             return true;
         } catch (Throwable $e) {
@@ -129,7 +102,6 @@ class StaffLogic extends BaseLogic
             return false;
         }
         $row->save([
-            'update_time' => time(),
             'appid' => null,
             'openid' => null,
         ]);
@@ -161,15 +133,5 @@ class StaffLogic extends BaseLogic
             $query->where('id', '<>', $exceptId);
         }
         return $query->count() > 0;
-    }
-
-    /**
-     * @param array $params
-     * @return int
-     */
-    private static function pageSize(array $params): int
-    {
-        $limit = (int)($params['page_size'] ?? 20);
-        return ($limit >= 1 && $limit <= 50) ? $limit : 20;
     }
 }

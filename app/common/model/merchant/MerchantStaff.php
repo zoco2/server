@@ -15,6 +15,4 @@ class MerchantStaff extends BaseModel
     protected $name = 'merchant_staff';
 
     protected $deleteTime = 'delete_time';
-
-    protected $autoWriteTimestamp = false;
 }

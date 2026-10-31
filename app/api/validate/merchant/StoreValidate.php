@@ -27,9 +27,6 @@ class StoreValidate extends BaseValidate
         'poi_id' => 'max:64',
         'intro' => 'max:1000',
         'logo_url' => 'max:500|checkUrl',
-        'page_no' => 'integer|gt:0',
-        'page_size' => 'integer|between:1,50',
-        'keyword' => 'max:100',
     ];
 
     protected $message = [
@@ -71,15 +68,6 @@ class StoreValidate extends BaseValidate
     public function sceneDelete()
     {
         return $this->only(['id']);
-    }
-
-    /**
-     * @return StoreValidate
-     */
-    public function sceneLists()
-    {
-        return $this->only(['page_no', 'page_size', 'keyword', 'brand_id', 'status'])
-            ->remove('brand_id', 'require');
     }
 
     /**

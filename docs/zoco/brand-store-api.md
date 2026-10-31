@@ -25,14 +25,15 @@
 
 参数错误、记录不存在、重名时 `code` 为 `0`，`show` 为 `1`。
 
-列表分页参数都是 `page_no`、`page_size`。默认第 1 页、每页 20 条，`page_size` 最大 50。返回：
+列表分页使用项目的列表基类。参数是 `page_no`、`page_size`，默认每页 25 条，上限见 `config/project.php` 的 `lists.page_size_max`。返回：
 
 ```json
 {
   "lists": [],
   "count": 0,
   "page_no": 1,
-  "page_size": 20
+  "page_size": 25,
+  "extend": []
 }
 ```
 
@@ -47,7 +48,7 @@
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `page_no` | 否 | 页码，默认 1 |
-| `page_size` | 否 | 每页条数，默认 20，最大 50 |
+| `page_size` | 否 | 每页条数，默认 25 |
 | `keyword` | 否 | 按品牌名称模糊搜索，最长 100 |
 
 `data` 为分页结构。`lists` 每项是品牌记录，字段与 `la_merchant_brand` 一致。

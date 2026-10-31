@@ -3,6 +3,7 @@
 namespace app\api\controller\merchant;
 
 use app\api\controller\BaseApiController;
+use app\api\lists\merchant\StaffLists;
 use app\api\logic\merchant\StaffLogic;
 use app\api\validate\merchant\StaffValidate;
 
@@ -17,8 +18,7 @@ class StaffController extends BaseApiController
      */
     public function lists()
     {
-        $params = (new StaffValidate())->get()->goCheck('lists');
-        return $this->data(StaffLogic::lists($params));
+        return $this->dataLists(new StaffLists());
     }
 
     /**

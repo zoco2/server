@@ -13,30 +13,6 @@ use Throwable;
 class StoreLogic extends BaseLogic
 {
     /**
-     * @param array $params
-     * @return array
-     */
-    public static function lists(array $params): array
-    {
-        $page = max(1, (int)($params['page_no'] ?? 1));
-        $limit = self::pageSize($params);
-        $query = MerchantScope::query(MerchantStore::class);
-        $keyword = trim((string)($params['keyword'] ?? ''));
-        if ($keyword !== '') {
-            $query->whereLike('name', '%' . self::like($keyword) . '%');
-        }
-        if ((int)($params['brand_id'] ?? 0) > 0) {
-            $query->where('brand_id', (int)$params['brand_id']);
-        }
-        if (isset($params['status']) && $params['status'] !== '') {
-            $query->where('status', (int)$params['status']);
-        }
-        $count = (clone $query)->count();
-        $lists = $query->order('id', 'desc')->page($page, $limit)->select()->toArray();
-        return ['lists' => $lists, 'count' => $count, 'page_no' => $page, 'page_size' => $limit];
-    }
-
-    /**
      * @param int $brandId
      * @return array
      */
@@ -76,7 +52,7 @@ class StoreLogic extends BaseLogic
             return false;
         }
         try {
-            MerchantStore::create(self::fields($params, true));
+            MerchantStore::create(self::fields($params));
             return true;
         } catch (Throwable $e) {
             self::setError($e instanceof \InvalidArgumentException ? $e->getMessage() : '门店保存失败');
@@ -100,9 +76,7 @@ class StoreLogic extends BaseLogic
             return false;
         }
         try {
-            $fields = self::fields($params, false);
-            unset($fields['create_time']);
-            $row->save($fields);
+            $row->save(self::fields($params));
             return true;
         } catch (Throwable $e) {
             self::setError($e instanceof \InvalidArgumentException ? $e->getMessage() : '门店保存失败');
@@ -136,17 +110,15 @@ class StoreLogic extends BaseLogic
 
     /**
      * @param array $params
-     * @param bool $creating
      * @return array
      */
-    private static function fields(array $params, bool $creating): array
+    private static function fields(array $params): array
     {
         [$latitude, $longitude] = self::coordinates($params);
         $fields = [
             'user_id' => (int)request()->userId,
             'brand_id' => (int)$params['brand_id'],
             'name' => trim((string)$params['name']),
-            'status' => isset($params['status']) && $params['status'] !== '' ? (int)$params['status'] : 1,
             'phone' => trim((string)($params['phone'] ?? '')),
             'contact_name' => trim((string)($params['contact_name'] ?? '')),
             'business_hours' => trim((string)($params['business_hours'] ?? '')),
@@ -159,10 +131,11 @@ class StoreLogic extends BaseLogic
             'poi_id' => trim((string)($params['poi_id'] ?? '')),
             'intro' => trim((string)($params['intro'] ?? '')),
             'logo_url' => trim((string)($params['logo_url'] ?? '')),
-            'update_time' => time(),
         ];
-        if ($creating) {
-            $fields['create_time'] = time();
+        if (isset($params['status']) && $params['status'] !== '') {
+            $fields['status'] = (int)$params['status'];
+        } elseif (empty($params['id'])) {
+            $fields['status'] = 1;
         }
         return $fields;
     }
@@ -211,24 +184,5 @@ class StoreLogic extends BaseLogic
         return rtrim(rtrim(number_format((float)$latitude, 7, '.', ''), '0'), '.')
             . ','
             . rtrim(rtrim(number_format((float)$longitude, 7, '.', ''), '0'), '.');
-    }
-
-    /**
-     * @param array $params
-     * @return int
-     */
-    private static function pageSize(array $params): int
-    {
-        $limit = (int)($params['page_size'] ?? 20);
-        return ($limit >= 1 && $limit <= 50) ? $limit : 20;
-    }
-
-    /**
-     * @param string $keyword
-     * @return string
-     */
-    private static function like(string $keyword): string
-    {
-        return str_replace(['%', '_'], ['\%', '\_'], $keyword);
     }
 }

@@ -3,6 +3,7 @@
 namespace app\api\controller\merchant;
 
 use app\api\controller\BaseApiController;
+use app\api\lists\merchant\StoreLists;
 use app\api\logic\merchant\StoreLogic;
 use app\api\validate\merchant\StoreValidate;
 
@@ -17,8 +18,7 @@ class StoreController extends BaseApiController
      */
     public function lists()
     {
-        $params = (new StoreValidate())->get()->goCheck('lists');
-        return $this->data(StoreLogic::lists($params));
+        return $this->dataLists(new StoreLists());
     }
 
     /**

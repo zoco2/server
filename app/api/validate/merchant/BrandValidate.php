@@ -20,9 +20,6 @@ class BrandValidate extends BaseValidate
         'address' => 'max:255',
         'logo_url' => 'max:500|checkUrl',
         'cover_url' => 'max:500|checkUrl',
-        'page_no' => 'integer|gt:0',
-        'page_size' => 'integer|between:1,50',
-        'keyword' => 'max:100',
     ];
 
     protected $message = [
@@ -65,14 +62,6 @@ class BrandValidate extends BaseValidate
     public function sceneDelete()
     {
         return $this->only(['id']);
-    }
-
-    /**
-     * @return BrandValidate
-     */
-    public function sceneLists()
-    {
-        return $this->only(['page_no', 'page_size', 'keyword']);
     }
 
     /**
