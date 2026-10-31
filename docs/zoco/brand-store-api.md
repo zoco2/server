@@ -37,7 +37,7 @@
 }
 ```
 
-图片字段传完整 `http://` 或 `https://` 地址。空字符串表示未上传。时间字段是 Unix 秒。
+图片字段传完整 `http://` 或 `https://` 地址。空字符串表示未上传。`create_time`、`update_time`、`delete_time` 由模型写入，不作为请求参数。未删除时 `delete_time` 为 `null`，删除时写入 Unix 秒。
 
 ## 品牌
 
@@ -49,7 +49,7 @@
 |---|---|---|
 | `page_no` | 否 | 页码，默认 1 |
 | `page_size` | 否 | 每页条数，默认 25 |
-| `keyword` | 否 | 按品牌名称模糊搜索，最长 100 |
+| `keyword` | 否 | 按品牌名称模糊搜索 |
 
 `data` 为分页结构。`lists` 每项是品牌记录，字段与 `la_merchant_brand` 一致。
 
@@ -168,7 +168,7 @@
 
 `POST /api/merchant.store/edit`
 
-参数与创建相同，并增加必填 `id`。成功：`msg` 为「保存成功」。
+参数与创建相同，并增加必填 `id`。未传 `status` 时保持原营业状态。成功：`msg` 为「保存成功」。
 
 ### 删除
 
@@ -192,7 +192,7 @@
 |---|---|---|
 | `page_no` | 否 | 页码 |
 | `page_size` | 否 | 每页条数 |
-| `keyword` | 否 | 按姓名或手机号模糊搜索，最长 60 |
+| `keyword` | 否 | 按姓名或手机号模糊搜索 |
 | `store_id` | 否 | 只看某个门店下的员工 |
 
 `lists` 每项是员工记录，字段与 `la_merchant_staff` 一致。未关联公众号时 `appid`、`openid` 为 `null`。
