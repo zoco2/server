@@ -3,6 +3,8 @@
   "apis": [
     { "api_path": "app.aigc_geo.config/detail", "api_method": "GET", "permission_key": "aigc_geo:config:detail", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
     { "api_path": "app.aigc_geo.config/setup", "api_method": "POST", "permission_key": "aigc_geo:config:setup", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
+    { "api_path": "app.aigc_geo.manuscript/detail", "api_method": "GET", "permission_key": "aigc_geo:manuscript:detail", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
+    { "api_path": "app.aigc_geo.manuscript/save", "api_method": "POST", "permission_key": "aigc_geo:manuscript:save", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
     { "api_path": "app.aigc_geo.console/summary", "api_method": "GET", "permission_key": "aigc_geo:console:summary", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
     { "api_path": "app.aigc_geo.keyword/lists", "api_method": "GET", "permission_key": "aigc_geo:keyword:lists", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
     { "api_path": "app.aigc_geo.keyword/save", "api_method": "POST", "permission_key": "aigc_geo:keyword:save", "scene": "tenant_admin", "need_login": 1, "need_role_permission": 1 },
