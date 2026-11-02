@@ -49,8 +49,12 @@
 | POST | `/api/file/editCate` | 改名称 |
 | POST | `/api/file/delCate` | 删除分组及子分组 |
 | POST | `/api/file/move` | 把自己的文件移入分组或移出 |
+| POST | `/api/workspace_asset/upload` | 上传图片或视频。表单字段 `cid` 指定分组，不传或 `0` 为未分组 |
+| POST | `/api/upload/image` | 上传图片，`cid` 对应类型 `10` |
+| POST | `/api/upload/video` | 上传视频，`cid` 对应类型 `20` |
+| POST | `/api/upload/file` | 上传文件，`cid` 对应类型 `30` |
 
-名称最长 20 个字符。分组树只查 `la_user_file_cate`。
+名称最长 20 个字符。分组树只查 `la_user_file_cate`。上传与后台一样，在同一次请求里带 `cid`。`cid` 大于 `0` 时，分组必须属于当前用户，且 `type` 与文件一致。
 
 `WorkspaceAssetService::uploads` 的返回补上 `cid`，并接受可选 `cid`：不传查全部，`0` 查未分组，大于 `0` 查该分组及其子分组。筛选时子分组 id 只从 `la_user_file_cate` 取。收藏、标签、回收站不变。
 
@@ -59,7 +63,7 @@
 以下不满足时拒绝，不写入。
 
 - 父分组属于当前用户，且 `type` 与新建分组相同。`pid = 0` 表示顶级。
-- 移动时 `cid = 0`，或目标分组属于当前用户且 `type` 与文件一致。
+- 上传和移动时 `cid = 0`，或目标分组属于当前用户且 `type` 与文件一致。图片为 `10`，视频为 `20`，webm 为 `30`。
 - 被移动的文件必须是当前用户的上传：`source = 1`、`source_id` 为当前用户、`upload_origin = local`。
 - 编辑、删除只处理当前用户在 `la_user_file_cate` 里的分组。
 

@@ -6,6 +6,7 @@ use app\common\enum\FileEnum;
 use app\common\logic\BaseLogic;
 use app\common\model\file\TenantFile;
 use app\common\model\file\UserFileCate;
+use InvalidArgumentException;
 use think\facade\Db;
 use Throwable;
 
@@ -146,6 +147,38 @@ class FileLogic extends BaseLogic
             self::setError('移动失败');
             return false;
         }
+    }
+
+    /**
+     * 上传时解析分组。不传或 0 表示未分组。
+     * @param int $type 文件类型，10 图片、20 视频、30 文件
+     * @param mixed $raw 表单字段 cid
+     * @return int
+     */
+    public static function uploadCid(int $type, $raw = 0): int
+    {
+        $userId = self::userId();
+        if ($userId <= 0) {
+            throw new InvalidArgumentException('请先登录');
+        }
+        if ($raw === '' || $raw === null) {
+            return 0;
+        }
+        if (!is_numeric($raw) || (int)$raw < 0) {
+            throw new InvalidArgumentException('分组参数无效');
+        }
+        $cid = (int)$raw;
+        if ($cid === 0) {
+            return 0;
+        }
+        $cate = self::owned($userId, $cid);
+        if ($cate->isEmpty()) {
+            throw new InvalidArgumentException('分组不存在或无权操作');
+        }
+        if ((int)$cate['type'] !== $type) {
+            throw new InvalidArgumentException('文件类型与分组不一致');
+        }
+        return $cid;
     }
 
     /**

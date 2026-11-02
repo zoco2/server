@@ -1,6 +1,7 @@
 <?php
 namespace app\api\controller;
 
+use app\api\logic\file\FileLogic;
 use app\common\service\WorkspaceAssetService;
 use app\common\service\UploadService;
 use app\common\enum\FileEnum;
@@ -22,10 +23,12 @@ class WorkspaceAssetController extends BaseApiController
             $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($file->getPathname());
             $ext = strtolower($file->getOriginalExtension());
             if (in_array($ext, ['jpg','jpeg','png','webp','gif'], true) && @getimagesize($file->getPathname())) {
-                return UploadService::image(0, $u, FileEnum::SOURCE_USER);
+                return UploadService::image(FileLogic::uploadCid(FileEnum::IMAGE_TYPE, $this->request->post('cid', 0)), $u, FileEnum::SOURCE_USER);
             }
             if (in_array($ext, ['mp4','mov','webm'], true) && str_starts_with($mime, 'video/')) {
-                return $ext === 'webm' ? UploadService::file(0, $u, FileEnum::SOURCE_USER) : UploadService::video(0, $u, FileEnum::SOURCE_USER);
+                $type = $ext === 'webm' ? FileEnum::FILE_TYPE : FileEnum::VIDEO_TYPE;
+                $cid = FileLogic::uploadCid($type, $this->request->post('cid', 0));
+                return $ext === 'webm' ? UploadService::file($cid, $u, FileEnum::SOURCE_USER) : UploadService::video($cid, $u, FileEnum::SOURCE_USER);
             }
             throw new InvalidArgumentException('请选择支持的图片或视频格式');
         }, true);
