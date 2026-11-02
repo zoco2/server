@@ -1,6 +1,6 @@
 <?php
 
-namespace app\common\service\app\aigc_geo;
+namespace app\common\service\geo;
 
 use app\common\service\ConfigService;
 use Exception;
@@ -60,7 +60,7 @@ class AigcGeoManuscriptService
     ];
 
     /**
-     * 后台查看代发配置。只说明是否已填，不回传密钥和访问令牌。
+     * 后台查看代发配置。回传已保存的 token、key 原文，不返回访问令牌。
      *
      * @param int $tenantId 租户 ID
      * @return array<string, mixed>
@@ -334,6 +334,8 @@ class AigcGeoManuscriptService
     }
 
     /**
+     * 配置接口回传 token、key 原文。访问令牌由后台自行换取和刷新，不给配置页。
+     *
      * @param array<string, mixed> $account 代发账号
      * @return array<string, mixed>
      */
@@ -341,27 +343,11 @@ class AigcGeoManuscriptService
     {
         $token = trim((string)($account['token'] ?? ''));
         $key = trim((string)($account['key'] ?? ''));
-        $issuedAt = (int)($account['open_token_at'] ?? 0);
-        $expireAt = $issuedAt > 0 ? $issuedAt + self::TOKEN_TTL : 0;
         return [
             'configured' => $token !== '' && $key !== '',
-            'token_mask' => self::mask($token),
-            'key_set' => $key !== '',
-            'open_token_at' => $issuedAt,
-            'open_token_expire_at' => $expireAt,
-            'open_token_valid' => $expireAt > time() && trim((string)($account['open_token'] ?? '')) !== '',
+            'token' => $token,
+            'key' => $key,
         ];
-    }
-
-    /**
-     * @param string $value 密钥原文
-     */
-    private static function mask(string $value): string
-    {
-        if ($value === '') {
-            return '';
-        }
-        return '****' . substr($value, -4);
     }
 
     /**

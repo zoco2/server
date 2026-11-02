@@ -1,8 +1,8 @@
 <?php
 
-namespace app\tenantapi\controller\app\aigc_geo;
+namespace app\tenantapi\controller\geo;
 
-use app\common\service\app\aigc_geo\AigcGeoManuscriptService;
+use app\common\service\geo\AigcGeoManuscriptService;
 use app\tenantapi\controller\BaseAdminController;
 use Exception;
 
@@ -12,7 +12,7 @@ use Exception;
 class ManuscriptController extends BaseAdminController
 {
     /**
-     * 查看海讯社账号是否已配置。不返回 token、key 和访问令牌。
+     * 查看已保存的海讯社 token、key。不返回访问令牌。
      */
     public function detail()
     {
