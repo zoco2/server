@@ -20,6 +20,8 @@ class BrandValidate extends BaseValidate
         'address' => 'max:255',
         'logo_url' => 'max:500|checkUrl',
         'cover_url' => 'max:500|checkUrl',
+        'section' => 'require|in:company_intro,products_services,target_customers,competitor_facts',
+        'content' => 'checkContent',
     ];
 
     protected $message = [
@@ -30,6 +32,8 @@ class BrandValidate extends BaseValidate
         'website.checkUrl' => '官方网站需以 http:// 或 https:// 开头',
         'logo_url.checkUrl' => '品牌 Logo 需为 http:// 或 https:// 地址',
         'cover_url.checkUrl' => '品牌封面需为 http:// 或 https:// 地址',
+        'section.require' => '请选择要保存的资料',
+        'section.in' => '资料段落无效',
     ];
 
     /**
@@ -37,7 +41,7 @@ class BrandValidate extends BaseValidate
      */
     public function sceneAdd()
     {
-        return $this->remove('id', 'require|integer|gt:0');
+        return $this->only(['name', 'industry', 'contact_name', 'contact_phone', 'contact_email', 'website', 'address', 'logo_url', 'cover_url']);
     }
 
     /**
@@ -45,7 +49,7 @@ class BrandValidate extends BaseValidate
      */
     public function sceneEdit()
     {
-        return $this;
+        return $this->only(['id', 'name', 'industry', 'contact_name', 'contact_phone', 'contact_email', 'website', 'address', 'logo_url', 'cover_url']);
     }
 
     /**
@@ -65,6 +69,14 @@ class BrandValidate extends BaseValidate
     }
 
     /**
+     * @return BrandValidate
+     */
+    public function sceneSaveSection()
+    {
+        return $this->only(['id', 'section', 'content']);
+    }
+
+    /**
      * @param mixed $value
      * @return bool|string
      */
@@ -76,6 +88,22 @@ class BrandValidate extends BaseValidate
         }
         if (!preg_match('#^https?://#i', $value)) {
             return false;
+        }
+        return true;
+    }
+
+    /**
+     * 允许空字符串，用来清空这一段。
+     * @param mixed $value
+     * @return bool|string
+     */
+    protected function checkContent($value)
+    {
+        if (!is_string($value)) {
+            return '内容格式无效';
+        }
+        if (mb_strlen($value) > 5000) {
+            return '内容不能超过5000个字';
         }
         return true;
     }

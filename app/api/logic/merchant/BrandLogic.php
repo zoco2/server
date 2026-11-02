@@ -12,6 +12,14 @@ use Throwable;
  */
 class BrandLogic extends BaseLogic
 {
+    /** @var array<string, string> 创建后按段单独保存的正文 */
+    private const SECTIONS = [
+        'company_intro' => '企业介绍',
+        'products_services' => '产品与服务',
+        'target_customers' => '目标客户与地区',
+        'competitor_facts' => '竞品与差异事实',
+    ];
+
     /**
      * @return array
      */
@@ -35,7 +43,11 @@ class BrandLogic extends BaseLogic
             self::setError('品牌不存在或无权限');
             return [];
         }
-        return $row->toArray();
+        $data = $row->toArray();
+        foreach (array_keys(self::SECTIONS) as $field) {
+            $data[$field] = (string)($data[$field] ?? '');
+        }
+        return $data;
     }
 
     /**
@@ -49,7 +61,7 @@ class BrandLogic extends BaseLogic
             return false;
         }
         try {
-            MerchantBrand::create(self::fields($params));
+            MerchantBrand::create(self::fields($params) + array_fill_keys(array_keys(self::SECTIONS), ''));
             return true;
         } catch (Throwable $e) {
             self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
@@ -78,6 +90,41 @@ class BrandLogic extends BaseLogic
             return true;
         } catch (Throwable $e) {
             self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
+            return false;
+        }
+    }
+
+    /**
+     * 只更新一段资料正文，不改基本信息。
+     * @param array $params
+     * @return bool
+     */
+    public static function saveSection(array $params): bool
+    {
+        $section = (string)$params['section'];
+        if (!isset(self::SECTIONS[$section])) {
+            self::setError('资料段落无效');
+            return false;
+        }
+        $row = MerchantScope::query(MerchantBrand::class)->where('id', (int)$params['id'])->findOrEmpty();
+        if ($row->isEmpty()) {
+            self::setError('品牌不存在或无权限');
+            return false;
+        }
+        if (!array_key_exists('content', $params)) {
+            self::setError('请填写内容');
+            return false;
+        }
+        $content = trim((string)$params['content']);
+        if (mb_strlen($content) > 5000) {
+            self::setError(self::SECTIONS[$section] . '不能超过5000个字');
+            return false;
+        }
+        try {
+            $row->save([$section => $content]);
+            return true;
+        } catch (Throwable $e) {
+            self::setError('资料保存失败');
             return false;
         }
     }

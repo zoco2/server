@@ -17,6 +17,7 @@ class BrandLists extends BaseApiDataLists
     public function lists(): array
     {
         return $this->query()
+            ->field('id,name,industry,contact_name,contact_phone,contact_email,website,address,logo_url,cover_url,create_time,update_time')
             ->order('id', 'desc')
             ->limit($this->limitOffset, $this->limitLength)
             ->select()

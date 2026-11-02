@@ -51,7 +51,7 @@
 | `page_size` | 否 | 每页条数，默认 25 |
 | `keyword` | 否 | 按品牌名称模糊搜索 |
 
-`data` 为分页结构。`lists` 每项是品牌记录，字段与 `la_merchant_brand` 一致。
+`data` 为分页结构。`lists` 每项是基本信息：`id`、`name`、`industry`、`contact_name`、`contact_phone`、`contact_email`、`website`、`address`、`logo_url`、`cover_url`、`create_time`、`update_time`。四段资料正文只在详情里返回。
 
 ### 下拉
 
@@ -87,11 +87,27 @@
 
 成功：`msg` 为「创建成功」。重名时「品牌名称已存在」。
 
+创建只写上面的基本信息。企业介绍、产品与服务、目标客户与地区、竞品与差异事实此时为空，不作为创建参数。
+
 ### 编辑
 
 `POST /api/merchant.brand/edit`
 
-参数与创建相同，并增加必填 `id`。成功：`msg` 为「保存成功」。
+参数与创建相同，并增加必填 `id`。只更新基本信息，不改四段资料正文。成功：`msg` 为「保存成功」。
+
+### 保存一段资料
+
+`POST /api/merchant.brand/saveSection`
+
+创建完成之后，每次只保存下面四段中的一段。
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 品牌 ID |
+| `section` | 是 | `company_intro` 企业介绍，`products_services` 产品与服务，`target_customers` 目标客户与地区，`competitor_facts` 竞品与差异事实 |
+| `content` | 是 | 正文，最长 5000 字。空字符串表示清空这一段 |
+
+成功：`msg` 为「保存成功」。详情里这四段始终是字符串，未填写时为 `""`。
 
 ### 删除
 

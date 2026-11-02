@@ -71,6 +71,19 @@ class BrandController extends BaseApiController
     }
 
     /**
+     * @notes 保存一段品牌资料
+     * @return \think\response\Json
+     */
+    public function saveSection()
+    {
+        $params = (new BrandValidate())->post()->goCheck('saveSection');
+        if (!BrandLogic::saveSection($params)) {
+            return $this->fail(BrandLogic::getError());
+        }
+        return $this->success('保存成功', [], 1, 1);
+    }
+
+    /**
      * @notes 删除品牌
      * @return \think\response\Json
      */

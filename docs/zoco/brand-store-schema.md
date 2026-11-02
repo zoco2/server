@@ -4,7 +4,7 @@
 
 品牌到门店、门店到员工都是一对多，用外键列表示，不建中间表。
 
-迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。已经按旧脚本建过表的库，再执行 `upgrade/20261031_merchant_soft_delete.sql`。
+迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。已经按旧脚本建过表的库，再执行 `upgrade/20261031_merchant_soft_delete.sql`。已经建过品牌表的库，再执行 `upgrade/20261102_merchant_brand_profile.sql`，补上四段资料正文。
 
 ## 关系
 
@@ -47,6 +47,10 @@
 | `address` | varchar(255) | 联系地址 | |
 | `logo_url` | varchar(500) | 品牌 Logo | 图片 URL。方图，建议 400×400 以上，JPG / PNG / WebP，不超过 5MB |
 | `cover_url` | varchar(500) | 品牌封面 | 图片 URL。横图，建议 1200×500 以上，JPG / PNG / WebP，不超过 5MB |
+| `company_intro` | text，可空 | 企业介绍 | 创建时为空。之后单独保存，最长 5000 字 |
+| `products_services` | text，可空 | 产品与服务 | 创建时为空。之后单独保存，最长 5000 字 |
+| `target_customers` | text，可空 | 目标客户与地区 | 创建时为空。之后单独保存，最长 5000 字 |
+| `competitor_facts` | text，可空 | 竞品与差异事实 | 创建时为空。之后单独保存，最长 5000 字 |
 | `create_time` | int unsigned | — | |
 | `update_time` | int unsigned | — | |
 | `delete_time` | int unsigned，可空 | — | 未删除为 `NULL`。删除时由 `SoftDelete` 写入时间戳 |
