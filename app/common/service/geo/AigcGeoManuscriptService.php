@@ -2,6 +2,7 @@
 
 namespace app\common\service\geo;
 
+use app\common\cache\GeoManuscriptTokenCache;
 use app\common\service\ConfigService;
 use Exception;
 
@@ -85,13 +86,10 @@ class AigcGeoManuscriptService
         if ($token === '' || $key === '') {
             throw new Exception('请填写海讯社 token 和 key');
         }
-        $account = [
-            'token' => $token,
-            'key' => $key,
-            'open_token' => self::issueToken($token, $key),
-            'open_token_at' => time(),
-        ];
+        $openToken = self::issueToken($token, $key);
+        $account = ['token' => $token, 'key' => $key];
         ConfigService::set('geo_manuscript', 'account', $account);
+        (new GeoManuscriptTokenCache())->setAccessToken($tenantId, $openToken, self::TOKEN_TTL);
         return self::present($account);
     }
 
@@ -108,8 +106,10 @@ class AigcGeoManuscriptService
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置海讯社账号');
         }
-        $openToken = trim((string)($account['open_token'] ?? ''));
-        $issuedAt = (int)($account['open_token_at'] ?? 0);
+        $tokenCache = new GeoManuscriptTokenCache();
+        $cached = $tokenCache->getAccessToken($tenantId);
+        $openToken = is_array($cached) ? trim((string)($cached['token'] ?? '')) : '';
+        $issuedAt = is_array($cached) ? (int)($cached['issued_at'] ?? 0) : 0;
         if ($openToken !== '' && $issuedAt > 0 && time() < $issuedAt + self::TOKEN_TTL - self::TOKEN_REFRESH_AHEAD) {
             return $openToken;
         }
@@ -122,9 +122,7 @@ class AigcGeoManuscriptService
                 $next = self::issueToken($accountToken, $accountKey);
             }
         }
-        $account['open_token'] = $next;
-        $account['open_token_at'] = time();
-        ConfigService::set('geo_manuscript', 'account', $account);
+        $tokenCache->setAccessToken($tenantId, $next, self::TOKEN_TTL);
         return $next;
     }
 
