@@ -120,7 +120,9 @@ class BaseModel extends Model
     {
         $tenantId = self::checkTenant() ?: self::checkUser();
         if ($tenantId) {
-            if (self::$hasTenantId) {
+            $connection = $model->db()->getConnection();
+            $fields = $connection->getTableFields($model->getTable());
+            if (in_array('tenant_id', $fields)) {
                 $model->tenant_id = $tenantId;
             }
         }
@@ -137,7 +139,9 @@ class BaseModel extends Model
     {
         $tenantId = self::checkTenant() ?: self::checkUser();
         if ($tenantId) {
-            if (self::$hasTenantId) {
+            $connection = $model->db()->getConnection();
+            $fields = $connection->getTableFields($model->getTable());
+            if (in_array('tenant_id', $fields)) {
                 $model->tenant_id = $tenantId;
             }
         }
