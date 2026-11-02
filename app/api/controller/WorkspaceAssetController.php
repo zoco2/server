@@ -11,7 +11,7 @@ class WorkspaceAssetController extends BaseApiController
 {
     public function canvas() { return $this->respond(fn($t, $u) => \app\common\service\WorkspaceCanvasAssetService::lists($t, $u, (int)$this->request->get('page_no', 1), (string)$this->request->get('kind', 'task'))); }
     public function state() { return $this->respond(fn($t, $u) => WorkspaceAssetService::read($t, $u)); }
-    public function uploads() { return $this->respond(fn($t, $u) => WorkspaceAssetService::uploads($t, $u, min(10000, max(1, (int)$this->request->get('page_no', 1))))); }
+    public function uploads() { return $this->respond(fn($t, $u) => WorkspaceAssetService::uploads($t, $u, min(10000, max(1, (int)$this->request->get('page_no', 1))), $this->request->get('cid'))); }
     public function update() { return $this->respond(fn($t, $u) => WorkspaceAssetService::update($t, $u, $this->request->post()), true); }
     public function label() { return $this->respond(fn($t, $u) => \app\common\service\WorkspaceAssetLabelService::change($t, $u, $this->request->post()), true); }
     public function upload()
