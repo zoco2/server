@@ -1808,7 +1808,7 @@ VALUES (5, 0, 0, 'C', '工作台', 'el-icon-Monitor', 1000, 'workbench/index', '
         1, 0, 1656664793, 1664354981);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (6, 0, 4, 'C', '菜单', 'el-icon-Operation', 100, 'auth.menu/lists', 'menu', 'permission/menu/index', '', '', 1,
-        1, 0, 1656664960, 1710472994);
+        0, 0, 1656664960, 1710472994);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (7, 0, 4, 'C', '管理员', 'local-icon-shouyiren', 80, 'auth.admin/lists', 'admin', 'permission/admin/index', '',
         '', 0, 1, 0, 1656901567, 1710473013);
@@ -1822,11 +1822,11 @@ VALUES (14, 0, 8, 'A', '编辑', '', 1, 'auth.role/edit', '', '', '', '', 0, 1, 
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (15, 0, 8, 'A', '删除', '', 1, 'auth.role/delete', '', '', '', '', 0, 1, 0, 1657001982, 1663750637);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
-VALUES (16, 0, 6, 'A', '新增', '', 1, 'auth.menu/add', '', '', '', '', 0, 1, 0, 1657072523, 1663750565);
+VALUES (16, 0, 6, 'A', '新增', '', 1, 'auth.menu/add', '', '', '', '', 0, 0, 0, 1657072523, 1663750565);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
-VALUES (17, 0, 6, 'A', '编辑', '', 1, 'auth.menu/edit', '', '', '', '', 0, 1, 0, 1657073955, 1663750570);
+VALUES (17, 0, 6, 'A', '编辑', '', 1, 'auth.menu/edit', '', '', '', '', 0, 0, 0, 1657073955, 1663750570);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
-VALUES (18, 0, 6, 'A', '删除', '', 1, 'auth.menu/delete', '', '', '', '', 0, 1, 0, 1657073987, 1663750578);
+VALUES (18, 0, 6, 'A', '删除', '', 1, 'auth.menu/delete', '', '', '', '', 0, 0, 0, 1657073987, 1663750578);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (19, 0, 7, 'A', '新增', '', 1, 'auth.admin/add', '', '', '', '', 0, 1, 0, 1657074035, 1663750596);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
@@ -1907,7 +1907,7 @@ VALUES (66, 0, 26, 'A', '详情', '', 0, 'dept.dept/detail', '', '', '', '', 0, 
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (67, 0, 27, 'A', '详情', '', 0, 'dept.jobs/detail', '', '', '', '', 0, 1, 0, 1663725514, 1663750559);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
-VALUES (68, 0, 6, 'A', '详情', '', 0, 'auth.menu/detail', '', '', '', '', 0, 1, 0, 1663725564, 1663750584);
+VALUES (68, 0, 6, 'A', '详情', '', 0, 'auth.menu/detail', '', '', '', '', 0, 0, 0, 1663725564, 1663750584);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
 VALUES (69, 0, 7, 'A', '详情', '', 0, 'auth.admin/detail', '', '', '', '', 0, 1, 0, 1663725623, 1663750615);
 INSERT INTO `la_tenant_system_menu` (`id`, `tenant_id`, `pid`, `type`, `name`, `icon`, `sort`, `perms`, `paths`, `component`, `selected`, `params`, `is_cache`, `is_show`, `is_disable`, `create_time`, `update_time`)
