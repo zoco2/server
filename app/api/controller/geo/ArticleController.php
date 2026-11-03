@@ -40,7 +40,9 @@ class ArticleController extends BaseApiController
     public function save()
     {
         try {
-            return $this->success('保存成功', GeoArticleService::save($this->userId, $this->request->post()), 1, 1);
+            $data = GeoArticleService::save($this->userId, $this->request->post());
+            // 前端要把保存后的 id / 预览地址直接用于投稿，不给 show=0 以免被静默处理。
+            return $this->success('保存成功', $data);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }

@@ -53,5 +53,7 @@ return [
         // 短剧任务提示词修复
         'short-drama:repair-prompts' => 'app\common\command\RepairShortDramaPrompts',
         'short-drama:dedupe-assets' => 'app\common\command\RepairShortDramaDuplicateAssets',
+        // 智能剪辑（阿里云 IMS）轮询
+        'smart-edit:worker' => 'app\common\command\SmartEditWorker',
     ],
 ];
