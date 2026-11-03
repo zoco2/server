@@ -55,5 +55,7 @@ return [
         'short-drama:dedupe-assets' => 'app\common\command\RepairShortDramaDuplicateAssets',
         // 智能剪辑（阿里云 IMS）轮询
         'smart-edit:worker' => 'app\common\command\SmartEditWorker',
+        // Workerman 常驻服务（最小示例）
+        'workerman' => 'app\common\command\Workerman',
     ],
 ];
