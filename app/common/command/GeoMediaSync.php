@@ -26,7 +26,9 @@ class GeoMediaSync extends Command
         $this->setName('geo:media-sync')
             ->addOption('tenant', 't', Option::VALUE_REQUIRED, '租户ID，不传则遍历已配置海讯账号的租户')
             ->addOption('type', null, Option::VALUE_REQUIRED, '资源类型，多个用逗号分隔，默认全部')
+            ->addOption('limit', null, Option::VALUE_REQUIRED, '每个类型最多处理多少条，0 或不传不限')
             ->addOption('state', null, Option::VALUE_NONE, '额外用 stateON 校正本次资源的上下架状态')
+            ->addOption('quiet', null, Option::VALUE_NONE, '不输出进度，只输出类型汇总')
             ->setDescription('同步海讯社媒体资源到本地 la_geo_media');
     }
 
@@ -34,7 +36,9 @@ class GeoMediaSync extends Command
     {
         $tenantId = (int)$input->getOption('tenant');
         $types = $this->parseTypes((string)$input->getOption('type'));
+        $limit = max(0, (int)$input->getOption('limit'));
         $withState = (bool)$input->getOption('state');
+        $quiet = (bool)$input->getOption('quiet');
 
         $tenantIds = $tenantId > 0 ? [$tenantId] : $this->configuredTenants();
         if ($tenantIds === []) {
@@ -47,7 +51,14 @@ class GeoMediaSync extends Command
             $this->bindTenant($id);
             $output->writeln(sprintf('<info>租户 %d 开始同步</info>', $id));
             try {
-                $result = GeoMediaSyncService::syncAll($id, $types);
+                $startedAt = microtime(true);
+                $result = GeoMediaSyncService::syncAll(
+                    $id,
+                    $types,
+                    true,
+                    $limit,
+                    $quiet ? null : $this->progressWriter($output)
+                );
             } catch (\Throwable $e) {
                 $output->writeln('<error>同步失败：' . $e->getMessage() . '</error>');
                 $this->restoreTenant();
@@ -66,6 +77,9 @@ class GeoMediaSync extends Command
                     $row['updated'],
                     $row['gone']
                 ));
+                if (!empty($row['limited'])) {
+                    $output->writeln('    已达到 --limit 上限，未做下线标记；建议去掉 limit 跑完整同步');
+                }
             }
             if ($withState) {
                 // 全局作用域已经限制在当前租户，这里不再重复带 tenant_id。
@@ -76,6 +90,7 @@ class GeoMediaSync extends Command
                 $state = GeoMediaSyncService::refreshStates($id, $ids);
                 $output->writeln(sprintf('  状态校正：检查 %d，下架 %d，已删除 %d', $state['checked'], $state['down'], $state['removed']));
             }
+            $output->writeln(sprintf('<info>租户 %d 同步结束，耗时 %.1fs</info>', $id, microtime(true) - $startedAt));
             $this->restoreTenant();
         }
         return 0;
@@ -122,6 +137,31 @@ class GeoMediaSync extends Command
         $request->source = $this->restore['source'];
         $request->tenantResolveMode = $this->restore['tenantResolveMode'];
         $this->restore = null;
+    }
+
+    /**
+     * 每页输出一行进度。
+     *
+     * @param Output $output 控制台
+     * @return callable
+     */
+    private function progressWriter(Output $output): callable
+    {
+        $lastType = -1;
+        return static function (array $p) use ($output, &$lastType): void {
+            if ($lastType !== $p['type']) {
+                $lastType = $p['type'];
+                $output->writeln(sprintf('  类型 %d（%s）共 %d 条', $p['type'], GeoMediaSyncService::RESOURCE_TYPES[$p['type']] ?? '', $p['total']));
+            }
+            $output->writeln(sprintf(
+                '    第 %d/%d 页：已处理 %d，新增 %d，更新 %d',
+                $p['page'],
+                $p['pages'],
+                $p['processed'],
+                $p['created'],
+                $p['updated']
+            ));
+        };
     }
 
     /**

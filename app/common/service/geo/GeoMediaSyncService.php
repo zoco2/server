@@ -31,21 +31,32 @@ class GeoMediaSyncService
      *
      * @param int $tenantId 租户 ID
      * @param int $type 资源类型 1~15
-     * @param array{full?:bool} $options full=true 时把本次未出现的资源标记为 gone
-     * @return array{type:int, total:int, created:int, updated:int, gone:int, pages:int}
+     * @param bool $markMissing 本次未出现的资源是否标记 gone（数据必须完整同步过一次才开）
+     * @param int $limit 最多处理多少条，0 表示不限，用于试跑或控制数据量
+     * @param callable|null $onProgress 进度回调 fn(array $progress): void
+     * @return array{type:int, total:int, created:int, updated:int, gone:int, pages:int, processed:int, limited:bool}
      */
-    public static function syncType(int $tenantId, int $type, array $options = []): array
-    {
+    public static function syncType(
+        int $tenantId,
+        int $type,
+        bool $markMissing = false,
+        int $limit = 0,
+        ?callable $onProgress = null
+    ): array {
         if (!isset(self::RESOURCE_TYPES[$type])) {
             throw new Exception('资源类型无效');
         }
         $openToken = AigcGeoManuscriptService::accessToken($tenantId);
+        $limit = max(0, $limit);
         $seen = [];
         $created = 0;
         $updated = 0;
+        $processed = 0;
         $total = 0;
         $page = 1;
         $pages = 0;
+        $pagesTotal = 1;
+        $limited = false;
 
         do {
             $payload = self::fetchPage($openToken, $type, $page);
@@ -53,7 +64,24 @@ class GeoMediaSyncService
             // data.list 可能是对象（海讯偶尔按 sourceid 做 key），统一成列表。
             $list = array_values(is_array($payload['list']) ? $payload['list'] : []);
             $pages++;
+            $pagesTotal = max(1, (int)ceil($total / self::PAGE_SIZE));
+            if ($onProgress !== null) {
+                $onProgress([
+                    'phase' => 'page',
+                    'type' => $type,
+                    'page' => $page,
+                    'pages' => $pagesTotal,
+                    'total' => $total,
+                    'processed' => $processed,
+                    'created' => $created,
+                    'updated' => $updated,
+                ]);
+            }
             foreach ($list as $row) {
+                if ($limit > 0 && $processed >= $limit) {
+                    $limited = true;
+                    break 2;
+                }
                 if (!is_array($row)) {
                     continue;
                 }
@@ -62,6 +90,7 @@ class GeoMediaSyncService
                     continue;
                 }
                 $seen[$sourceid] = true;
+                $processed++;
                 if (self::saveRow($tenantId, $type, $sourceid, $row)) {
                     $created++;
                 } else {
@@ -69,10 +98,11 @@ class GeoMediaSyncService
                 }
             }
             $page++;
-        } while ($list !== [] && $page <= max(1, (int)ceil($total / self::PAGE_SIZE)) && $page <= 200);
+        } while ($list !== [] && $page <= $pagesTotal && $page <= 200);
 
         $gone = 0;
-        if (!empty($options['full']) && $seen !== []) {
+        // 限制条数时数据不完整，不能判断哪些资源已经下线。
+        if ($markMissing && !$limited && $seen !== []) {
             $gone = self::markGone($tenantId, $type, array_keys($seen));
         }
 
@@ -83,6 +113,8 @@ class GeoMediaSyncService
             'updated' => $updated,
             'gone' => $gone,
             'pages' => $pages,
+            'processed' => $processed,
+            'limited' => $limited,
         ];
     }
 
@@ -124,19 +156,27 @@ class GeoMediaSyncService
     }
 
     /**
-     * 同步全部 15 类资源。
+     * 同步多类资源。
      *
      * @param int $tenantId 租户 ID
      * @param array<int> $types 指定类型；空数组表示全部
+     * @param bool $markMissing 本次未出现的资源是否标记 gone
+     * @param int $limit 每类最多处理多少条，0 表示不限
+     * @param callable|null $onProgress 进度回调
      * @return array<int, array<string, mixed>>
      */
-    public static function syncAll(int $tenantId, array $types = []): array
-    {
+    public static function syncAll(
+        int $tenantId,
+        array $types = [],
+        bool $markMissing = true,
+        int $limit = 0,
+        ?callable $onProgress = null
+    ): array {
         $types = $types === [] ? array_keys(self::RESOURCE_TYPES) : $types;
         $result = [];
         foreach ($types as $type) {
             try {
-                $result[$type] = self::syncType($tenantId, (int)$type, ['full' => true]);
+                $result[$type] = self::syncType($tenantId, (int)$type, $markMissing, $limit, $onProgress);
             } catch (Throwable $e) {
                 $result[$type] = [
                     'type' => (int)$type,

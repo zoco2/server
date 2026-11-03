@@ -59,14 +59,15 @@ class GeoMediaLogic extends BaseLogic
      *
      * @param int $tenantId 租户 ID
      * @param int $type 资源类型
+     * @param int $limit 最多处理条数，0 表示不限（后台接口默认 1000，避免请求超时）
      * @return array<string, mixed>
      */
-    public static function sync(int $tenantId, int $type): array
+    public static function sync(int $tenantId, int $type, int $limit = 1000): array
     {
         if ($type <= 0) {
             throw new Exception('请选择资源类型');
         }
-        return GeoMediaSyncService::syncType($tenantId, $type, ['full' => true]);
+        return GeoMediaSyncService::syncType($tenantId, $type, true, $limit);
     }
 
     /**

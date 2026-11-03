@@ -31,7 +31,11 @@ class MediaController extends BaseAdminController
     public function sync()
     {
         try {
-            return $this->success('同步完成', GeoMediaLogic::sync($this->tenantId, (int)$this->request->post('type', 0)), 1, 1);
+            return $this->success('同步完成', GeoMediaLogic::sync(
+                $this->tenantId,
+                (int)$this->request->post('type', 0),
+                (int)$this->request->post('limit', 1000)
+            ), 1, 1);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
