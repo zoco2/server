@@ -42,10 +42,12 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
             ->order($this->sortOrder)
             ->select()
             ->toArray();
-        // sale_price / price_types 是模型 getter 实时计算的，只读结果里再挂上租户默认倍率方便前端展示。
+        // 售价不落库：按行级倍率（0 用租户默认）在这里补成成交后的值，供前端直接展示与排序。
         $markup = GeoMediaSyncService::markup();
         foreach ($rows as &$row) {
-            $row['effective_ratio'] = (float)($row['price_ratio'] ?? 0) > 0 ? (float)$row['price_ratio'] : $markup;
+            $ratio = (float)($row['price_ratio'] ?? 0) > 0 ? (float)$row['price_ratio'] : $markup;
+            $row['effective_ratio'] = $ratio;
+            $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
         }
         unset($row);
         return $rows;

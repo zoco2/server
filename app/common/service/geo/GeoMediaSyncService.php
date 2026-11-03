@@ -243,7 +243,7 @@ class GeoMediaSyncService
             'caseurl' => self::text($row['caseurl'] ?? '', 500),
             'remark' => self::text($row['remark'] ?? '', 500),
             'costprice' => $cost,
-            'price_type_json' => self::priceTypes($row),
+            'price_types' => self::priceTypes($row),
             'linktype' => (int)($row['linktype'] ?? 0),
             'publishtime' => (int)($row['publishtime'] ?? 0),
             'newsresource' => (int)($row['newsresource'] ?? 0),
@@ -256,6 +256,8 @@ class GeoMediaSyncService
             'flag' => (int)($row['flag'] ?? 1),
             'deleted' => (int)($row['deleted'] ?? 1),
             'sync_status' => 'synced',
+            // json 字段要通过 $json 声明的字段名写入，直接写 price_type_json / detail_json
+            // 会被 Builder 当成普通数组，赋值时对空数组取下标 [0] 报错。
             'detail_json' => $row,
             'last_sync_time' => time(),
             'update_time' => time(),
