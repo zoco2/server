@@ -17,6 +17,8 @@ return [
         'brand:maintain' => 'app\\common\\command\\BrandMaintain',
         'decoration:agent-worker' => 'app\\common\\command\\DecorationAgentWorker',
         'open-platform:worker' => 'app\\common\\command\\OpenPlatformWorker',
+        // GEO 海讯社媒体资源同步
+        'geo:media-sync' => 'app\\common\\command\\GeoMediaSync',
         'short-drama:episode-worker' => 'app\common\command\ShortDramaEpisodeWorker',
         'short-drama:planning-worker' => 'app\common\command\ShortDramaPlanningWorker',
         'short-drama:reconcile-planning' => 'app\common\command\ReconcileShortDramaPlanning',
