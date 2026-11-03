@@ -24,7 +24,7 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
 
     public function setSortFields(): array
     {
-        return ['id' => 'id', 'costprice' => 'costprice', 'sale_price' => 'sale_price', 'update_time' => 'update_time'];
+        return ['id' => 'id', 'costprice' => 'costprice', 'price_ratio' => 'price_ratio', 'update_time' => 'update_time'];
     }
 
     public function setDefaultOrder(): array
@@ -36,11 +36,19 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
     {
         $query = GeoMedia::where($this->searchWhere);
         $this->applyExtra($query);
-        return $query
+        $rows = $query
+            ->field(GeoMedia::OUTPUT_FIELDS)
             ->limit($this->limitOffset, $this->limitLength)
             ->order($this->sortOrder)
             ->select()
             ->toArray();
+        // sale_price / price_types 是模型 getter 实时计算的，只读结果里再挂上租户默认倍率方便前端展示。
+        $markup = GeoMediaSyncService::markup();
+        foreach ($rows as &$row) {
+            $row['effective_ratio'] = (float)($row['price_ratio'] ?? 0) > 0 ? (float)$row['price_ratio'] : $markup;
+        }
+        unset($row);
+        return $rows;
     }
 
     public function count(): int
@@ -64,13 +72,15 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
      */
     private function applyExtra($query): void
     {
+        // 售价不落库，价格区间直接按 成本×行倍率（0 用租户默认） 计算。
+        $markup = GeoMediaSyncService::markup();
         $minPrice = $this->params['min_price'] ?? '';
         $maxPrice = $this->params['max_price'] ?? '';
-        if (is_numeric($minPrice)) {
-            $query->where('sale_price', '>=', (float)$minPrice);
+        if (is_numeric($minPrice) && (float)$minPrice > 0) {
+            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) >= ?', [$markup, (float)$minPrice]);
         }
-        if (is_numeric($maxPrice)) {
-            $query->where('sale_price', '<=', (float)$maxPrice);
+        if (is_numeric($maxPrice) && (float)$maxPrice > 0) {
+            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) <= ?', [$markup, (float)$maxPrice]);
         }
         // 默认只显示海讯在架、未删除且未被本地隐藏的资源。
         if (($this->params['show_all'] ?? '0') !== '1') {

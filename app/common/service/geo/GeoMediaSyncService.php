@@ -39,7 +39,6 @@ class GeoMediaSyncService
             throw new Exception('资源类型无效');
         }
         $openToken = AigcGeoManuscriptService::accessToken($tenantId);
-        $markup = self::markup($tenantId);
         $seen = [];
         $created = 0;
         $updated = 0;
@@ -61,7 +60,7 @@ class GeoMediaSyncService
                     continue;
                 }
                 $seen[$sourceid] = true;
-                if (self::saveRow($tenantId, $type, $sourceid, $row, $markup)) {
+                if (self::saveRow($tenantId, $type, $sourceid, $row)) {
                     $created++;
                 } else {
                     $updated++;
@@ -112,7 +111,7 @@ class GeoMediaSyncService
             $checked++;
             $down += $state['flag'] === 1 ? 0 : 1;
             $removed += $state['deleted'] === 1 ? 0 : 1;
-            GeoMedia::where(['tenant_id' => $tenantId, 'sourceid' => $sourceId])->update([
+            GeoMedia::where(['sourceid' => $sourceId])->update([
                 'flag' => $state['flag'],
                 'deleted' => $state['deleted'],
                 'sync_status' => $state['available'] ? 'synced' : ($state['deleted'] === 1 ? 'stale' : 'gone'),
@@ -144,15 +143,40 @@ class GeoMediaSyncService
     }
 
     /**
-     * 租户加成倍率，配置在 geo_manuscript.markup，默认 1.0。
-     *
-     * @param int $tenantId 租户 ID
+     * 租户默认加成倍率，配置在 geo_manuscript.markup，默认 1.0。
+     * 资源行若单独设置了 price_ratio（大于 0）则优先用行上的值。
      */
-    public static function markup(int $tenantId): float
+    public static function markup(?int $tenantId = null): float
     {
-        $value = ConfigService::get('geo_manuscript', 'markup', 1);
+        $tenantId = $tenantId ?: (int)request()->tenantId;
+        $value = self::tenantConfig($tenantId, 'markup');
         $markup = is_numeric($value) ? (float)$value : 1.0;
         return $markup > 0 ? $markup : 1.0;
+    }
+
+    /**
+     * 读租户级配置。ConfigService 依赖 request()->tenantId，
+     * 命令行/轮询任务里没有请求上下文时直接按 tenant_id 查 la_tenant_config。
+     *
+     * @param int $tenantId 租户 ID
+     * @param string $name 配置名
+     * @param mixed $default 默认值
+     * @param string $type 配置类型，默认 geo_manuscript
+     * @return mixed
+     */
+    public static function tenantConfig(int $tenantId, string $name, mixed $default = null, string $type = 'geo_manuscript'): mixed
+    {
+        if ($tenantId > 0 && (int)(request()->tenantId ?? 0) !== $tenantId) {
+            $value = \think\facade\Db::name('tenant_config')
+                ->where(['tenant_id' => $tenantId, 'type' => $type, 'name' => $name])
+                ->value('value');
+            if ($value === null) {
+                return $default;
+            }
+            $json = json_decode((string)$value, true);
+            return json_last_error() === JSON_ERROR_NONE ? $json : $value;
+        }
+        return ConfigService::get($type, $name, $default);
     }
 
     /**
@@ -195,10 +219,9 @@ class GeoMediaSyncService
      * @param int $type 资源类型
      * @param string $sourceid 海讯资源ID
      * @param array<string, mixed> $row 海讯原始行
-     * @param float $markup 租户倍率
      * @return bool true=新建，false=更新
      */
-    private static function saveRow(int $tenantId, int $type, string $sourceid, array $row, float $markup): bool
+    private static function saveRow(int $tenantId, int $type, string $sourceid, array $row): bool
     {
         $cost = round((float)($row['costprice'] ?? 0), 2);
         $data = [
@@ -232,18 +255,11 @@ class GeoMediaSyncService
             'last_sync_time' => time(),
             'update_time' => time(),
         ];
-        $exists = GeoMedia::where(['tenant_id' => $tenantId, 'sourceid' => $sourceid])->findOrEmpty();
+        $exists = GeoMedia::where(['sourceid' => $sourceid])->findOrEmpty();
         if ($exists->isEmpty()) {
-            $data['sale_price'] = self::suggestSalePrice($cost, $markup);
             $data['create_time'] = time();
             GeoMedia::create($data);
             return true;
-        }
-        // 成本变了、且售价仍是上一轮建议价（未被手工改过）时跟随刷新。
-        $oldCost = (float)$exists['costprice'];
-        $oldSale = (float)$exists['sale_price'];
-        if ($oldCost !== $cost && abs($oldSale - self::suggestSalePrice($oldCost, $markup)) < 0.005) {
-            $data['sale_price'] = self::suggestSalePrice($cost, $markup);
         }
         unset($data['detail_json']);
         $exists->save($data);
@@ -259,7 +275,7 @@ class GeoMediaSyncService
      */
     private static function markGone(int $tenantId, int $type, array $seenIds): int
     {
-        $query = GeoMedia::where(['tenant_id' => $tenantId, 'resource_type' => $type])
+        $query = GeoMedia::where(['resource_type' => $type])
             ->where('sync_status', '<>', 'gone');
         if ($seenIds !== []) {
             $query->whereNotIn('sourceid', $seenIds);

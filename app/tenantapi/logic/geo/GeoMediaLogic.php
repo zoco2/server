@@ -20,14 +20,25 @@ class GeoMediaLogic extends BaseLogic
      */
     public static function types(): array
     {
+        // 全局作用域已按当前租户过滤，这里不再重复写 tenant_id。
+        // 售价不落库，按成本 × 倍率在内存里算区间。
         $rows = GeoMedia::where(['flag' => 1, 'deleted' => 1, 'local_hidden' => 0])
-            ->field('resource_type, COUNT(*) AS total, MIN(sale_price) AS min_price, MAX(sale_price) AS max_price')
-            ->group('resource_type')
+            ->field('resource_type, costprice, price_ratio')
             ->select()
             ->toArray();
+        $defaultRatio = GeoMediaSyncService::markup();
         $counts = [];
         foreach ($rows as $row) {
-            $counts[(int)$row['resource_type']] = $row;
+            $type = (int)$row['resource_type'];
+            $ratio = (float)($row['price_ratio'] ?? 0);
+            $ratio = $ratio > 0 ? $ratio : $defaultRatio;
+            $sale = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
+            if (!isset($counts[$type])) {
+                $counts[$type] = ['total' => 0, 'min_price' => $sale, 'max_price' => $sale];
+            }
+            $counts[$type]['total']++;
+            $counts[$type]['min_price'] = min($counts[$type]['min_price'], $sale);
+            $counts[$type]['max_price'] = max($counts[$type]['max_price'], $sale);
         }
         $result = [];
         foreach (GeoMediaSyncService::RESOURCE_TYPES as $type => $name) {
@@ -59,26 +70,26 @@ class GeoMediaLogic extends BaseLogic
     }
 
     /**
-     * 设置单个资源售价与本地隐藏。
+     * 设置单个资源倍率与本地隐藏。售价由成本 × 倍率实时计算，不落库。
      *
      * @param int $tenantId 租户 ID
-     * @param array<string, mixed> $params id、sale_price、local_hidden
+     * @param array<string, mixed> $params id、price_ratio(0=用租户默认)、local_hidden
      * @return array<string, mixed>
      */
     public static function update(int $tenantId, array $params): array
     {
         $id = (int)($params['id'] ?? 0);
-        $row = GeoMedia::where(['tenant_id' => $tenantId, 'id' => $id])->findOrEmpty();
+        $row = GeoMedia::where(['id' => $id])->findOrEmpty();
         if ($row->isEmpty()) {
             throw new Exception('资源不存在');
         }
         $data = ['update_time' => time()];
-        if (array_key_exists('sale_price', $params)) {
-            $salePrice = (float)$params['sale_price'];
-            if ($salePrice < 0) {
-                throw new Exception('售价不能小于 0');
+        if (array_key_exists('price_ratio', $params)) {
+            $ratio = (float)$params['price_ratio'];
+            if ($ratio < 0 || $ratio > 100) {
+                throw new Exception('倍率需在 0~100 之间，0 表示使用租户默认倍率');
             }
-            $data['sale_price'] = round($salePrice, 2);
+            $data['price_ratio'] = round($ratio, 3);
         }
         if (array_key_exists('local_hidden', $params)) {
             $data['local_hidden'] = (int)$params['local_hidden'] ? 1 : 0;
@@ -103,7 +114,7 @@ class GeoMediaLogic extends BaseLogic
         if (count($ids) > 50) {
             throw new Exception('单次最多校正 50 条');
         }
-        $sourceIds = GeoMedia::where(['tenant_id' => $tenantId])->whereIn('id', $ids)->column('sourceid');
+        $sourceIds = GeoMedia::whereIn('id', $ids)->column('sourceid');
         return GeoMediaSyncService::refreshStates($tenantId, $sourceIds);
     }
 

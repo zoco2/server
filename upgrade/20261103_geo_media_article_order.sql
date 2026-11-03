@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS `la_geo_media` (
   `caseurl` varchar(500) NOT NULL DEFAULT '' COMMENT '案例地址',
   `remark` varchar(500) NOT NULL DEFAULT '' COMMENT '备注',
   `costprice` decimal(12,2) NOT NULL DEFAULT 0.00 COMMENT '海讯成本价，建单price必须与海讯最新价相等',
-  `sale_price` decimal(12,2) NOT NULL DEFAULT 0.00 COMMENT '售价=成本×租户倍率，可单独覆盖',
+  `price_ratio` decimal(8,3) NOT NULL DEFAULT 0.000 COMMENT '售价加成倍率，0表示取租户默认，售价=成本×倍率实时计算不落库',
   `price_type_json` text NULL COMMENT '多价格类别[{type,label,price}]',
   `linktype` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '链接类型2可带网址0不可带网址',
   `publishtime` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '发稿速度1一小时2二小时12半天24当天48隔天49两天以上',

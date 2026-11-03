@@ -68,7 +68,7 @@ class AigcGeoManuscriptService
      */
     public static function configDetail(int $tenantId): array
     {
-        return self::present(self::account());
+        return self::present(self::account($tenantId));
     }
 
     /**
@@ -80,7 +80,7 @@ class AigcGeoManuscriptService
      */
     public static function saveConfig(int $tenantId, array $params): array
     {
-        $current = self::account();
+        $current = self::account($tenantId);
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
         $key = self::incomingSecret($params, 'key', (string)($current['key'] ?? ''));
         if ($token === '' || $key === '') {
@@ -100,7 +100,7 @@ class AigcGeoManuscriptService
      */
     public static function accessToken(int $tenantId): string
     {
-        $account = self::account();
+        $account = self::account($tenantId);
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
@@ -311,9 +311,11 @@ class AigcGeoManuscriptService
      *
      * @return array<string, mixed>
      */
-    private static function account(): array
+    private static function account(int $tenantId = 0): array
     {
-        $value = ConfigService::get('geo_manuscript', 'account', []);
+        $value = $tenantId > 0
+            ? GeoMediaSyncService::tenantConfig($tenantId, 'account', [])
+            : ConfigService::get('geo_manuscript', 'account', []);
         return is_array($value) ? $value : [];
     }
 

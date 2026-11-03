@@ -18,6 +18,9 @@ use think\console\Output;
  */
 class GeoMediaSync extends Command
 {
+    /** @var array<string, mixed>|null 绑定前的请求上下文，用于结束后还原 */
+    private ?array $restore = null;
+
     protected function configure()
     {
         $this->setName('geo:media-sync')
@@ -40,11 +43,14 @@ class GeoMediaSync extends Command
         }
 
         foreach ($tenantIds as $id) {
+            // 命令行没有请求中间件，先模拟租户访问上下文，否则 ConfigService 读不到租户配置。
+            $this->bindTenant($id);
             $output->writeln(sprintf('<info>租户 %d 开始同步</info>', $id));
             try {
                 $result = GeoMediaSyncService::syncAll($id, $types);
             } catch (\Throwable $e) {
                 $output->writeln('<error>同步失败：' . $e->getMessage() . '</error>');
+                $this->restoreTenant();
                 continue;
             }
             foreach ($result as $type => $row) {
@@ -62,16 +68,60 @@ class GeoMediaSync extends Command
                 ));
             }
             if ($withState) {
-                $ids = (array)\app\common\model\geo\GeoMedia::where(['tenant_id' => $id])
-                    ->where('sync_status', '<>', 'gone')
+                // 全局作用域已经限制在当前租户，这里不再重复带 tenant_id。
+                $ids = (array)\app\common\model\geo\GeoMedia::where('sync_status', '<>', 'gone')
                     ->order('last_sync_time', 'desc')
                     ->limit(200)
                     ->column('sourceid');
                 $state = GeoMediaSyncService::refreshStates($id, $ids);
                 $output->writeln(sprintf('  状态校正：检查 %d，下架 %d，已删除 %d', $state['checked'], $state['down'], $state['removed']));
             }
+            $this->restoreTenant();
         }
         return 0;
+    }
+
+    /**
+     * 模拟租户访问上下文。与 LikeAdminAllowMiddleware 解析到租户后的状态保持一致，
+     * 这样 ConfigService / BaseModel 全局租户作用域 / AdminTerminalEnum 都按租户端工作。
+     *
+     * @param int $tenantId 租户 ID
+     */
+    private function bindTenant(int $tenantId): void
+    {
+        $tenant = \app\common\model\tenant\Tenant::where('id', $tenantId)->findOrEmpty();
+        if ($tenant->isEmpty()) {
+            throw new \RuntimeException('租户不存在：' . $tenantId);
+        }
+        $request = request();
+        $this->restore = [
+            'tenantId' => $request->tenantId ?? null,
+            'tenantSn' => $request->tenantSn ?? null,
+            'source' => $request->source ?? null,
+            'tenantResolveMode' => $request->tenantResolveMode ?? null,
+        ];
+        $request->tenantId = (int)$tenant->id;
+        $request->tenantSn = (string)$tenant->sn;
+        $request->tenantResolveMode = 'console';
+        // 租户端入口：AdminTerminalEnum::isTenant() / BaseModel::checkTenant() 都依赖 source，
+        // 命令行默认没有 source，会被当成平台端去读 la_config。
+        $request->source = \app\common\enum\AdminTerminalEnum::TENANT;
+    }
+
+    /**
+     * 同步结束后还原请求上下文，避免多租户循环时串号。
+     */
+    private function restoreTenant(): void
+    {
+        if ($this->restore === null) {
+            return;
+        }
+        $request = request();
+        $request->tenantId = $this->restore['tenantId'];
+        $request->tenantSn = $this->restore['tenantSn'];
+        $request->source = $this->restore['source'];
+        $request->tenantResolveMode = $this->restore['tenantResolveMode'];
+        $this->restore = null;
     }
 
     /**
@@ -83,7 +133,8 @@ class GeoMediaSync extends Command
         if (trim($value) === '') {
             return [];
         }
-        return array_values(array_filter(array_map('intval', explode(',', $value)), static fn(int $type): bool => isset(GeoMediaSyncService::RESOURCE_TYPES[$type])));
+        $types = array_map('intval', explode(',', $value));
+        return array_values(array_filter($types, static fn(int $type): bool => isset(GeoMediaSyncService::RESOURCE_TYPES[$type])));
     }
 
     /**
