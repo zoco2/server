@@ -28,7 +28,7 @@ class GeoMediaSync extends Command
             ->addOption('type', null, Option::VALUE_REQUIRED, '资源类型，多个用逗号分隔，默认全部')
             ->addOption('limit', null, Option::VALUE_REQUIRED, '每个类型最多处理多少条，0 或不传不限')
             ->addOption('state', null, Option::VALUE_NONE, '额外用 stateON 校正本次资源的上下架状态')
-            ->addOption('quiet', null, Option::VALUE_NONE, '不输出进度，只输出类型汇总')
+            ->addOption('no-progress', null, Option::VALUE_NONE, '不输出逐页进度，只输出类型汇总')
             ->setDescription('同步海讯社媒体资源到本地 la_geo_media');
     }
 
@@ -38,7 +38,7 @@ class GeoMediaSync extends Command
         $types = $this->parseTypes((string)$input->getOption('type'));
         $limit = max(0, (int)$input->getOption('limit'));
         $withState = (bool)$input->getOption('state');
-        $quiet = (bool)$input->getOption('quiet');
+        $noProgress = (bool)$input->getOption('no-progress');
 
         $tenantIds = $tenantId > 0 ? [$tenantId] : $this->configuredTenants();
         if ($tenantIds === []) {
@@ -57,7 +57,7 @@ class GeoMediaSync extends Command
                     $types,
                     true,
                     $limit,
-                    $quiet ? null : $this->progressWriter($output)
+                    $noProgress ? null : $this->progressWriter($output)
                 );
             } catch (\Throwable $e) {
                 $output->writeln('<error>同步失败：' . $e->getMessage() . '</error>');
