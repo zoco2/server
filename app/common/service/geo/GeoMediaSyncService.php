@@ -6,6 +6,7 @@ use app\common\model\geo\GeoMedia;
 use app\common\service\ConfigService;
 use Exception;
 use think\facade\Log;
+use Throwable;
 
 /**
  * 海讯社媒体资源同步。
@@ -49,7 +50,8 @@ class GeoMediaSyncService
         do {
             $payload = self::fetchPage($openToken, $type, $page);
             $total = (int)$payload['total'];
-            $list = $payload['list'];
+            // data.list 可能是对象（海讯偶尔按 sourceid 做 key），统一成列表。
+            $list = array_values(is_array($payload['list']) ? $payload['list'] : []);
             $pages++;
             foreach ($list as $row) {
                 if (!is_array($row)) {
@@ -135,8 +137,11 @@ class GeoMediaSyncService
         foreach ($types as $type) {
             try {
                 $result[$type] = self::syncType($tenantId, (int)$type, ['full' => true]);
-            } catch (Exception $e) {
-                $result[$type] = ['type' => (int)$type, 'error' => $e->getMessage()];
+            } catch (Throwable $e) {
+                $result[$type] = [
+                    'type' => (int)$type,
+                    'error' => $e->getMessage() . ' @' . basename($e->getFile()) . ':' . $e->getLine(),
+                ];
             }
         }
         return $result;
@@ -322,7 +327,9 @@ class GeoMediaSyncService
      */
     private static function text(mixed $value, int $max): string
     {
-        $text = trim(strip_tags((string)$value));
-        return mb_substr($text, 0, $max);
+        if (is_array($value) || is_object($value)) {
+            return '';
+        }
+        return mb_substr(trim(strip_tags((string)$value)), 0, $max);
     }
 }
