@@ -18,7 +18,14 @@ class SmartEditTaskLists extends BaseAdminDataLists
             ->limit($this->limitOffset, $this->limitLength)
             ->select()
             ->toArray();
-        $this->refreshRunning($rows);
+        // 刷新会直接改数据库，$rows 是刷新前的快照，必须重读一次。
+        if ($this->refreshRunning($rows)) {
+            $rows = $this->query()
+                ->whereIn('id', array_column($rows, 'id'))
+                ->order('id', 'desc')
+                ->select()
+                ->toArray();
+        }
         return SmartEditService::decorateRows($rows);
     }
 
@@ -49,8 +56,12 @@ class SmartEditTaskLists extends BaseAdminDataLists
         return $query;
     }
 
-    private function refreshRunning(array $rows): void
+    /**
+     * @return bool 是否真的刷新过（刷新过则调用方需要重读数据）
+     */
+    private function refreshRunning(array $rows): bool
     {
+        $refreshed = false;
         foreach ($rows as $row) {
             if (!in_array((string)$row['status'], SmartEditTask::RUNNING_STATUSES, true)) {
                 continue;
@@ -60,9 +71,11 @@ class SmartEditTaskLists extends BaseAdminDataLists
             }
             try {
                 SmartEditService::refresh((int)$row['id']);
+                $refreshed = true;
             } catch (\Throwable) {
                 continue;
             }
         }
+        return $refreshed;
     }
 }

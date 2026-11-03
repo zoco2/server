@@ -22,10 +22,10 @@ class ImsClient
     public function __construct(string $accessKey, string $secretKey, string $region)
     {
         if ($accessKey === '' || $secretKey === '') {
-            throw new Exception('阿里云 OSS AccessKey 未配置，无法提交剪辑任务');
+            throw new Exception('阿里云 AccessKey 未配置，请到「智能剪辑 → 阿里云配置」填写');
         }
         if ($region === '') {
-            throw new Exception('无法识别阿里云地域，请检查 OSS 域名');
+            throw new Exception('阿里云地域未配置，请到「智能剪辑 → 阿里云配置」填写');
         }
         $this->accessKey = $accessKey;
         $this->secretKey = $secretKey;
@@ -84,15 +84,14 @@ class ImsClient
     private function request(string $method, string $action, array $params): array
     {
         $endpoint = sprintf(self::ENDPOINT_TEMPLATE, $this->region);
+        // ACS3 要求 canonical URI 与 canonical query 分开参与签名：
+        // GET 的参数放 query（按 key 字典序升序编码），POST 的参数放 body。
         $path = '/';
-        $query = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
-        if ($method === 'GET' && $query !== '') {
-            $path = '/' . '?' . $query;
-            $url = rtrim($endpoint, '/') . $path;
-            $body = '';
-        } else {
-            $url = rtrim($endpoint, '/') . '/';
-            $body = $query;
+        $query = $method === 'GET' ? self::canonicalQuery($params) : '';
+        $body = $method === 'POST' ? http_build_query($params, '', '&', PHP_QUERY_RFC3986) : '';
+        $url = rtrim($endpoint, '/') . $path;
+        if ($query !== '') {
+            $url .= '?' . $query;
         }
 
         $headers = [
@@ -101,12 +100,13 @@ class ImsClient
             'x-acs-version' => self::API_VERSION,
             'x-acs-date' => gmdate('Y-m-d\TH:i:s\Z'),
             'x-acs-signature-nonce' => bin2hex(random_bytes(16)),
+            'x-acs-content-sha256' => hash('sha256', $body),
         ];
         if ($method === 'POST') {
             $headers['content-type'] = 'application/x-www-form-urlencoded';
         }
 
-        $headers['authorization'] = $this->sign($method, $path, $headers, $body);
+        $headers['authorization'] = $this->sign($method, $path, $query, $headers, $body);
 
         $headerLines = [];
         foreach ($headers as $name => $value) {
@@ -145,7 +145,23 @@ class ImsClient
         return $data;
     }
 
-    private function sign(string $method, string $path, array $headers, string $body): string
+    /**
+     * ACS3 canonical query string：按 key 字典序升序，key/value 均做 RFC3986 编码。
+     */
+    private static function canonicalQuery(array $params): string
+    {
+        if ($params === []) {
+            return '';
+        }
+        ksort($params, SORT_STRING);
+        $pairs = [];
+        foreach ($params as $key => $value) {
+            $pairs[] = rawurlencode((string)$key) . '=' . rawurlencode((string)$value);
+        }
+        return implode('&', $pairs);
+    }
+
+    private function sign(string $method, string $path, string $query, array $headers, string $body): string
     {
         ksort($headers);
         $canonicalHeaders = '';
@@ -159,7 +175,7 @@ class ImsClient
         $canonicalRequest = implode("\n", [
             $method,
             $path,
-            '',                      // canonical query（POST 全在 body；GET 已拼进 path）
+            $query,                  // canonical query：GET 参数，POST 为空
             $canonicalHeaders,
             implode(';', $signedHeaders),
             $hashedBody,

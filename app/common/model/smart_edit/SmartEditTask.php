@@ -21,10 +21,6 @@ class SmartEditTask extends BaseModel
 {
     use SoftDelete;
 
-    protected $name = 'smart_edit_task';
-    protected $deleteTime = 'delete_time';
-    protected $defaultSoftDelete = null;
-    protected $autoWriteTimestamp = 'int';
     protected $json = ['params_json', 'timeline_json'];
     protected $jsonAssoc = true;
 

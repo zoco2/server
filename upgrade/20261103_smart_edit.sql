@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_task` (
   `create_time` int unsigned NOT NULL DEFAULT 0,
   `update_time` int unsigned NOT NULL DEFAULT 0,
   `finish_time` int unsigned NOT NULL DEFAULT 0,
-  `delete_time` int unsigned NOT NULL DEFAULT 0,
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_task_no` (`task_no`),
   KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_task_item` (
   `duration` decimal(10,4) NOT NULL DEFAULT 0.0000,
   `raw_meta` text NULL,
   `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_task` (`task_id`,`sort`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑任务素材明细';

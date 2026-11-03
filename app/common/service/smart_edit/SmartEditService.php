@@ -6,7 +6,6 @@ use app\common\enum\FileEnum;
 use app\common\model\file\TenantFile;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\model\smart_edit\SmartEditTaskItem;
-use app\common\service\FileService;
 use Exception;
 use think\facade\Log;
 
@@ -27,20 +26,20 @@ class SmartEditService
     public static function generate(int $tenantId, int $userId, array $params): array
     {
         [$editType, $title, $clips] = self::validate($tenantId, $params);
-        $oss = SmartEditMaterialService::ossConfig($tenantId);
+        $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
 
         $items = [];
         foreach ($clips as $index => $clip) {
             $items[] = [
-                'media_url' => SmartEditMaterialService::mediaUrl($tenantId, (string)$clip['uri']),
+                'media_url' => SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$clip['uri']),
                 'in' => (float)($clip['in'] ?? 0),
                 'out' => (float)($clip['out'] ?? 0),
                 'raw' => $clip,
             ];
         }
 
-        $output = SmartEditMaterialService::outputTarget($tenantId, $taskNo);
+        $output = SmartEditMaterialService::outputTarget($config, $taskNo);
         $timeline = self::buildTimeline($editType, $items);
 
         $task = SmartEditTask::create([
@@ -52,13 +51,15 @@ class SmartEditService
             'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
-            'region' => $oss['region'],
+            'region' => $config['region'],
             'provider_job_id' => '',
             'output_target' => $output['uri'],
             'output_uri' => '',
-            'storage_scope' => $oss['scope'],
+            'storage_scope' => 'tenant',
             'storage_engine' => 'aliyun',
-            'storage_domain' => $oss['domain'],
+            'storage_domain' => $config['domain'],
+            // out=0 表示「用完整时长」，本地无法得知真实时长，这里只累加可确定的区间；
+            // 成片成功后 markSuccess() 会用 IMS 返回的成片时长回填（拼接不会比素材总长更长）。
             'input_duration' => array_sum(array_map(
                 static fn(array $item) => max(0, (float)$item['out'] - (float)$item['in']),
                 $items
@@ -66,7 +67,6 @@ class SmartEditService
             'status' => SmartEditTask::STATUS_SUBMITTING,
             'create_time' => time(),
             'update_time' => time(),
-            'delete_time' => 0,
         ]);
 
         $rows = [];
@@ -78,9 +78,9 @@ class SmartEditService
                 'item_type' => SmartEditTaskItem::TYPE_VIDEO,
                 'sort' => $index,
                 'source_uri' => (string)$clip['uri'],
-                'storage_scope' => $oss['scope'],
+                'storage_scope' => 'tenant',
                 'storage_engine' => 'aliyun',
-                'storage_domain' => $oss['domain'],
+                'storage_domain' => $config['domain'],
                 'in_sec' => (float)($clip['in'] ?? 0),
                 'out_sec' => (float)($clip['out'] ?? 0),
                 'duration' => max(0, (float)($clip['out'] ?? 0) - (float)($clip['in'] ?? 0)),
@@ -89,11 +89,12 @@ class SmartEditService
             ];
         }
         if ($rows !== []) {
-            (new SmartEditTaskItem())->insertAll($rows);
+            // 走查询构造器的批量插入：不触发模型事件，tenant_id/user_id/create_time 已在行内显式写入。
+            SmartEditTaskItem::insertAll($rows);
         }
 
         try {
-            $client = new ImsClient($oss['access_key'], $oss['secret_key'], $oss['region']);
+            $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
             $jobId = $client->submit($timeline, $output['url']);
             $task->save([
                 'provider_job_id' => $jobId,
@@ -134,8 +135,10 @@ class SmartEditService
         }
 
         try {
-            $oss = SmartEditMaterialService::ossConfig((int)$task['tenant_id']);
-            $client = new ImsClient($oss['access_key'], $oss['secret_key'], (string)$task['region'] ?: $oss['region']);
+            $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+            // 用提交时记录的地域，避免中途改配置导致查不到旧任务
+            $region = (string)$task['region'] ?: $config['region'];
+            $client = new ImsClient($config['access_key'], $config['secret_key'], $region);
             $job = $client->getJob((string)$task['provider_job_id']);
         } catch (\Throwable $e) {
             // 查询失败只记录并延后重试，不直接判失败
@@ -179,8 +182,8 @@ class SmartEditService
     public static function retry(SmartEditTask $task): void
     {
         $params = (array)$task['params_json'];
-        $oss = SmartEditMaterialService::ossConfig((int)$task['tenant_id']);
-        $output = SmartEditMaterialService::outputTarget((int)$task['tenant_id'], (string)$task['task_no']);
+        $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+        $output = SmartEditMaterialService::outputTarget($config, (string)$task['task_no']);
         $timeline = (array)$task['timeline_json'];
         if ($timeline === []) {
             throw new Exception('任务参数缺失，无法重试');
@@ -197,10 +200,11 @@ class SmartEditService
             'update_time' => time(),
         ]);
         try {
-            $client = new ImsClient($oss['access_key'], $oss['secret_key'], $oss['region']);
+            $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
             $jobId = $client->submit($timeline, $output['url']);
             $task->save([
                 'provider_job_id' => $jobId,
+                'region' => $config['region'],
                 'status' => SmartEditTask::STATUS_PROCESSING,
                 'next_poll_time' => time() + 5,
                 'update_time' => time(),
@@ -258,12 +262,9 @@ class SmartEditService
             $items = SmartEditTaskItem::whereIn('task_id', $taskIds)->order(['task_id' => 'asc', 'sort' => 'asc'])->select();
             foreach ($items as $item) {
                 $data = $item->toArray();
-                $data['source_url'] = FileService::getFileUrlByStorage(
-                    (string)$data['source_uri'],
-                    (string)($data['storage_scope'] ?? ''),
-                    (string)($data['storage_engine'] ?? ''),
-                    (string)($data['storage_domain'] ?? '')
-                );
+                // 素材地址同样只用任务落库的域名拼，不依赖其他存储配置
+                $domain = (string)($data['storage_domain'] ?? '');
+                $data['source_url'] = $domain === '' ? '' : SmartEditImsConfigService::joinUrl($domain, (string)$data['source_uri']);
                 $itemMap[(int)$data['task_id']][] = $data;
             }
         }
@@ -281,12 +282,13 @@ class SmartEditService
         if ($uri === '') {
             return '';
         }
-        return FileService::getFileUrlByStorage(
-            $uri,
-            (string)($row['storage_scope'] ?? ''),
-            (string)($row['storage_engine'] ?? ''),
-            (string)($row['storage_domain'] ?? '')
-        );
+        // 用任务创建时落库的域名拼地址，不走任何其他存储配置，
+        // 也避免之后改配置导致历史成片链接失效。
+        $domain = (string)($row['storage_domain'] ?? '');
+        if ($domain === '') {
+            return '';
+        }
+        return SmartEditImsConfigService::joinUrl($domain, $uri);
     }
 
     public static function formatTask(array $row): array
@@ -353,10 +355,17 @@ class SmartEditService
     {
         $uri = (string)$task['output_target'];
         $duration = (float)$job['duration'];
+        $inputDuration = (float)$task['input_duration'];
+        // 有片段没填 out（用完整时长）时，提交阶段的 input_duration 会偏小甚至为 0；
+        // 合并是顺序拼接，成片时长就是素材总时长，这里用成片时长回填，供后续计费使用。
+        if ($duration > 0 && $duration > $inputDuration) {
+            $inputDuration = $duration;
+        }
         $task->save([
             'status' => SmartEditTask::STATUS_SUCCESS,
             'output_uri' => $uri,
-            'duration' => $duration > 0 ? $duration : (float)$task['input_duration'],
+            'duration' => $duration > 0 ? $duration : $inputDuration,
+            'input_duration' => $inputDuration,
             'error_code' => '',
             'error_message' => '',
             'poll_attempts' => (int)$task['poll_attempts'] + 1,
@@ -364,7 +373,7 @@ class SmartEditService
             'update_time' => time(),
         ]);
 
-        // 成片直接写在租户 OSS 上，这里补一条文件记录，和普通上传保持一致。
+        // 成片直接写在配置的 Bucket 上，这里补一条文件记录，和普通上传保持一致。
         $exists = TenantFile::where([
             'tenant_id' => (int)$task['tenant_id'],
             'uri' => $uri,

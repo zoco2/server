@@ -21,10 +21,7 @@ class AdminTaskController extends BaseAdminController
     public function detail()
     {
         try {
-            $task = SmartEditTask::where('id', (int)$this->request->get('id', 0))->findOrEmpty();
-            if ($task->isEmpty()) {
-                throw new Exception('任务不存在');
-            }
+            $task = $this->findTask((int)$this->request->get('id', 0));
             SmartEditService::refresh((int)$task['id']);
             $task = $task->refresh();
             $row = SmartEditService::decorateRows([$task->toArray()])[0];
@@ -37,10 +34,7 @@ class AdminTaskController extends BaseAdminController
     public function retry()
     {
         try {
-            $task = SmartEditTask::where('id', (int)$this->request->post('id', 0))->findOrEmpty();
-            if ($task->isEmpty()) {
-                throw new Exception('任务不存在');
-            }
+            $task = $this->findTask((int)$this->request->post('id', 0));
             if ((string)$task['status'] !== SmartEditTask::STATUS_FAILED) {
                 throw new Exception('只有失败的任务可以重试');
             }
@@ -54,14 +48,24 @@ class AdminTaskController extends BaseAdminController
     public function delete()
     {
         try {
-            $task = SmartEditTask::where('id', (int)$this->request->post('id', 0))->findOrEmpty();
-            if ($task->isEmpty()) {
-                throw new Exception('任务不存在');
-            }
-            $task->delete();
+            $this->findTask((int)$this->request->post('id', 0))->delete();
             return $this->success('删除成功', [], 1, 1);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
+    }
+
+    /**
+     * 按 id + tenant_id 取任务，避免只依赖全局作用域。
+     */
+    private function findTask(int $id): SmartEditTask
+    {
+        $task = SmartEditTask::where('id', $id)
+            ->where('tenant_id', (int)$this->request->tenantId)
+            ->findOrEmpty();
+        if ($task->isEmpty()) {
+            throw new Exception('任务不存在');
+        }
+        return $task;
     }
 }

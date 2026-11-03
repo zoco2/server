@@ -10,12 +10,7 @@ use app\common\model\BaseModel;
  */
 class SmartEditTaskItem extends BaseModel
 {
-    protected $name = 'smart_edit_task_item';
-
     public const TYPE_VIDEO = 'video';
-
-    /** 批量写入时不走自动时间戳（只有 create_time） */
-    protected $autoWriteTimestamp = false;
 
     public function getInSecAttr($value): float
     {
