@@ -24,6 +24,17 @@ class SmartEditTask extends BaseModel
     protected $json = ['params_json', 'timeline_json'];
     protected $jsonAssoc = true;
 
+    /**
+     * decimal 字段默认被序列化成字符串（如 "3.50"），
+     * 这里统一转成数值，避免前端拿到字符串后参与运算出错。
+     */
+    protected $type = [
+        'duration' => 'float',
+        'input_duration' => 'float',
+        'tenant_cost_points' => 'float',
+        'user_charge_points' => 'float',
+    ];
+
     public const STATUS_PENDING = 'pending';
     public const STATUS_SUBMITTING = 'submitting';
     public const STATUS_PROCESSING = 'processing';
