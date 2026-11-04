@@ -280,7 +280,7 @@ final class WorkspaceAssetService
     {
         return ['source' => 'upload', 'ref' => 'upload:result:' . $row['id'], 'raw' => [
             'id' => (int)$row['id'], 'cid' => (int)($row['cid'] ?? 0), 'title' => $row['name'], 'type' => (int)$row['type'],
-            'url' => self::url($row, 'uri'), 'create_time' => $row['create_time'],
+            'url' => self::url($row, 'uri'), 'uri' => (string)($row['uri'] ?? ''), 'create_time' => $row['create_time'],
         ]];
     }
 
