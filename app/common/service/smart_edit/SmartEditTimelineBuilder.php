@@ -13,12 +13,16 @@ use Exception;
  */
 class SmartEditTimelineBuilder
 {
+    /** 封面在成片开头占用的固定时长（秒） */
+    public const COVER_SECONDS = 0.5;
+
     /**
      * 多视频合并。
      *
-     * @param array $items [['media_url'=>string,'in'=>float,'out'=>float], ...]
+     * @param array  $items    [['media_url'=>string,'in'=>float,'out'=>float], ...]
+     * @param string $coverUrl 封面图片的公网地址；为空表示不加封面
      */
-    public static function buildMerge(array $items): array
+    public static function buildMerge(array $items, string $coverUrl = ''): array
     {
         $clips = [];
         foreach ($items as $item) {
@@ -41,10 +45,34 @@ class SmartEditTimelineBuilder
             throw new Exception('至少选择 2 段视频才能合并');
         }
 
+        // 封面作为轨首图片片段：后续视频自然顺次后移，无需逐段计算时间轴。
+        // Duration 让图片撑住 0.5s；TimelineIn/Out 显式给绝对区间，避免不同 IMS 版本对
+        // 图片片段时长推导不一致。
+        if ($coverUrl !== '') {
+            array_unshift($clips, self::coverClip($coverUrl));
+        }
+
         return [
             'VideoTracks' => [
                 ['VideoTrackClips' => $clips],
             ],
+        ];
+    }
+
+    /**
+     * 封面图片片段。
+     *
+     * @param string $coverUrl 封面图片公网地址
+     */
+    private static function coverClip(string $coverUrl): array
+    {
+        $seconds = self::COVER_SECONDS;
+        return [
+            'Type' => 'Image',
+            'MediaURL' => $coverUrl,
+            'Duration' => $seconds,
+            'TimelineIn' => 0,
+            'TimelineOut' => $seconds,
         ];
     }
 }

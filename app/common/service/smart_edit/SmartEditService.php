@@ -25,7 +25,7 @@ class SmartEditService
      */
     public static function generate(int $tenantId, int $userId, array $params): array
     {
-        [$editType, $title, $clips] = self::validate($tenantId, $params);
+        [$editType, $title, $clips, $coverUri] = self::validate($tenantId, $params);
         $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
 
@@ -39,8 +39,13 @@ class SmartEditService
             ];
         }
 
+        // 封面与正片素材走同一套归属校验与签名，确保 IMS 能拉到。
+        $coverUrl = $coverUri === ''
+            ? ''
+            : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
+
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $timeline = self::buildTimeline($editType, $items);
+        $timeline = self::buildTimeline($editType, $items, $coverUrl);
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -48,13 +53,14 @@ class SmartEditService
             'task_no' => $taskNo,
             'edit_type' => $editType,
             'title' => $title,
-            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips],
+            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
             'region' => $config['region'],
             'provider_job_id' => '',
             'output_target' => $output['uri'],
             'output_uri' => '',
+            'cover_uri' => $coverUri,
             'storage_scope' => 'tenant',
             'storage_engine' => 'aliyun',
             'storage_domain' => $config['domain'],
@@ -70,13 +76,33 @@ class SmartEditService
         ]);
 
         $rows = [];
+        if ($coverUri !== '') {
+            // sort 用 0，视频整体后移，保证明细顺序与成片顺序一致（封面在最前）。
+            $rows[] = [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'task_id' => (int)$task['id'],
+                'item_type' => SmartEditTaskItem::TYPE_COVER,
+                'sort' => 0,
+                'source_uri' => $coverUri,
+                'storage_scope' => 'tenant',
+                'storage_engine' => 'aliyun',
+                'storage_domain' => $config['domain'],
+                'in_sec' => 0,
+                'out_sec' => 0,
+                'duration' => SmartEditTimelineBuilder::COVER_SECONDS,
+                'raw_meta' => json_encode(['media_url' => $coverUrl], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'create_time' => time(),
+            ];
+        }
+        $sortBase = $rows === [] ? 0 : 1;
         foreach ($clips as $index => $clip) {
             $rows[] = [
                 'tenant_id' => $tenantId,
                 'user_id' => $userId,
                 'task_id' => (int)$task['id'],
                 'item_type' => SmartEditTaskItem::TYPE_VIDEO,
-                'sort' => $index,
+                'sort' => $sortBase + $index,
                 'source_uri' => (string)$clip['uri'],
                 'storage_scope' => 'tenant',
                 'storage_engine' => 'aliyun',
@@ -270,6 +296,11 @@ class SmartEditService
         }
         foreach ($rows as &$row) {
             $row['output_url'] = self::outputUrl($row);
+            $coverUri = (string)($row['cover_uri'] ?? '');
+            $coverDomain = (string)($row['storage_domain'] ?? '');
+            $row['cover_url'] = ($coverUri === '' || $coverDomain === '')
+                ? ''
+                : SmartEditImsConfigService::joinUrl($coverDomain, $coverUri);
             $row['items'] = $itemMap[(int)$row['id']] ?? [];
         }
         unset($row);
@@ -294,6 +325,12 @@ class SmartEditService
     public static function formatTask(array $row): array
     {
         $row['output_url'] = self::outputUrl($row);
+        // 封面同样按任务落库的域名拼，未设置时为空串。
+        $coverUri = (string)($row['cover_uri'] ?? '');
+        $domain = (string)($row['storage_domain'] ?? '');
+        $row['cover_url'] = ($coverUri === '' || $domain === '')
+            ? ''
+            : SmartEditImsConfigService::joinUrl($domain, $coverUri);
         $row['status_text'] = match ((string)$row['status']) {
             SmartEditTask::STATUS_PENDING => '等待提交',
             SmartEditTask::STATUS_SUBMITTING => '提交中',
@@ -340,13 +377,15 @@ class SmartEditService
         if ($title === '') {
             $title = '多视频合并';
         }
-        return [$editType, mb_substr($title, 0, 100), $normalized];
+        // 封面可选：只接受素材库中的图片，且与正片一样要过归属校验。
+        $coverUri = trim((string)($params['cover_uri'] ?? ''));
+        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri];
     }
 
-    private static function buildTimeline(string $editType, array $items): array
+    private static function buildTimeline(string $editType, array $items, string $coverUrl = ''): array
     {
         return match ($editType) {
-            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items),
+            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
     }
