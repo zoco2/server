@@ -15,8 +15,8 @@ use think\console\Output;
  *   php think geo:order-sync
  *   php think geo:order-sync --limit=50
  *
- * 建议 cron：每 5~10 分钟一次
- *   */5 * * * * cd /path/to/project && php think geo:order-sync >> storage/logs/geo-order-sync.log 2>&1
+ * 建议 cron：每 5~10 分钟一次（分钟字段写 "星号/5"，这里不能直接写，否则会提前结束注释）
+ *   0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /path/to/project && php think geo:order-sync >> storage/logs/geo-order-sync.log 2>&1
  */
 class GeoOrderSync extends Command
 {
