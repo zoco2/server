@@ -37,15 +37,23 @@ class ImsClient
      *
      * @param array  $timeline     Timeline 结构（VideoTracks/AudioTracks/SubtitleTracks…）
      * @param string $outputUrl    输出成品的 OSS 公网地址
+     * @param int    $width        成片宽度；0 表示不指定，由 IMS 按素材最大宽高决定
+     * @param int    $height       成片高度；0 表示不指定
      * @param string $callbackUrl  可选回调地址
      * @return string JobId
      */
-    public function submit(array $timeline, string $outputUrl, string $callbackUrl = ''): string
+    public function submit(array $timeline, string $outputUrl, int $width = 0, int $height = 0, string $callbackUrl = ''): string
     {
+        $outputConfig = ['MediaURL' => $outputUrl];
+        // 宽高必须成对给出：只给一边时 IMS 的行为不可预期，这里直接忽略。
+        if ($width > 0 && $height > 0) {
+            $outputConfig['Width'] = $width;
+            $outputConfig['Height'] = $height;
+        }
         $params = [
             'Timeline' => json_encode($timeline, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'OutputMediaTarget' => 'oss-object',
-            'OutputMediaConfig' => json_encode(['MediaURL' => $outputUrl], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'OutputMediaConfig' => json_encode($outputConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ];
         if ($callbackUrl !== '') {
             $params['UserData'] = json_encode(['NotifyAddress' => $callbackUrl], JSON_UNESCAPED_UNICODE);

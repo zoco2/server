@@ -20,14 +20,46 @@ class SmartEditService
     public const MAX_CLIPS = 20;
     public const MAX_POLL_ATTEMPTS = 240;
 
+    /** 默认比例：竖屏 9:16，与短视频场景一致 */
+    public const DEFAULT_ASPECT_RATIO = '9:16';
+
+    /**
+     * 输出比例 -> 成片宽高。
+     *
+     * IMS 要求宽高均 ≥128、≤4096，短边 ≤2160，这里统一取 1080 短边档位。
+     */
+    public const OUTPUT_SIZES = [
+        '9:16' => [1080, 1920],
+        '16:9' => [1920, 1080],
+        '1:1' => [1080, 1080],
+        '4:3' => [1440, 1080],
+        '3:4' => [1080, 1440],
+    ];
+
+    /**
+     * 比例标识 -> [宽, 高]；未传或无法识别时回退默认比例。
+     *
+     * @param string $ratio 如 "9:16"
+     * @return array{0:int,1:int}
+     */
+    public static function resolveOutputSize(string $ratio): array
+    {
+        $key = trim($ratio);
+        if ($key === '' || !isset(self::OUTPUT_SIZES[$key])) {
+            $key = self::DEFAULT_ASPECT_RATIO;
+        }
+        return self::OUTPUT_SIZES[$key];
+    }
+
     /**
      * 创建并提交任务（同步提交，合成本身异步）。
      */
     public static function generate(int $tenantId, int $userId, array $params): array
     {
-        [$editType, $title, $clips, $coverUri] = self::validate($tenantId, $params);
+        [$editType, $title, $clips, $coverUri, $aspectRatio] = self::validate($tenantId, $params);
         $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
+        [$outputWidth, $outputHeight] = self::resolveOutputSize($aspectRatio);
 
         $items = [];
         foreach ($clips as $index => $clip) {
@@ -53,7 +85,7 @@ class SmartEditService
             'task_no' => $taskNo,
             'edit_type' => $editType,
             'title' => $title,
-            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri],
+            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri, 'aspect_ratio' => $aspectRatio],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
             'region' => $config['region'],
@@ -121,7 +153,7 @@ class SmartEditService
 
         try {
             $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
-            $jobId = $client->submit($timeline, $output['url']);
+            $jobId = $client->submit($timeline, $output['url'], $outputWidth, $outputHeight);
             $task->save([
                 'provider_job_id' => $jobId,
                 'status' => SmartEditTask::STATUS_PROCESSING,
@@ -214,6 +246,8 @@ class SmartEditService
         if ($timeline === []) {
             throw new Exception('任务参数缺失，无法重试');
         }
+        // 沿用提交时的比例；老任务没有该字段，resolveOutputSize 会回退默认值。
+        [$outputWidth, $outputHeight] = self::resolveOutputSize((string)($params['aspect_ratio'] ?? ''));
         $task->save([
             'status' => SmartEditTask::STATUS_SUBMITTING,
             'provider_job_id' => '',
@@ -227,7 +261,7 @@ class SmartEditService
         ]);
         try {
             $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
-            $jobId = $client->submit($timeline, $output['url']);
+            $jobId = $client->submit($timeline, $output['url'], $outputWidth, $outputHeight);
             $task->save([
                 'provider_job_id' => $jobId,
                 'region' => $config['region'],
@@ -301,10 +335,29 @@ class SmartEditService
             $row['cover_url'] = ($coverUri === '' || $coverDomain === '')
                 ? ''
                 : SmartEditImsConfigService::joinUrl($coverDomain, $coverUri);
+            $row['status_text'] = self::statusText((string)($row['status'] ?? ''));
             $row['items'] = $itemMap[(int)$row['id']] ?? [];
         }
         unset($row);
         return $rows;
+    }
+
+    /**
+     * 状态码 -> 中文文案。列表与详情共用，避免两边不一致。
+     *
+     * @param string $status 状态码
+     */
+    public static function statusText(string $status): string
+    {
+        return match ($status) {
+            SmartEditTask::STATUS_PENDING => '等待提交',
+            SmartEditTask::STATUS_SUBMITTING => '提交中',
+            SmartEditTask::STATUS_PROCESSING => '剪辑中',
+            SmartEditTask::STATUS_SUCCESS => '已完成',
+            SmartEditTask::STATUS_FAILED => '失败',
+            SmartEditTask::STATUS_CANCELED => '已取消',
+            default => $status,
+        };
     }
 
     public static function outputUrl(array $row): string
@@ -331,15 +384,7 @@ class SmartEditService
         $row['cover_url'] = ($coverUri === '' || $domain === '')
             ? ''
             : SmartEditImsConfigService::joinUrl($domain, $coverUri);
-        $row['status_text'] = match ((string)$row['status']) {
-            SmartEditTask::STATUS_PENDING => '等待提交',
-            SmartEditTask::STATUS_SUBMITTING => '提交中',
-            SmartEditTask::STATUS_PROCESSING => '剪辑中',
-            SmartEditTask::STATUS_SUCCESS => '已完成',
-            SmartEditTask::STATUS_FAILED => '失败',
-            SmartEditTask::STATUS_CANCELED => '已取消',
-            default => (string)$row['status'],
-        };
+        $row['status_text'] = self::statusText((string)($row['status'] ?? ''));
         return $row;
     }
 
@@ -379,7 +424,14 @@ class SmartEditService
         }
         // 封面可选：只接受素材库中的图片，且与正片一样要过归属校验。
         $coverUri = trim((string)($params['cover_uri'] ?? ''));
-        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri];
+        // 输出比例：未传则用默认值；传了但不在支持列表里直接报错，避免静默产出非预期尺寸。
+        $aspectRatio = trim((string)($params['aspect_ratio'] ?? ''));
+        if ($aspectRatio === '') {
+            $aspectRatio = self::DEFAULT_ASPECT_RATIO;
+        } elseif (!isset(self::OUTPUT_SIZES[$aspectRatio])) {
+            throw new Exception('不支持的视频比例：' . $aspectRatio);
+        }
+        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio];
     }
 
     private static function buildTimeline(string $editType, array $items, string $coverUrl = ''): array
