@@ -20,6 +20,9 @@ class SmartEditService
     public const MAX_CLIPS = 20;
     public const MAX_POLL_ATTEMPTS = 240;
 
+    /** 标题文案最大字数 */
+    public const MAX_TITLE_TEXT_LENGTH = 30;
+
     /** 默认比例：竖屏 9:16，与短视频场景一致 */
     public const DEFAULT_ASPECT_RATIO = '9:16';
 
@@ -56,7 +59,7 @@ class SmartEditService
      */
     public static function generate(int $tenantId, int $userId, array $params): array
     {
-        [$editType, $title, $clips, $coverUri, $aspectRatio] = self::validate($tenantId, $params);
+        [$editType, $title, $clips, $coverUri, $aspectRatio, $titleText] = self::validate($tenantId, $params);
         $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
         [$outputWidth, $outputHeight] = self::resolveOutputSize($aspectRatio);
@@ -77,7 +80,7 @@ class SmartEditService
             : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $timeline = self::buildTimeline($editType, $items, $coverUrl);
+        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText);
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -85,7 +88,7 @@ class SmartEditService
             'task_no' => $taskNo,
             'edit_type' => $editType,
             'title' => $title,
-            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri, 'aspect_ratio' => $aspectRatio],
+            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri, 'aspect_ratio' => $aspectRatio, 'title_text' => $titleText],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
             'region' => $config['region'],
@@ -431,13 +434,18 @@ class SmartEditService
         } elseif (!isset(self::OUTPUT_SIZES[$aspectRatio])) {
             throw new Exception('不支持的视频比例：' . $aspectRatio);
         }
-        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio];
+        // 标题文案：可选，只限制长度，位置与字号由 Timeline 构建统一控制。
+        $titleText = trim((string)($params['title_text'] ?? ''));
+        if (mb_strlen($titleText) > self::MAX_TITLE_TEXT_LENGTH) {
+            throw new Exception('标题文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
+        }
+        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleText];
     }
 
-    private static function buildTimeline(string $editType, array $items, string $coverUrl = ''): array
+    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', string $titleText = ''): array
     {
         return match ($editType) {
-            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl),
+            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $titleText),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
     }
