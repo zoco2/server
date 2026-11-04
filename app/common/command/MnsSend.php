@@ -46,10 +46,15 @@ class MnsSend extends Command
         }
 
         try {
+            // Job 构造函数从 request()->tenantId 取租户，控制台里没有登录态，
+            // 必须先把 --tenant 写进请求上下文，否则消息体里的 tenant_id 为空，
+            // 消费端 fromPayload 会以「缺少租户 ID」失败。
+            request()->tenantId = $tenantId;
             for ($i = 1; $i <= $count; $i++) {
                 $message = $count > 1 ? $body . ' #' . $i : $body;
                 $job = new TestJob([
                     'message' => $message,
+                    'tenant_id' => $tenantId,
                     'sent_at' => time(),
                 ]);
                 $result = (new LightMqService())->dispatchJob(

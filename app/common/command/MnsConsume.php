@@ -115,6 +115,7 @@ class MnsConsume extends Command
             $this->handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e, $output);
             // 无论成败都要清理租户上下文，避免串到下一个任务
             request()->tenantId = null;
+            request()->source = null;
         }
     }
 

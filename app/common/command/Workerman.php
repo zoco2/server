@@ -179,6 +179,7 @@ class Workerman extends Command
         } catch (\Throwable $e) {
             self::handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e);
             request()->tenantId = null;
+            request()->source = null;
         }
     }
 

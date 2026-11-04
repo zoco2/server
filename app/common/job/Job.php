@@ -2,6 +2,7 @@
 
 namespace app\common\job;
 
+use app\common\enum\AdminTerminalEnum;
 use app\common\service\mq\LightMqService;
 use think\facade\Config;
 
@@ -167,7 +168,11 @@ abstract class Job implements JobInterface
             throw new \RuntimeException('Job 消息缺少租户 ID，无法执行');
         }
         $job->tenantId = $tenantId;
+        // 消费进程没有登录态，必须显式标注终端类型：
+        // BaseModel 的 onBeforeInsert/onBeforeUpdate 只认 checkTenant()/checkUser()，
+        // 两者都以 request()->source 为准，缺失时不会自动补 tenant_id。
         request()->tenantId = $tenantId;
+        request()->source = AdminTerminalEnum::USER;
 
         return $job;
     }
@@ -178,5 +183,6 @@ abstract class Job implements JobInterface
     public function clearTenantContext(): void
     {
         request()->tenantId = null;
+        request()->source = null;
     }
 }
