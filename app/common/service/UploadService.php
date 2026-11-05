@@ -251,6 +251,83 @@ class UploadService
     }
 
     /**
+     * @notes 音频上传
+     *
+     * 与图片、视频同级：独立类型（type=40）、独立分组、独立列表页签。
+     * 后缀白名单取 config('project.file_audio')。
+     *
+     * @param $cid
+     * @param int $sourceId
+     * @param int $source
+     * @param string $saveDir
+     * @return array
+     * @throws Exception
+     */
+    public static function audio($cid, int $sourceId = 0, int $source = FileEnum::SOURCE_ADMIN, string $saveDir = 'uploads/audio')
+    {
+        try {
+            // 租户端文件配置默认获取平台端
+            $config = self::getUploadFileConfig();
+
+            // 2、执行文件上传
+            $StorageDriver = new StorageDriver($config);
+            $StorageDriver->setUploadFile('file');
+            $fileName = $StorageDriver->getFileName();
+            $fileInfo = $StorageDriver->getFileInfo();
+
+            // 校验上传文件后缀
+            if (!in_array(strtolower($fileInfo['ext']), config('project.file_audio'))) {
+                throw new Exception("上传音频不允许上传" . $fileInfo['ext'] . "文件");
+            }
+
+            // 上传文件
+            $saveDir = self::getUploadUrl($saveDir);
+            if (!$StorageDriver->upload($saveDir)) {
+                throw new Exception($StorageDriver->getError());
+            }
+
+            // 3、处理文件名称
+            if (strlen($fileInfo['name']) > 128) {
+                $name = substr($fileInfo['name'], 0, 123);
+                $nameEnd = substr($fileInfo['name'], strlen($fileInfo['name']) - 5, strlen($fileInfo['name']));
+                $fileInfo['name'] = $name . $nameEnd;
+            }
+
+            // 4、写入数据库中
+            $fileData = [
+                'cid'         => $cid,
+                'type'        => FileEnum::AUDIO_TYPE,
+                'name'        => $fileInfo['name'],
+                'uri'         => $saveDir . '/' . str_replace("\\", "/", $fileName),
+                'storage_scope' => $config['scope'] ?? 'platform',
+                'storage_engine' => $config['default'] ?? 'local',
+                'storage_domain' => StorageConfigService::getEffectiveDomain(StorageConfigService::currentTenantId()),
+                'source'      => $source,
+                'source_id'   => $sourceId,
+                'create_time' => time(),
+            ];
+            if (!AdminTerminalEnum::isPlatform()) {
+                $fileData['tenant_id'] = self::tenantUploadTenantId();
+                $fileData['upload_origin'] = 'local';
+            }
+            $file = (AdminTerminalEnum::isPlatform() ? new File() : new TenantFile())->create($fileData);
+
+            // 5、返回结果
+            return [
+                'id'   => $file['id'],
+                'cid'  => $file['cid'],
+                'type' => $file['type'],
+                'name' => $file['name'],
+                'uri'  => FileService::getFileUrlByStorage($file['uri'], $file['storage_scope'] ?? '', $file['storage_engine'] ?? '', $file['storage_domain'] ?? ''),
+                'url'  => $file['uri']
+            ];
+
+        } catch (Exception $e) {
+            throw new Exception($e->getMessage());
+        }
+    }
+
+    /**
      * @notes 上传地址
      * @param $saveDir
      * @return string

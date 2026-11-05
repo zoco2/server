@@ -21,6 +21,8 @@ class FileEnum
     const IMAGE_TYPE = 10;  // 图片类型
     const VIDEO_TYPE = 20;  // 视频类型
     const FILE_TYPE = 30;  // 文件类型
+    // 音频类型：与图片、视频同级，拥有自己的分组；智能剪辑背景音乐等场景使用
+    const AUDIO_TYPE = 40;
 
 
     // 图片来源

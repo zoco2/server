@@ -119,26 +119,20 @@ final class WorkspaceAssetService
      * @param mixed $cid 不传查全部，0 为未分组，大于 0 为该分组及其子分组
      * @return array
      */
-    /** 本地素材允许出现在库里的文件表扩展名（type=30 的额外白名单） */
-    private const FILE_TABLE_EXTENSIONS = ['webm', 'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'];
-
     /**
      * 限定「库里可见」的上传记录。
      *
-     * 图片 10、视频 20 全部可见；文件 30 只有白名单扩展名（historical webm、
-     * 以及智能剪辑用的音频）算素材，其余 zip/pdf 一类不进素材库。
+     * 图片 10、视频 20、音频 40 全部可见；文件 30 只有历史遗留的 webm 算素材，
+     * 其余 zip/pdf 一类不进素材库。
      *
      * @param \think\db\Query $query
      */
     private static function scopeVisibleUploads($query): void
     {
-        $like = [];
-        $bind = [];
-        foreach (self::FILE_TABLE_EXTENSIONS as $ext) {
-            $like[] = 'LOWER(uri) LIKE ?';
-            $bind[] = '%.' . $ext;
-        }
-        $query->whereRaw('(type IN (10, 20) OR (type = 30 AND (' . implode(' OR ', $like) . ')))', $bind);
+        $query->whereRaw(
+            '(type IN (10, 20, 40) OR (type = 30 AND LOWER(uri) LIKE ?))',
+            ['%.webm']
+        );
     }
 
     public static function uploads(int $tenant, int $user, int $page, $cid = null): array

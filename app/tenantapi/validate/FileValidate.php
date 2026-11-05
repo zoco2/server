@@ -28,7 +28,7 @@ class FileValidate extends BaseValidate
         'id'   => 'require|number',
         'cid'  => 'require|number',
         'ids'  => 'require|array',
-        'type' => 'require|in:10,20,30',
+        'type' => 'require|in:10,20,30,40',
         'pid'  => 'require|number',
         'name' => 'require|max:20'
     ];

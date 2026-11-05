@@ -70,6 +70,21 @@ class UploadController extends BaseApiController
         }
     }
 
+    /**
+     * 上传音频（type=40，与图片、视频同级）。
+     */
+    public function audio()
+    {
+        try {
+            $this->syncTenantContext();
+            $cid = FileLogic::uploadCid(FileEnum::AUDIO_TYPE, $this->request->post('cid', 0));
+            $result = UploadService::audio($cid, $this->userId, FileEnum::SOURCE_USER);
+            return $this->success('上传成功', $result);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
     private function syncTenantContext(): void
     {
         if ((int)($this->request->tenantId ?? 0) > 0) {

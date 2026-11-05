@@ -30,10 +30,10 @@ class WorkspaceAssetController extends BaseApiController
                 $cid = FileLogic::uploadCid($type, $this->request->post('cid', 0));
                 return $ext === 'webm' ? UploadService::file($cid, $u, FileEnum::SOURCE_USER) : UploadService::video($cid, $u, FileEnum::SOURCE_USER);
             }
-            // 音频走文件表（type=30）：智能剪辑的背景音乐、以及后续其它需要音频的场景共用。
+            // 音频是独立类型（type=40），与图片、视频同级，有自己的分组和列表页签。
             if (in_array($ext, self::AUDIO_EXTENSIONS, true) && str_starts_with((string)$mime, 'audio/')) {
-                $cid = FileLogic::uploadCid(FileEnum::FILE_TYPE, $this->request->post('cid', 0));
-                return UploadService::file($cid, $u, FileEnum::SOURCE_USER);
+                $cid = FileLogic::uploadCid(FileEnum::AUDIO_TYPE, $this->request->post('cid', 0));
+                return UploadService::audio($cid, $u, FileEnum::SOURCE_USER);
             }
             throw new InvalidArgumentException('请选择支持的图片、视频或音频格式');
         }, true);
