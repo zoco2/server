@@ -19,7 +19,7 @@ class WorkspaceAssetController extends BaseApiController
     {
         return $this->respond(function ($t, $u) {
             $file = $this->request->file('file');
-            if (!$file || $file->getSize() > 100 * 1024 * 1024) throw new InvalidArgumentException('请选择100MB以内的图片或视频');
+            if (!$file || $file->getSize() > 100 * 1024 * 1024) throw new InvalidArgumentException('请选择100MB以内的图片、视频或音频');
             $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($file->getPathname());
             $ext = strtolower($file->getOriginalExtension());
             if (in_array($ext, ['jpg','jpeg','png','webp','gif'], true) && @getimagesize($file->getPathname())) {
@@ -30,9 +30,17 @@ class WorkspaceAssetController extends BaseApiController
                 $cid = FileLogic::uploadCid($type, $this->request->post('cid', 0));
                 return $ext === 'webm' ? UploadService::file($cid, $u, FileEnum::SOURCE_USER) : UploadService::video($cid, $u, FileEnum::SOURCE_USER);
             }
-            throw new InvalidArgumentException('请选择支持的图片或视频格式');
+            // 音频走文件表（type=30）：智能剪辑的背景音乐、以及后续其它需要音频的场景共用。
+            if (in_array($ext, self::AUDIO_EXTENSIONS, true) && str_starts_with((string)$mime, 'audio/')) {
+                $cid = FileLogic::uploadCid(FileEnum::FILE_TYPE, $this->request->post('cid', 0));
+                return UploadService::file($cid, $u, FileEnum::SOURCE_USER);
+            }
+            throw new InvalidArgumentException('请选择支持的图片、视频或音频格式');
         }, true);
     }
+
+    /** 允许上传的音频扩展名；与 config/project.php 的 file_file 白名单保持一致 */
+    private const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'];
 
     private function respond(callable $action, bool $write = false)
     {

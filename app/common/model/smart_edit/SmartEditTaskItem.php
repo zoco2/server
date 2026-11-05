@@ -15,6 +15,12 @@ class SmartEditTaskItem extends BaseModel
     /** 封面：轨首图片片段，固定占 0.5s */
     public const TYPE_COVER = 'cover';
 
+    /** 贴纸：独占一条图片轨，叠在正片之上 */
+    public const TYPE_STICKER = 'sticker';
+
+    /** 背景音乐：独占音频轨 */
+    public const TYPE_AUDIO = 'audio';
+
     public function getInSecAttr($value): float
     {
         return (float)$value;

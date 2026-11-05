@@ -20,6 +20,12 @@ class SmartEditService
     public const MAX_CLIPS = 20;
     public const MAX_POLL_ATTEMPTS = 240;
 
+    /** 贴纸数量上限 */
+    public const MAX_STICKERS = 20;
+
+    /** 背景音乐数量上限 */
+    public const MAX_AUDIOS = 3;
+
     /** 标题文案最大字数 */
     public const MAX_TITLE_TEXT_LENGTH = 30;
 
@@ -59,7 +65,10 @@ class SmartEditService
      */
     public static function generate(int $tenantId, int $userId, array $params): array
     {
-        [$editType, $title, $clips, $coverUri, $aspectRatio, $titleText] = self::validate($tenantId, $params);
+        $validated = self::validate($tenantId, $params);
+        [$editType, $title, $clips, $coverUri, $aspectRatio, $titleText] = $validated;
+        $stickerInputs = $validated[6];
+        $audioInputs = $validated[7];
         $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
         [$outputWidth, $outputHeight] = self::resolveOutputSize($aspectRatio);
@@ -79,8 +88,21 @@ class SmartEditService
             ? ''
             : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
 
+        // 贴纸与背景音乐同样要过归属校验，避免任意 URL 被塞进成片。
+        // 校验完把 uri 换成 IMS 能直接拉取的 media_url，其余字段原样保留。
+        $stickers = [];
+        foreach ($stickerInputs as $input) {
+            $mediaUrl = SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$input['uri']);
+            $stickers[] = ['media_url' => $mediaUrl] + array_diff_key($input, ['uri' => true]);
+        }
+        $audios = [];
+        foreach ($audioInputs as $input) {
+            $mediaUrl = SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$input['uri']);
+            $audios[] = ['media_url' => $mediaUrl] + array_diff_key($input, ['uri' => true]);
+        }
+
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText, $outputHeight);
+        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText, $outputHeight, $stickers, $audios);
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -88,7 +110,16 @@ class SmartEditService
             'task_no' => $taskNo,
             'edit_type' => $editType,
             'title' => $title,
-            'params_json' => ['edit_type' => $editType, 'title' => $title, 'clips' => $clips, 'cover_uri' => $coverUri, 'aspect_ratio' => $aspectRatio, 'title_text' => $titleText],
+            'params_json' => [
+                'edit_type' => $editType,
+                'title' => $title,
+                'clips' => $clips,
+                'cover_uri' => $coverUri,
+                'aspect_ratio' => $aspectRatio,
+                'title_text' => $titleText,
+                'stickers' => $stickerInputs,
+                'audios' => $audioInputs,
+            ],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
             'region' => $config['region'],
@@ -146,6 +177,45 @@ class SmartEditService
                 'out_sec' => (float)($clip['out'] ?? 0),
                 'duration' => max(0, (float)($clip['out'] ?? 0) - (float)($clip['in'] ?? 0)),
                 'raw_meta' => json_encode(['media_url' => $items[$index]['media_url']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'create_time' => time(),
+            ];
+        }
+        // 贴纸与音频也落明细，任务详情能直接回显用户当时用了什么素材。
+        $extraSort = $sortBase + count($clips);
+        foreach ($stickers as $index => $sticker) {
+            $rows[] = [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'task_id' => (int)$task['id'],
+                'item_type' => SmartEditTaskItem::TYPE_STICKER,
+                'sort' => $extraSort + $index,
+                'source_uri' => (string)($stickerInputs[$index]['uri'] ?? ''),
+                'storage_scope' => 'tenant',
+                'storage_engine' => 'aliyun',
+                'storage_domain' => $config['domain'],
+                'in_sec' => (float)($sticker['TimelineIn'] ?? 0),
+                'out_sec' => (float)($sticker['TimelineOut'] ?? 0),
+                'duration' => max(0, (float)($sticker['TimelineOut'] ?? 0) - (float)($sticker['TimelineIn'] ?? 0)),
+                'raw_meta' => json_encode($sticker, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'create_time' => time(),
+            ];
+        }
+        $extraSort += count($stickers);
+        foreach ($audios as $index => $audio) {
+            $rows[] = [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'task_id' => (int)$task['id'],
+                'item_type' => SmartEditTaskItem::TYPE_AUDIO,
+                'sort' => $extraSort + $index,
+                'source_uri' => (string)($audioInputs[$index]['uri'] ?? ''),
+                'storage_scope' => 'tenant',
+                'storage_engine' => 'aliyun',
+                'storage_domain' => $config['domain'],
+                'in_sec' => (float)($audio['In'] ?? 0),
+                'out_sec' => (float)($audio['Out'] ?? 0),
+                'duration' => max(0, (float)($audio['Out'] ?? 0) - (float)($audio['In'] ?? 0)),
+                'raw_meta' => json_encode($audio, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'create_time' => time(),
             ];
         }
@@ -439,7 +509,126 @@ class SmartEditService
         if (mb_strlen($titleText) > self::MAX_TITLE_TEXT_LENGTH) {
             throw new Exception('标题文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
         }
-        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleText];
+        $stickers = self::normalizeStickers($params['stickers'] ?? []);
+        $audios = self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []);
+        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleText, $stickers, $audios];
+    }
+
+    /**
+     * 贴纸片段归一化。
+     *
+     * 只负责「取值是否合法」，不替前端决定位置：
+     * X/Y/Width/Height/Opacity 传什么就用什么，缺省则交给 IMS 默认值。
+     * 时间轴区间可省略，省略即铺满整段成片。
+     */
+    private static function normalizeStickers($raw): array
+    {
+        if (!is_array($raw) || $raw === []) {
+            return [];
+        }
+        if (count($raw) > self::MAX_STICKERS) {
+            throw new Exception('一次最多添加 ' . self::MAX_STICKERS . ' 个贴纸');
+        }
+        // 归一化后的键名直接用 IMS 字段名，再拼到 Timeline 时不必二次映射。
+        $map = [
+            'x' => 'X',
+            'y' => 'Y',
+            'width' => 'Width',
+            'height' => 'Height',
+            'opacity' => 'Opacity',
+            'timeline_in' => 'TimelineIn',
+            'timeline_out' => 'TimelineOut',
+        ];
+        $rows = [];
+        foreach (array_values($raw) as $item) {
+            if (!is_array($item)) {
+                throw new Exception('贴纸参数格式错误');
+            }
+            $uri = trim((string)($item['uri'] ?? ''));
+            if ($uri === '') {
+                throw new Exception('贴纸素材不能为空');
+            }
+            $row = ['uri' => $uri];
+            foreach ($map as $key => $field) {
+                if (!array_key_exists($key, $item) || $item[$key] === '' || $item[$key] === null) {
+                    continue;
+                }
+                if (!is_numeric($item[$key])) {
+                    throw new Exception('贴纸参数 ' . $key . ' 必须是数字');
+                }
+                $row[$field] = (float)$item[$key];
+            }
+            if (isset($row['TimelineIn'], $row['TimelineOut']) && $row['TimelineOut'] <= $row['TimelineIn']) {
+                throw new Exception('贴纸结束时间必须大于开始时间');
+            }
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
+    /**
+     * 背景音乐片段归一化。
+     *
+     * 音量统一折算成 0~1 的 gain；传 >1 的值按百分比理解（如 60 -> 0.6），
+     * 这样前端用滑块（0~100）或小数都能直接对接。
+     */
+    private static function normalizeAudios($raw): array
+    {
+        if (!is_array($raw) || $raw === []) {
+            return [];
+        }
+        if (count($raw) > self::MAX_AUDIOS) {
+            throw new Exception('一次最多添加 ' . self::MAX_AUDIOS . ' 段背景音乐');
+        }
+        $map = [
+            'in' => 'In',
+            'out' => 'Out',
+            'timeline_in' => 'TimelineIn',
+            'timeline_out' => 'TimelineOut',
+        ];
+        $rows = [];
+        foreach (array_values($raw) as $item) {
+            if (!is_array($item)) {
+                throw new Exception('背景音乐参数格式错误');
+            }
+            $uri = trim((string)($item['uri'] ?? ''));
+            if ($uri === '') {
+                throw new Exception('背景音乐素材不能为空');
+            }
+            $row = ['uri' => $uri];
+            foreach ($map as $key => $field) {
+                if (!array_key_exists($key, $item) || $item[$key] === '' || $item[$key] === null) {
+                    continue;
+                }
+                if (!is_numeric($item[$key])) {
+                    throw new Exception('背景音乐参数 ' . $key . ' 必须是数字');
+                }
+                $row[$field] = (float)$item[$key];
+            }
+            if (isset($row['In'], $row['Out']) && $row['Out'] <= $row['In']) {
+                throw new Exception('背景音乐截取结束时间必须大于开始时间');
+            }
+            if (isset($row['TimelineIn'], $row['TimelineOut']) && $row['TimelineOut'] <= $row['TimelineIn']) {
+                throw new Exception('背景音乐结束时间必须大于开始时间');
+            }
+            $volume = $item['volume'] ?? $item['gain'] ?? null;
+            if ($volume !== null && $volume !== '') {
+                if (!is_numeric($volume)) {
+                    throw new Exception('背景音乐音量必须是数字');
+                }
+                $gain = (float)$volume;
+                // 大于 1 视为百分制，前端用 0~100 的滑块时不必自己折算。
+                if ($gain > 1) {
+                    $gain /= 100;
+                }
+                $row['gain'] = max(0.0, min(1.0, $gain));
+            }
+            if (array_key_exists('loop', $item)) {
+                $row['loop'] = (bool)$item['loop'];
+            }
+            $rows[] = $row;
+        }
+        return $rows;
     }
 
     private static function buildTimeline(string $editType, array $items, string $coverUrl = '', string $titleText = '', int $outputHeight = 0): array

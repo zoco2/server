@@ -7,9 +7,13 @@ use Exception;
 /**
  * Timeline 构建。
  *
- * 每个 edit_type 一个分支，分支之间互不影响：
- * - merge（本轮）：单条视频轨，素材顺序相接
- * - subtitle / sticker / bgm（后续）：在已有 Timeline 基础上追加对应轨道
+ * 输入是已经归一化、校验过的结构，这里只负责翻译成 IMS 的 Timeline：
+ * - 视频轨：封面图片片段 + 正片视频片段，顺序相接
+ * - 图片轨：贴纸，独占一条 VideoTrack 叠在视频轨之上
+ * - 字幕轨：标题与前端传入的文字图层
+ * - 音频轨：背景音乐
+ *
+ * 位置/尺寸/音量等取值一律原样透传，由前端控制；这里只决定落在哪条轨道。
  */
 class SmartEditTimelineBuilder
 {
@@ -26,20 +30,24 @@ class SmartEditTimelineBuilder
     private const TITLE_TOP_FALLBACK_PX = 86;
 
     /**
-     * 多视频合并。
+     * 多视频合并，并按需叠加贴纸与背景音乐。
      *
      * @param array  $items        [['media_url'=>string,'in'=>float,'out'=>float], ...]
      * @param string $coverUrl     封面图片的公网地址；为空表示不加封面
      * @param string $titleText    标题文案；为空表示不加标题
      * @param float  $titleSeconds 标题展示时长（成片开头起算）
      * @param int    $outputHeight 成片高度（像素），用于换算标题的纵向位置
+     * @param array  $stickers     贴纸片段，元素见 stickerClip()
+     * @param array  $audioClips   背景音乐片段，元素见 audioClip()
      */
     public static function buildMerge(
         array $items,
         string $coverUrl = '',
         string $titleText = '',
         float $titleSeconds = self::TITLE_SECONDS,
-        int $outputHeight = 0
+        int $outputHeight = 0,
+        array $stickers = [],
+        array $audioClips = []
     ): array {
         $clips = [];
         foreach ($items as $item) {
@@ -69,17 +77,39 @@ class SmartEditTimelineBuilder
             array_unshift($clips, self::coverClip($coverUrl));
         }
 
+        // 正片轨固定是第 0 条，贴纸与它分开，绝不复用这条轨。
         $timeline = [
             'VideoTracks' => [
                 ['VideoTrackClips' => $clips],
             ],
         ];
 
+        // 贴纸独占一条图片轨：VideoTracks 数组顺序即叠放顺序（先底后顶），
+        // 放在正片轨之后就能压在画面之上，不需要逐帧计算。
+        if ($stickers !== []) {
+            $timeline['VideoTracks'][] = [
+                'VideoTrackClips' => array_map(
+                    static fn(array $sticker): array => self::stickerClip($sticker),
+                    $stickers
+                ),
+            ];
+        }
+
         // 标题走独立的文字轨，从成片 0 秒开始展示。不依赖任何素材时长，
         // 因此 out=0（用完整时长）的片段也不影响。
         if ($titleText !== '') {
             $timeline['SubtitleTracks'] = [
                 ['SubtitleTrackClips' => [self::titleClip($titleText, $titleSeconds, $outputHeight)]],
+            ];
+        }
+
+        // 背景音乐独占音频轨；Volume 由前端给出，这里不做业务假设。
+        if ($audioClips !== []) {
+            $timeline['AudioTracks'] = [
+                ['AudioTrackClips' => array_map(
+                    static fn(array $audio): array => self::audioClip($audio),
+                    $audioClips
+                )],
             ];
         }
 
@@ -137,5 +167,64 @@ class SmartEditTimelineBuilder
             'TimelineIn' => 0,
             'TimelineOut' => $seconds,
         ];
+    }
+
+    /**
+     * 贴纸图片片段。
+     *
+     * 坐标语义与字幕一致：X/Y 既可传 0~0.9999 的比例，也可传 ≥8 的像素值，
+     * IMS 按这两种区间自行识别。Width/Height 是相对成片的缩放比例。
+     * 这里只做缺省填充，凡是前端给了的都原样透传。
+     *
+     * @param array $sticker 归一化后的贴纸片段（见 SmartEditService::normalizeStickers）
+     */
+    private static function stickerClip(array $sticker): array
+    {
+        $clip = [
+            'Type' => 'Image',
+            'MediaURL' => (string)($sticker['media_url'] ?? ''),
+        ];
+        foreach (['X', 'Y', 'Width', 'Height', 'Opacity'] as $key) {
+            if (array_key_exists($key, $sticker) && $sticker[$key] !== null) {
+                $clip[$key] = $sticker[$key];
+            }
+        }
+        // 坚持有起止时间才写时间轴字段：缺省时 IMS 会按整段成片铺满。
+        foreach (['TimelineIn', 'TimelineOut'] as $key) {
+            if (array_key_exists($key, $sticker) && $sticker[$key] !== null) {
+                $clip[$key] = round((float)$sticker[$key], 4);
+            }
+        }
+        return $clip;
+    }
+
+    /**
+     * 背景音乐片段。
+     *
+     * 素材自身的裁取用 In/Out，放到成片时间轴上的位置用 TimelineIn/Out，
+     * 两者互不影响。音量走 Effects 里的 Volume，Gain 取值 0~1。
+     *
+     * @param array $audio 归一化后的音频片段（见 SmartEditService::normalizeAudios）
+     */
+    private static function audioClip(array $audio): array
+    {
+        $clip = [
+            'MediaURL' => (string)($audio['media_url'] ?? ''),
+        ];
+        foreach (['In', 'Out', 'TimelineIn', 'TimelineOut'] as $key) {
+            if (array_key_exists($key, $audio) && $audio[$key] !== null) {
+                $clip[$key] = round((float)$audio[$key], 4);
+            }
+        }
+        // LoopMode 打开后，音乐比成片短时自动循环，前端不必自己算重复次数。
+        if (!empty($audio['loop'])) {
+            $clip['LoopMode'] = true;
+        }
+        if (array_key_exists('gain', $audio) && $audio['gain'] !== null) {
+            $clip['Effects'] = [
+                ['Type' => 'Volume', 'Gain' => round((float)$audio['gain'], 4)],
+            ];
+        }
+        return $clip;
     }
 }
