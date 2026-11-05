@@ -24,8 +24,17 @@ class SmartEditFontService
     /** 单文件下载上限（字节），防止异常地址把磁盘写满 */
     private const MAX_FONT_BYTES = 40 * 1024 * 1024;
 
-    /** 下载超时（秒） */
-    private const DOWNLOAD_TIMEOUT = 120;
+    /**
+     * 请求内同步下载的超时（秒）。
+     *
+     * 中文字体动辄 20MB 以上，从 GitHub 拉取经常超过 PHP 的 max_execution_time，
+     * 会让提交接口一直挂住。请求路径上只给很短的机会，超时就退回系统字体名，
+     * 真正的预热交给 `php think smart-edit:fonts` 在部署时完成。
+     */
+    private const REQUEST_DOWNLOAD_TIMEOUT = 8;
+
+    /** 命令行预热时的下载超时（秒） */
+    private const CLI_DOWNLOAD_TIMEOUT = 300;
 
     /**
      * 预置字体清单。
@@ -110,10 +119,11 @@ class SmartEditFontService
      *
      * 返回空串表示该字体不可用，调用方应回退到系统字体名或不设字体。
      *
-     * @param array  $config SmartEditImsConfigService::require() 的结果
-     * @param string $key    字体 key，见 catalog()
+     * @param array  $config  SmartEditImsConfigService::require() 的结果
+     * @param string $key     字体 key，见 catalog()
+     * @param int    $timeout 下载超时秒数；请求路径用短超时，命令行预热用长超时
      */
-    public static function prepare(array $config, string $key): string
+    public static function prepare(array $config, string $key, int $timeout = self::REQUEST_DOWNLOAD_TIMEOUT): string
     {
         $font = self::catalog()[$key] ?? null;
         if ($font === null) {
@@ -127,7 +137,7 @@ class SmartEditFontService
             if ($client->doesObjectExist($bucket, $objectKey)) {
                 return self::fontUrl($config, $client, $objectKey);
             }
-            $local = self::download($font['url'], $font['filename']);
+            $local = self::download($font['url'], $font['filename'], $timeout);
             if ($local === '') {
                 return '';
             }
@@ -190,9 +200,12 @@ class SmartEditFontService
      *
      * 部分字体只提供 zip（如得意黑），这里解出其中的 ttf/otf。
      *
+     * @param string $url      下载地址
+     * @param string $filename 目标文件名
+     * @param int    $timeout  本次下载允许的秒数
      * @return string 本地路径；失败返回空串
      */
-    private static function download(string $url, string $filename): string
+    private static function download(string $url, string $filename, int $timeout = self::REQUEST_DOWNLOAD_TIMEOUT): string
     {
         $tmpDir = runtime_path() . 'smart_edit_fonts';
         if (!is_dir($tmpDir) && !mkdir($tmpDir, 0755, true) && !is_dir($tmpDir)) {
@@ -214,7 +227,10 @@ class SmartEditFontService
             CURLOPT_FILE => $fp,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
-            CURLOPT_TIMEOUT => self::DOWNLOAD_TIMEOUT,
+            // 连接和总时长都要限死：没有 CONNECTTIMEOUT 时，DNS 或握手卡住会吃掉整个超时
+            CURLOPT_CONNECTTIMEOUT => min(5, $timeout),
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_NOSIGNAL => true,
             CURLOPT_USERAGENT => 'zoco-smart-edit/1.0',
         ]);
         $ok = curl_exec($ch);

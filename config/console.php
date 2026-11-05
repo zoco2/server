@@ -55,6 +55,8 @@ return [
         'short-drama:dedupe-assets' => 'app\common\command\RepairShortDramaDuplicateAssets',
         // 智能剪辑（阿里云 IMS）轮询
         'smart-edit:worker' => 'app\common\command\SmartEditWorker',
+        // 智能剪辑标题字体预热（部署时执行，避免提交请求内下载字体）
+        'smart-edit:fonts' => 'app\common\command\SmartEditFonts',
         // 轻量消息队列（原 MNS）
         'mns:send' => 'app\common\command\MnsSend',
         'mns:consume' => 'app\common\command\MnsConsume',
