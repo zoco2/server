@@ -8,6 +8,8 @@ use app\common\model\wechat\WechatAuthorizer;
 use app\common\service\ConfigService;
 use app\common\service\SubmitLockService;
 use app\common\service\wechat\OpenPlatformService;
+use app\common\service\wechat\WeChatConfigService;
+use EasyWeChat\OfficialAccount\Application;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
@@ -38,7 +40,11 @@ class StaffWechatBindingLogic
             ->order('id desc')
             ->value('authorizer_appid');
         if ($authorizerAppId === '') {
-            throw new \RuntimeException('当前租户尚未授权公众号');
+            $officialConfig = WeChatConfigService::getOaConfig();
+            if (empty($officialConfig['app_id']) || empty($officialConfig['secret'])) {
+                throw new \RuntimeException('请先授权公众号或在公众号配置中填写 AppID 和 AppSecret');
+            }
+            $authorizerAppId = (string)$officialConfig['app_id'];
         }
         $record = [
             'tenant_id' => $tenantId,
@@ -46,7 +52,7 @@ class StaffWechatBindingLogic
             'appid' => $authorizerAppId,
             'expires_at' => time() + self::QR_TTL,
         ];
-        $qr = OpenPlatformService::authorizerRequest($tenantId, 'official', 'cgi-bin/qrcode/create', [
+        $qr = self::wechatRequest($tenantId, 'cgi-bin/qrcode/create', [
             'expire_seconds' => self::QR_TTL,
             'action_name' => 'QR_STR_SCENE',
             'action_info' => ['scene' => ['scene_str' => $scene]],
@@ -83,9 +89,8 @@ class StaffWechatBindingLogic
             throw new \RuntimeException('员工绑定模板尚未配置标题和字段映射');
         }
 
-        $existing = OpenPlatformService::authorizerRequest(
+        $existing = self::wechatRequest(
             $tenantId,
-            'official',
             'cgi-bin/template/get_all_private_template',
             [],
             'merchant.staff.bind.template.list',
@@ -103,7 +108,7 @@ class StaffWechatBindingLogic
             if ($shortId === '' || $keywords === []) {
                 throw new \RuntimeException('当前公众号未找到「' . $title . '」模板，且未配置可新建模板的短编号和关键词');
             }
-            $created = OpenPlatformService::authorizerRequest($tenantId, 'official', 'cgi-bin/template/api_add_template', [
+            $created = self::wechatRequest($tenantId, 'cgi-bin/template/api_add_template', [
                 'template_id_short' => $shortId,
                 'keyword_name_list' => $keywords,
             ], 'merchant.staff.bind.template.add');
@@ -227,11 +232,40 @@ class StaffWechatBindingLogic
             }
         }
 
-        OpenPlatformService::authorizerRequest($tenantId, 'official', 'cgi-bin/message/template/send', [
+        self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
             'touser' => $openid,
             'template_id' => $templateId,
             'data' => $data,
         ], 'merchant.staff.bind.template.send');
+    }
+
+    private static function wechatRequest(int $tenantId, string $path, array $payload, string $apiName, string $method = 'POST'): array
+    {
+        if (OpenPlatformService::hasAuthorizedOfficialAccount($tenantId)) {
+            return OpenPlatformService::authorizerRequest(
+                $tenantId,
+                'official',
+                $path,
+                $payload,
+                $apiName,
+                $method
+            );
+        }
+
+        $config = WeChatConfigService::getOaConfig();
+        if (empty($config['app_id']) || empty($config['secret'])) {
+            throw new \RuntimeException('请先授权公众号或在公众号配置中填写 AppID 和 AppSecret');
+        }
+
+        $client = (new Application($config))->getClient();
+        $response = strtoupper($method) === 'GET'
+            ? $client->get($path, $payload)
+            : $client->postJson($path, $payload);
+        $result = is_array($response) ? $response : $response->toArray();
+        if ((int)($result['errcode'] ?? 0) !== 0) {
+            throw new \RuntimeException('微信接口调用失败：' . (string)($result['errmsg'] ?? $result['errcode']));
+        }
+        return $result;
     }
 
     private static function assertBindNoticeReady(int $tenantId): void
