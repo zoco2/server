@@ -26,6 +26,9 @@ class SmartEditService
     /** 背景音乐数量上限 */
     public const MAX_AUDIOS = 3;
 
+    /** 贴纸未指定结束时间时的默认展示时长（秒） */
+    public const STICKER_DEFAULT_SECONDS = 60.0;
+
     /** 标题文案最大字数 */
     public const MAX_TITLE_TEXT_LENGTH = 30;
 
@@ -664,6 +667,8 @@ class SmartEditService
             throw new Exception('一次最多添加 ' . self::MAX_STICKERS . ' 个贴纸');
         }
         // 归一化后的键名直接用 IMS 字段名，再拼到 Timeline 时不必二次映射。
+        // 前端可以传小写（x/y/width）也可以直接传 IMS 风格的大写（X/Y/Width），
+        // 两种写法都要认，否则位置参数会被静默丢掉。
         $map = [
             'x' => 'X',
             'y' => 'Y',
@@ -684,20 +689,39 @@ class SmartEditService
             }
             $row = ['uri' => $uri];
             foreach ($map as $key => $field) {
-                if (!array_key_exists($key, $item) || $item[$key] === '' || $item[$key] === null) {
+                // 小写键与 IMS 风格大写键都接受，先看小写再看大写
+                $value = $item[$key] ?? $item[$field] ?? null;
+                if ($value === '' || $value === null) {
                     continue;
                 }
-                if (!is_numeric($item[$key])) {
+                if (!is_numeric($value)) {
                     throw new Exception('贴纸参数 ' . $key . ' 必须是数字');
                 }
-                $row[$field] = (float)$item[$key];
+                $row[$field] = (float)$value;
             }
-            if (isset($row['TimelineIn'], $row['TimelineOut']) && $row['TimelineOut'] <= $row['TimelineIn']) {
+            // 贴纸必须有明确时长，否则 IMS 找不到可渲染区间会直接忽略这个片段
+            if (!isset($row['TimelineIn'])) {
+                $row['TimelineIn'] = 0;
+            }
+            if (!isset($row['TimelineOut'])) {
+                $row['TimelineOut'] = self::defaultStickerSeconds($row['TimelineIn']);
+            }
+            if ($row['TimelineOut'] <= $row['TimelineIn']) {
                 throw new Exception('贴纸结束时间必须大于开始时间');
             }
             $rows[] = $row;
         }
         return $rows;
+    }
+
+    /**
+     * 贴纸未给结束时间时的默认时长。
+     *
+     * 前端只传位置时不至于整段消失，给一个足够长的区间覆盖常见成片。
+     */
+    private static function defaultStickerSeconds(float $from): float
+    {
+        return round($from + self::STICKER_DEFAULT_SECONDS, 4);
     }
 
     /**
