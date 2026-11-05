@@ -133,5 +133,5 @@
 | `store_id` | bigint unsigned | `la_merchant_store.id` |
 | `config` | mediumtext | 装修配置 JSON |
 | `files` | mediumtext | 装修引用图片 JSON，`[{id,url}]`。id 来自 `/upload/image` |
-| `revision` | int unsigned | 乐观锁。每次保存 +1 |
+| `revision` | int unsigned | 保存次数。每次保存 +1，用来判断有没有装过 |
 | `update_time` | int unsigned | |

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS `la_merchant_store_design` (
   `store_id` bigint unsigned NOT NULL COMMENT '门店ID',
   `config` mediumtext NOT NULL COMMENT '装修配置 JSON',
   `files` mediumtext NOT NULL COMMENT '装修引用图片 JSON，[{id,url}]',
-  `revision` int unsigned NOT NULL DEFAULT 1 COMMENT '乐观锁版本',
+  `revision` int unsigned NOT NULL DEFAULT 1 COMMENT '保存次数，每次保存+1',
   `update_time` int unsigned NOT NULL DEFAULT 0 COMMENT '更新时间',
   PRIMARY KEY (`tenant_id`,`user_id`,`store_id`),
   KEY `idx_store` (`store_id`)
