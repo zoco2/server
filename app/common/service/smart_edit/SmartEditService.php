@@ -102,6 +102,7 @@ class SmartEditService
         }
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
+        $titleConfig = self::resolveTitleFont($config, $titleConfig);
         $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleConfig, $outputHeight, $stickers, $audios);
 
         $task = SmartEditTask::create([
@@ -583,12 +584,21 @@ class SmartEditService
             $result['alignment'] = $alignment;
         }
 
+        // 字体：优先用预置字体库的 key，其次才接受系统字体名 / 自定义地址。
+        // font_key 在提交阶段才去下载并上传，避免每次打开页面都拉字体文件。
+        $fontKey = trim((string)($config['font_key'] ?? ''));
+        if ($fontKey !== '') {
+            if (!SmartEditFontService::has($fontKey)) {
+                throw new Exception('不支持的标题字体：' . $fontKey);
+            }
+            $result['font_key'] = $fontKey;
+        }
         $font = trim((string)($config['font'] ?? ''));
-        if ($font !== '') {
+        if ($font !== '' && $fontKey === '') {
             $result['font'] = mb_substr($font, 0, 80);
         }
         $fontUrl = trim((string)($config['font_url'] ?? $config['fontUrl'] ?? ''));
-        if ($fontUrl !== '') {
+        if ($fontUrl !== '' && $fontKey === '') {
             if (!preg_match('#^https?://#i', $fontUrl)) {
                 throw new Exception('标题字体地址必须是完整的 http(s) 地址');
             }
@@ -605,6 +615,37 @@ class SmartEditService
             return null;
         }
         return (float)$value;
+    }
+
+    /**
+     * 把标题的字体 key 解析成 IMS 能直接拉取的字體地址。
+     *
+     * 预置字体会在首次使用时下载并上传到租户 OSS，之后复用同一对象。
+     * 准备失败时退回该字体的系统字体名；再失败就交给 IMS 默认字体，
+     * 保证任务能提交，不会因为字体问题整单失败。
+     *
+     * @param array $config 阿里云配置
+     * @param array $title  归一化后的标题配置
+     */
+    private static function resolveTitleFont(array $config, array $title): array
+    {
+        $key = (string)($title['font_key'] ?? '');
+        if ($key === '') {
+            return $title;
+        }
+        unset($title['font_key']);
+
+        $fontUrl = SmartEditFontService::prepare($config, $key);
+        if ($fontUrl !== '') {
+            $title['font_url'] = $fontUrl;
+            return $title;
+        }
+        // 下载或上传失败：退回系统字体名，至少不会是默认字体
+        $alias = SmartEditFontService::aliasOf($key);
+        if ($alias !== '') {
+            $title['font'] = $alias;
+        }
+        return $title;
     }
 
     /**

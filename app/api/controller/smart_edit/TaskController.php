@@ -4,6 +4,7 @@ namespace app\api\controller\smart_edit;
 
 use app\api\controller\BaseApiController;
 use app\api\lists\smart_edit\SmartEditTaskLists;
+use app\common\service\smart_edit\SmartEditFontService;
 use app\common\service\smart_edit\SmartEditService;
 use Exception;
 
@@ -15,6 +16,14 @@ class TaskController extends BaseApiController
     public function lists()
     {
         return $this->dataLists(new SmartEditTaskLists());
+    }
+
+    /**
+     * 标题可选字体。只返回元数据，字体文件在提交时按需准备。
+     */
+    public function fonts()
+    {
+        return $this->success('获取成功', SmartEditFontService::options());
     }
 
     public function detail()
