@@ -23,6 +23,12 @@ class SmartEditTimelineBuilder
     /** 标题文案默认展示时长（秒） */
     public const TITLE_SECONDS = 3.0;
 
+    /** 标题默认字号（像素） */
+    public const TITLE_FONT_SIZE = 48;
+
+    /** 标题默认颜色 */
+    public const TITLE_FONT_COLOR = '#FFFFFF';
+
     /** 标题文字距成片顶部的距离，按成片高度占比计算 */
     private const TITLE_TOP_RATIO = 0.08;
 
@@ -34,8 +40,7 @@ class SmartEditTimelineBuilder
      *
      * @param array  $items        [['media_url'=>string,'in'=>float,'out'=>float], ...]
      * @param string $coverUrl     封面图片的公网地址；为空表示不加封面
-     * @param string $titleText    标题文案；为空表示不加标题
-     * @param float  $titleSeconds 标题展示时长（成片开头起算）
+     * @param array  $title        标题配置，元素见 titleClip()；为空表示不加标题
      * @param int    $outputHeight 成片高度（像素），用于换算标题的纵向位置
      * @param array  $stickers     贴纸片段，元素见 stickerClip()
      * @param array  $audioClips   背景音乐片段，元素见 audioClip()
@@ -43,8 +48,7 @@ class SmartEditTimelineBuilder
     public static function buildMerge(
         array $items,
         string $coverUrl = '',
-        string $titleText = '',
-        float $titleSeconds = self::TITLE_SECONDS,
+        array $title = [],
         int $outputHeight = 0,
         array $stickers = [],
         array $audioClips = []
@@ -95,11 +99,11 @@ class SmartEditTimelineBuilder
             ];
         }
 
-        // 标题走独立的文字轨，从成片 0 秒开始展示。不依赖任何素材时长，
-        // 因此 out=0（用完整时长）的片段也不影响。
-        if ($titleText !== '') {
+        // 标题走独立的文字轨。起止时间、字体、颜色、对齐都由前端决定，
+        // 这里只把缺省值补上，不替用户做排版假设。
+        if (($title['text'] ?? '') !== '') {
             $timeline['SubtitleTracks'] = [
-                ['SubtitleTrackClips' => [self::titleClip($titleText, $titleSeconds, $outputHeight)]],
+                ['SubtitleTrackClips' => [self::titleClip($title, $outputHeight)]],
             ];
         }
 
@@ -117,39 +121,72 @@ class SmartEditTimelineBuilder
     }
 
     /**
-     * 标题文字片段：顶部居中。
+     * 标题文字片段。
      *
      * IMS 的坐标语义（见官方字幕示例）：
-     * - X/Y 单位为像素，不是画布百分比；0.06 会被当成 0.06px，贴着顶边。
+     * - X/Y 可传 0~0.9999 的比例，也可传 ≥8 的像素值，IMS 按数值区间自行识别。
      * - Alignment 决定 X/Y 指向文本框的哪个基准点。Center 是「上边界中点」，
-     *   此时 X=0 会把文本框左半边推到画面外，文案前几个字被裁掉。
-     *   TopCenter 表示「视频竖直中轴线上侧」，横向自动居中，只需给 Y。
-     * Width/Height 只对 Box/Image 类片段有效，文字片段传了不生效，徒增歧义，故不传。
+     *   X=0 会把文本框左半边推到画面外，文案前几个字被裁掉；
+     *   Left/Right 分别是左上角顶点、右上角顶点。
+     *   横向对齐交给 Alignment，无需前端推算 X。
      *
-     * 位置与字号集中在这里，后续要放开给用户配置只需改这一处。
+     * 字体：Font 是系统字体名，FontURL 是自定义字体文件地址，两者同时给时以 FontURL 为准。
      *
-     * @param string $text         标题文案
-     * @param float  $seconds      展示时长
-     * @param int    $outputHeight 成片高度（像素）；0 表示未知，退回固定像素值
+     * @param array $title        归一化后的标题配置（见 SmartEditService::normalizeTitle）
+     * @param int   $outputHeight 成片高度（像素）；0 表示未知，退回固定像素值
      */
-    private static function titleClip(string $text, float $seconds, int $outputHeight = 0): array
+    private static function titleClip(array $title, int $outputHeight = 0): array
     {
-        // 纵向取成片高度的 8%，与不同输出比例下保持相近的视觉留白。
-        $y = $outputHeight > 0
+        $clip = [
+            'Type' => 'Text',
+            'Content' => (string)$title['text'],
+            'TimelineIn' => round((float)($title['timeline_in'] ?? 0), 4),
+            'TimelineOut' => round((float)($title['timeline_out'] ?? self::TITLE_SECONDS), 4),
+            'X' => 0,
+            // 纵向高度：前端给的是 0~1 的比例时按成片高度换算，否则视为像素值。
+            'Y' => self::titleY($title['y'] ?? null, $outputHeight),
+            'FontSize' => (int)($title['font_size'] ?? self::TITLE_FONT_SIZE),
+            'FontColor' => (string)($title['font_color'] ?? self::TITLE_FONT_COLOR),
+            'Alignment' => (string)($title['alignment'] ?? 'TopCenter'),
+        ];
+        $font = trim((string)($title['font'] ?? ''));
+        if ($font !== '') {
+            $clip['Font'] = $font;
+        }
+        $fontUrl = trim((string)($title['font_url'] ?? ''));
+        if ($fontUrl !== '') {
+            // 文档里正文写作 FontURL、示例写作 FontUrl，两个都带上以兼容不同版本。
+            $clip['FontURL'] = $fontUrl;
+            $clip['FontUrl'] = $fontUrl;
+        }
+        return $clip;
+    }
+
+    /**
+     * 标题纵向位置。
+     *
+     * 前端传 0~1 的比例时按成片高度换算成像素；传 ≥8 的整数时视为像素直接使用；
+     * 未传时按成片高度 8% 的默认留白。
+     *
+     * @param mixed $value        前端传入的 Y
+     * @param int   $outputHeight 成片高度（像素）
+     */
+    private static function titleY($value, int $outputHeight): int
+    {
+        if ($value !== null && is_numeric($value)) {
+            $value = (float)$value;
+            if ($value > 0 && $value < 1) {
+                return $outputHeight > 0
+                    ? (int)round($outputHeight * $value)
+                    : (int)round(self::TITLE_TOP_FALLBACK_PX * $value / self::TITLE_TOP_RATIO);
+            }
+            if ($value >= 1) {
+                return (int)round($value);
+            }
+        }
+        return $outputHeight > 0
             ? (int)round($outputHeight * self::TITLE_TOP_RATIO)
             : self::TITLE_TOP_FALLBACK_PX;
-
-        return [
-            'Type' => 'Text',
-            'Content' => $text,
-            'TimelineIn' => 0,
-            'TimelineOut' => round($seconds, 4),
-            'X' => 0,
-            'Y' => max(0, $y),
-            'FontSize' => 48,
-            'FontColor' => '#FFFFFF',
-            'Alignment' => 'TopCenter',
-        ];
     }
 
     /**

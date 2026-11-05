@@ -66,7 +66,7 @@ class SmartEditService
     public static function generate(int $tenantId, int $userId, array $params): array
     {
         $validated = self::validate($tenantId, $params);
-        [$editType, $title, $clips, $coverUri, $aspectRatio, $titleText] = $validated;
+        [$editType, $title, $clips, $coverUri, $aspectRatio, $titleConfig] = $validated;
         $stickerInputs = $validated[6];
         $audioInputs = $validated[7];
         $config = SmartEditImsConfigService::require($tenantId);
@@ -102,7 +102,7 @@ class SmartEditService
         }
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText, $outputHeight, $stickers, $audios);
+        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleConfig, $outputHeight, $stickers, $audios);
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -116,7 +116,8 @@ class SmartEditService
                 'clips' => $clips,
                 'cover_uri' => $coverUri,
                 'aspect_ratio' => $aspectRatio,
-                'title_text' => $titleText,
+                'title_text' => (string)($titleConfig['text'] ?? ''),
+                'title' => $titleConfig,
                 'stickers' => $stickerInputs,
                 'audios' => $audioInputs,
             ],
@@ -504,14 +505,106 @@ class SmartEditService
         } elseif (!isset(self::OUTPUT_SIZES[$aspectRatio])) {
             throw new Exception('不支持的视频比例：' . $aspectRatio);
         }
-        // 标题文案：可选，只限制长度，位置与字号由 Timeline 构建统一控制。
-        $titleText = trim((string)($params['title_text'] ?? ''));
-        if (mb_strlen($titleText) > self::MAX_TITLE_TEXT_LENGTH) {
-            throw new Exception('标题文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
-        }
+        // 标题：文案与排版全部由前端决定，这里只校验取值范围。
+        $titleConfig = self::normalizeTitle($params);
         $stickers = self::normalizeStickers($params['stickers'] ?? []);
         $audios = self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []);
-        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleText, $stickers, $audios];
+        return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleConfig, $stickers, $audios];
+    }
+
+    /**
+     * 标题配置归一化。
+     *
+     * 兼容两种入参：只给 title_text 的旧格式，以及带完整排版的 title 对象。
+     * 文案为空表示不加标题；其余字段缺省时交给 Timeline 构建补默认值，
+     * 这里只拦明显非法的输入，避免把错误参数静默传给 IMS。
+     */
+    private static function normalizeTitle(array $params): array
+    {
+        $raw = $params['title_overlay'] ?? $params['title'] ?? null;
+        // title 参数历史上是任务名称，只有对象形式才当排版配置用。
+        $config = is_array($raw) ? $raw : [];
+        $text = trim((string)($config['text'] ?? $params['title_text'] ?? ''));
+        if ($text === '') {
+            return [];
+        }
+        if (mb_strlen($text) > self::MAX_TITLE_TEXT_LENGTH) {
+            throw new Exception('标题文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
+        }
+        $result = ['text' => $text];
+
+        $start = self::numberOrNull($config['timeline_in'] ?? $config['start'] ?? null);
+        $end = self::numberOrNull($config['timeline_out'] ?? $config['end'] ?? null);
+        if ($start !== null || $end !== null) {
+            $start = max(0, (float)($start ?? 0));
+            $end = $end === null ? $start + SmartEditTimelineBuilder::TITLE_SECONDS : (float)$end;
+            if ($end <= $start) {
+                throw new Exception('标题结束时间必须大于开始时间');
+            }
+            $result['timeline_in'] = $start;
+            $result['timeline_out'] = $end;
+        } elseif (isset($config['duration']) && self::numberOrNull($config['duration']) !== null) {
+            $result['timeline_in'] = 0;
+            $result['timeline_out'] = max(0.1, (float)$config['duration']);
+        }
+
+        $fontSize = self::numberOrNull($config['font_size'] ?? null);
+        if ($fontSize !== null) {
+            if ($fontSize < 8 || $fontSize > 400) {
+                throw new Exception('标题字号需在 8 ~ 400 之间');
+            }
+            $result['font_size'] = (int)round($fontSize);
+        }
+
+        $color = trim((string)($config['font_color'] ?? $config['color'] ?? ''));
+        if ($color !== '') {
+            if (!preg_match('/^#([0-9a-fA-F]{6})$/', $color)) {
+                throw new Exception('标题颜色需为 #RRGGBB 格式');
+            }
+            $result['font_color'] = $color;
+        }
+
+        $y = self::numberOrNull($config['y'] ?? null);
+        if ($y !== null) {
+            if ($y < 0) {
+                throw new Exception('标题高度不能为负数');
+            }
+            $result['y'] = $y;
+        }
+
+        $alignment = trim((string)($config['alignment'] ?? ''));
+        if ($alignment !== '') {
+            // 只接受 IMS 的横向对齐取值；其余一律报错，避免 typo 静默变成默认值。
+            $allowed = ['TopLeft', 'TopCenter', 'TopRight', 'Left', 'Center', 'Right',
+                'CenterLeft', 'CenterCenter', 'CenterRight', 'BottomLeft', 'BottomCenter', 'BottomRight'];
+            if (!in_array($alignment, $allowed, true)) {
+                throw new Exception('不支持的标题对齐方式：' . $alignment);
+            }
+            $result['alignment'] = $alignment;
+        }
+
+        $font = trim((string)($config['font'] ?? ''));
+        if ($font !== '') {
+            $result['font'] = mb_substr($font, 0, 80);
+        }
+        $fontUrl = trim((string)($config['font_url'] ?? $config['fontUrl'] ?? ''));
+        if ($fontUrl !== '') {
+            if (!preg_match('#^https?://#i', $fontUrl)) {
+                throw new Exception('标题字体地址必须是完整的 http(s) 地址');
+            }
+            $result['font_url'] = $fontUrl;
+        }
+
+        return $result;
+    }
+
+    /** 转成数字；非数字或空值统一返回 null，便于区分「没传」和 0。 */
+    private static function numberOrNull($value): ?float
+    {
+        if ($value === null || $value === '' || !is_numeric($value)) {
+            return null;
+        }
+        return (float)$value;
     }
 
     /**
@@ -631,10 +724,10 @@ class SmartEditService
         return $rows;
     }
 
-    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', string $titleText = '', int $outputHeight = 0): array
+    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', array $title = [], int $outputHeight = 0): array
     {
         return match ($editType) {
-            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $titleText, SmartEditTimelineBuilder::TITLE_SECONDS, $outputHeight),
+            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $title, $outputHeight),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
     }
