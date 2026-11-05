@@ -314,7 +314,7 @@ class StaffWechatBindingLogic
 
     private static function bindTemplateConfigName(string $appid): string
     {
-        return 'staff_bind_template_id_' . sha1($appid);
+        return 'staff_bind_tpl_' . substr(sha1($appid), 0, 16);
     }
 
     private static function isTemplateInvalidMessage(string $message): bool
