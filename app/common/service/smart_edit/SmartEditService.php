@@ -80,7 +80,7 @@ class SmartEditService
             : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText);
+        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleText, $outputHeight);
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -442,10 +442,10 @@ class SmartEditService
         return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleText];
     }
 
-    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', string $titleText = ''): array
+    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', string $titleText = '', int $outputHeight = 0): array
     {
         return match ($editType) {
-            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $titleText),
+            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $titleText, SmartEditTimelineBuilder::TITLE_SECONDS, $outputHeight),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
     }
