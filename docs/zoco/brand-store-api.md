@@ -279,3 +279,43 @@
 | `id` | 是 | 员工 ID |
 
 软删除，并清空 `appid`、`openid`，以便该公众号身份以后可以重新绑定。成功：`msg` 为「删除成功」。
+
+## 门店装修
+
+控制器 `merchant.storeDesign`。图片用 `/upload/image` 返回的 `id` 和 URL，保存在草稿的 `files` 里。保存直接覆盖当前草稿。
+
+独立装修页：`/merchant/store/{id}/decorate`。
+
+### 读取
+
+`GET /api/merchant.storeDesign/detail`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `store_id` | 是 | 门店 ID |
+
+`data` 含 `store`、`config`、`revision`、`update_time`、`files`、`catalog`、`schemas`。从未保存时 `revision` 为 0。
+
+### 保存
+
+`POST /api/merchant.storeDesign/save`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `store_id` | 是 | 门店 ID |
+| `config` | 是 | 装修 JSON |
+| `files` | 否 | `[{id,url}]`，编辑器里用到的图 |
+
+成功返回 `revision`、`update_time`。
+
+### 摘要
+
+`GET /api/merchant.storeDesign/summaries`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `brand_id` | 否 | 只看某个品牌下的门店 |
+
+`data` 为数组，每项 `store_id`、`revision`、`update_time`。未装修过的门店 `revision` 为 0。
+
+不做商家自定义装修模板，没有模板列表、保存和回收接口。

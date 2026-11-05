@@ -4,7 +4,7 @@
 
 品牌到门店、门店到员工都是一对多，用外键列表示，不建中间表。
 
-迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。已经按旧脚本建过表的库，再执行 `upgrade/20261031_merchant_soft_delete.sql`。已经建过品牌表的库，再执行 `upgrade/20261102_merchant_brand_profile.sql`，补上四段资料正文。
+迁移：`upgrade/20261031_merchant_brand_store.sql`。同一脚本在 `public/upgrade/20261031_merchant_brand_store.sql`，并写入全新安装的 `public/install/db/like.sql`。已经按旧脚本建过表的库，再执行 `upgrade/20261031_merchant_soft_delete.sql`。已经建过品牌表的库，再执行 `upgrade/20261102_merchant_brand_profile.sql`，补上四段资料正文。门店装修再执行 `upgrade/20261105_merchant_store_design.sql`。
 
 ## 关系
 
@@ -121,3 +121,17 @@
 - 某门店下的员工 `idx_store (tenant_id, user_id, store_id, delete_time, id)`
 
 同一门店里，未删除员工的手机号不能重复。同一个租户、同一个公众号下，未删除员工的 OpenID 也不能重复。两列都为空时不占这个唯一约束，所以未关联公众号的员工可以有多名。
+
+## 门店装修 `la_merchant_store_design`
+
+一家门店一份草稿。主键是 `tenant_id + user_id + store_id`，没有软删除。没有行表示还没保存过，读取时返回默认配置，`revision` 为 0。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `tenant_id` | int unsigned | 租户 |
+| `user_id` | int unsigned | 商家用户 |
+| `store_id` | bigint unsigned | `la_merchant_store.id` |
+| `config` | mediumtext | 装修配置 JSON |
+| `files` | mediumtext | 装修引用图片 JSON，`[{id,url}]`。id 来自 `/upload/image` |
+| `revision` | int unsigned | 乐观锁。每次保存 +1 |
+| `update_time` | int unsigned | |
