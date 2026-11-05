@@ -5,7 +5,6 @@ namespace app\api\logic\merchant;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\MerchantStore;
 use app\common\model\wechat\WechatAuthorizer;
-use app\common\service\ConfigService;
 use app\common\service\SubmitLockService;
 use app\common\service\wechat\OpenPlatformService;
 use app\common\service\wechat\WeChatConfigService;
@@ -78,49 +77,7 @@ class StaffWechatBindingLogic
      */
     public static function syncTemplate(): array
     {
-        $tenantId = (int)request()->tenantId;
-        $definition = (array)config('merchant.staff_bind_notice', []);
-        $shortId = trim((string)($definition['template_short_id'] ?? ''));
-        $keywords = array_values(array_filter(array_map('trim', (array)($definition['keyword_name_list'] ?? []))));
-        $title = trim((string)($definition['title'] ?? ''));
-        $fieldMap = (array)($definition['field_map'] ?? []);
-        $hasContentField = !empty($fieldMap['content']);
-        $hasStructuredFields = !empty($fieldMap['staff_name']) && !empty($fieldMap['store_name']) && !empty($fieldMap['bind_time']);
-        if ($title === '' || (!$hasContentField && !$hasStructuredFields)) {
-            throw new \RuntimeException('员工绑定模板尚未配置标题和字段映射');
-        }
-
-        $existing = self::wechatRequest(
-            $tenantId,
-            'cgi-bin/template/get_all_private_template',
-            [],
-            'merchant.staff.bind.template.list',
-            'GET'
-        );
-        $templateId = '';
-        foreach ((array)($existing['template_list'] ?? []) as $template) {
-            if (trim((string)($template['title'] ?? '')) === $title) {
-                $templateId = trim((string)($template['template_id'] ?? ''));
-                break;
-            }
-        }
-
-        if ($templateId === '') {
-            if ($shortId === '' || $keywords === []) {
-                throw new \RuntimeException('当前公众号未找到「' . $title . '」模板，且未配置可新建模板的短编号和关键词');
-            }
-            $created = self::wechatRequest($tenantId, 'cgi-bin/template/api_add_template', [
-                'template_id_short' => $shortId,
-                'keyword_name_list' => $keywords,
-            ], 'merchant.staff.bind.template.add');
-            $templateId = trim((string)($created['template_id'] ?? ''));
-        }
-        if ($templateId === '') {
-            throw new \RuntimeException('微信未返回员工绑定模板 ID');
-        }
-
-        ConfigService::set('merchant', 'staff_bind_template_id', $templateId);
-        return ['template_id' => $templateId, 'title' => $title];
+        return self::resolveBindTemplate((int)request()->tenantId, true);
     }
 
     public static function testSend(int $staffId): array
@@ -215,16 +172,10 @@ class StaffWechatBindingLogic
 
     private static function sendBindNotice(int $tenantId, string $appid, string $openid, string $staffName, int $storeId): void
     {
-        $templateId = trim((string)\app\common\model\TenantConfig::withoutGlobalScope()
-            ->where(['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'])
-            ->value('value'));
-        $definition = (array)config('merchant.staff_bind_notice', []);
-        $fieldMap = (array)($definition['field_map'] ?? []);
-        $hasContentField = !empty($fieldMap['content']);
-        $hasStructuredFields = !empty($fieldMap['staff_name']) && !empty($fieldMap['store_name']) && !empty($fieldMap['bind_time']);
-        if ($templateId === '' || (!$hasContentField && !$hasStructuredFields)) {
-            throw new \RuntimeException('员工绑定模板尚未同步或字段映射尚未配置');
-        }
+        $template = self::resolveBindTemplate($tenantId);
+        $templateId = $template['template_id'];
+        $fieldMap = $template['field_map'];
+        $hasContentField = $template['has_content_field'];
 
         $storeName = (string)MerchantStore::withoutGlobalScope()
             ->where('tenant_id', $tenantId)
@@ -249,11 +200,113 @@ class StaffWechatBindingLogic
             }
         }
 
-        self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
-            'touser' => $openid,
+        try {
+            self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
+                'touser' => $openid,
+                'template_id' => $templateId,
+                'data' => $data,
+            ], 'merchant.staff.bind.template.send');
+        } catch (\Throwable $e) {
+            if (!self::isTemplateInvalidMessage($e->getMessage())) {
+                throw $e;
+            }
+            Log::warning('[merchant.staff.bind] invalid template_id tenant_id=' . $tenantId . ' template_id=' . $templateId . ' error=' . $e->getMessage());
+            $template = self::resolveBindTemplate($tenantId, true);
+            self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
+                'touser' => $openid,
+                'template_id' => $template['template_id'],
+                'data' => $data,
+            ], 'merchant.staff.bind.template.send.retry');
+        }
+    }
+
+    private static function resolveBindTemplate(int $tenantId, bool $forceSync = false): array
+    {
+        $definition = (array)config('merchant.staff_bind_notice', []);
+        $shortId = trim((string)($definition['template_short_id'] ?? ''));
+        $keywords = array_values(array_filter(array_map('trim', (array)($definition['keyword_name_list'] ?? []))));
+        $title = trim((string)($definition['title'] ?? ''));
+        $fieldMap = (array)($definition['field_map'] ?? []);
+        $hasContentField = !empty($fieldMap['content']);
+        $hasStructuredFields = !empty($fieldMap['staff_name']) && !empty($fieldMap['store_name']) && !empty($fieldMap['bind_time']);
+        if ($title === '' || (!$hasContentField && !$hasStructuredFields)) {
+            throw new \RuntimeException('员工绑定模板尚未配置标题和字段映射');
+        }
+
+        $existing = self::wechatRequest(
+            $tenantId,
+            'cgi-bin/template/get_all_private_template',
+            [],
+            'merchant.staff.bind.template.list',
+            'GET'
+        );
+        $templates = (array)($existing['template_list'] ?? []);
+        $savedTemplateId = trim((string)\app\common\model\TenantConfig::withoutGlobalScope()
+            ->where(['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'])
+            ->value('value'));
+
+        if (!$forceSync && $savedTemplateId !== '') {
+            foreach ($templates as $template) {
+                if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? '')))) {
+                    return [
+                        'template_id' => $savedTemplateId,
+                        'title' => trim((string)($template['title'] ?? $title)),
+                        'field_map' => $fieldMap,
+                        'has_content_field' => $hasContentField,
+                    ];
+                }
+            }
+            Log::warning('[merchant.staff.bind] saved template_id not found tenant_id=' . $tenantId . ' template_id=' . $savedTemplateId);
+        }
+
+        $templateId = '';
+        foreach ($templates as $template) {
+            if (trim((string)($template['title'] ?? '')) === $title) {
+                $templateId = trim((string)($template['template_id'] ?? ''));
+                break;
+            }
+        }
+
+        if ($templateId === '') {
+            if ($shortId === '' || $keywords === []) {
+                throw new \RuntimeException('当前公众号未找到「' . $title . '」模板，请先在公众号后台添加后再同步通知模板');
+            }
+            $created = self::wechatRequest($tenantId, 'cgi-bin/template/api_add_template', [
+                'template_id_short' => $shortId,
+                'keyword_name_list' => $keywords,
+            ], 'merchant.staff.bind.template.add');
+            $templateId = trim((string)($created['template_id'] ?? ''));
+        }
+        if ($templateId === '') {
+            throw new \RuntimeException('微信未返回员工绑定模板 ID');
+        }
+
+        self::saveBindTemplateId($tenantId, $templateId);
+        return [
             'template_id' => $templateId,
-            'data' => $data,
-        ], 'merchant.staff.bind.template.send');
+            'title' => $title,
+            'field_map' => $fieldMap,
+            'has_content_field' => $hasContentField,
+        ];
+    }
+
+    private static function saveBindTemplateId(int $tenantId, string $templateId): void
+    {
+        $query = ['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'];
+        $row = \app\common\model\TenantConfig::withoutGlobalScope()->where($query)->findOrEmpty();
+        if ($row->isEmpty()) {
+            \app\common\model\TenantConfig::create($query + ['value' => $templateId]);
+            return;
+        }
+        $row->save(['value' => $templateId]);
+    }
+
+    private static function isTemplateInvalidMessage(string $message): bool
+    {
+        $message = strtolower($message);
+        return str_contains($message, 'invalid template_id')
+            || (str_contains($message, 'template_id') && str_contains($message, 'invalid'))
+            || (str_contains($message, '模板') && (str_contains($message, '无效') || str_contains($message, '不存在')));
     }
 
     private static function wechatRequest(int $tenantId, string $path, array $payload, string $apiName, string $method = 'POST'): array
