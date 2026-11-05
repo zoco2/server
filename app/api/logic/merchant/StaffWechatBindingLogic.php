@@ -179,6 +179,9 @@ class StaffWechatBindingLogic
             $data = [];
             foreach ([
                 'first' => '员工公众号绑定成功',
+                'task_name' => '公众号通知绑定',
+                'audit_result' => '绑定成功',
+                'audit_time' => date('Y-m-d H:i:s'),
                 'staff_name' => $staffName,
                 'store_name' => $storeName,
                 'bind_time' => date('Y-m-d H:i:s'),
@@ -242,11 +245,12 @@ class StaffWechatBindingLogic
                     continue;
                 }
                 foreach ($templates as $template) {
-                    if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? '')))) {
+                    $templateTitle = trim((string)($template['title'] ?? ''));
+                    if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? ''))) && $templateTitle === $title) {
                         self::saveBindTemplateId($tenantId, $appid, $savedTemplateId);
                         return [
                             'template_id' => $savedTemplateId,
-                            'title' => trim((string)($template['title'] ?? $title)),
+                            'title' => $templateTitle,
                             'field_map' => $fieldMap,
                             'has_content_field' => $hasContentField,
                         ];
