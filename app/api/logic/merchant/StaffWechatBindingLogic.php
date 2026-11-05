@@ -31,21 +31,11 @@ class StaffWechatBindingLogic
         if (trim((string)$staff['openid']) !== '' || trim((string)$staff['appid']) !== '') {
             throw new \RuntimeException('该员工已绑定公众号');
         }
-        self::assertBindNoticeReady($tenantId);
+        $authorizerAppId = self::bindingOfficialAppId($tenantId);
+        self::resolveBindTemplate($tenantId, false, $authorizerAppId);
 
         $token = bin2hex(random_bytes(16));
         $scene = self::SCENE_PREFIX . $token;
-        $authorizerAppId = (string)WechatAuthorizer::withoutGlobalScope()
-            ->where(['tenant_id' => $tenantId, 'authorizer_type' => 'official', 'authorization_status' => 1])
-            ->order('id desc')
-            ->value('authorizer_appid');
-        if ($authorizerAppId === '') {
-            $officialConfig = WeChatConfigService::getOaConfig();
-            if (empty($officialConfig['app_id']) || empty($officialConfig['secret'])) {
-                throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
-            }
-            $authorizerAppId = (string)$officialConfig['app_id'];
-        }
         $record = [
             'tenant_id' => $tenantId,
             'staff_id' => $staffId,
@@ -56,7 +46,7 @@ class StaffWechatBindingLogic
             'expire_seconds' => self::QR_TTL,
             'action_name' => 'QR_STR_SCENE',
             'action_info' => ['scene' => ['scene_str' => $scene]],
-        ], 'merchant.staff.bind.qrcode');
+        ], 'merchant.staff.bind.qrcode', 'POST', $authorizerAppId);
 
         $ticket = trim((string)($qr['ticket'] ?? ''));
         if ($ticket === '') {
@@ -77,7 +67,8 @@ class StaffWechatBindingLogic
      */
     public static function syncTemplate(): array
     {
-        return self::resolveBindTemplate((int)request()->tenantId, true);
+        $tenantId = (int)request()->tenantId;
+        return self::resolveBindTemplate($tenantId, true, self::bindingOfficialAppId($tenantId));
     }
 
     public static function testSend(int $staffId): array
@@ -172,7 +163,7 @@ class StaffWechatBindingLogic
 
     private static function sendBindNotice(int $tenantId, string $appid, string $openid, string $staffName, int $storeId): void
     {
-        $template = self::resolveBindTemplate($tenantId);
+        $template = self::resolveBindTemplate($tenantId, false, $appid);
         $templateId = $template['template_id'];
         $fieldMap = $template['field_map'];
         $hasContentField = $template['has_content_field'];
@@ -205,22 +196,22 @@ class StaffWechatBindingLogic
                 'touser' => $openid,
                 'template_id' => $templateId,
                 'data' => $data,
-            ], 'merchant.staff.bind.template.send');
+            ], 'merchant.staff.bind.template.send', 'POST', $appid);
         } catch (\Throwable $e) {
             if (!self::isTemplateInvalidMessage($e->getMessage())) {
                 throw $e;
             }
             Log::warning('[merchant.staff.bind] invalid template_id tenant_id=' . $tenantId . ' template_id=' . $templateId . ' error=' . $e->getMessage());
-            $template = self::resolveBindTemplate($tenantId, true);
+            $template = self::resolveBindTemplate($tenantId, true, $appid);
             self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
                 'touser' => $openid,
                 'template_id' => $template['template_id'],
                 'data' => $data,
-            ], 'merchant.staff.bind.template.send.retry');
+            ], 'merchant.staff.bind.template.send.retry', 'POST', $appid);
         }
     }
 
-    private static function resolveBindTemplate(int $tenantId, bool $forceSync = false): array
+    private static function resolveBindTemplate(int $tenantId, bool $forceSync = false, string $appid = ''): array
     {
         $definition = (array)config('merchant.staff_bind_notice', []);
         $shortId = trim((string)($definition['template_short_id'] ?? ''));
@@ -233,30 +224,36 @@ class StaffWechatBindingLogic
             throw new \RuntimeException('员工绑定模板尚未配置标题和字段映射');
         }
 
+        $appid = trim($appid) !== '' ? trim($appid) : self::bindingOfficialAppId($tenantId);
         $existing = self::wechatRequest(
             $tenantId,
             'cgi-bin/template/get_all_private_template',
             [],
             'merchant.staff.bind.template.list',
-            'GET'
+            'GET',
+            $appid
         );
         $templates = (array)($existing['template_list'] ?? []);
-        $savedTemplateId = trim((string)\app\common\model\TenantConfig::withoutGlobalScope()
-            ->where(['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'])
-            ->value('value'));
+        $savedTemplateIds = self::savedBindTemplateIds($tenantId, $appid);
 
-        if (!$forceSync && $savedTemplateId !== '') {
-            foreach ($templates as $template) {
-                if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? '')))) {
-                    return [
-                        'template_id' => $savedTemplateId,
-                        'title' => trim((string)($template['title'] ?? $title)),
-                        'field_map' => $fieldMap,
-                        'has_content_field' => $hasContentField,
-                    ];
+        if (!$forceSync) {
+            foreach ($savedTemplateIds as $savedTemplateId) {
+                if ($savedTemplateId === '') {
+                    continue;
                 }
+                foreach ($templates as $template) {
+                    if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? '')))) {
+                        self::saveBindTemplateId($tenantId, $appid, $savedTemplateId);
+                        return [
+                            'template_id' => $savedTemplateId,
+                            'title' => trim((string)($template['title'] ?? $title)),
+                            'field_map' => $fieldMap,
+                            'has_content_field' => $hasContentField,
+                        ];
+                    }
+                }
+                Log::warning('[merchant.staff.bind] saved template_id not found tenant_id=' . $tenantId . ' appid=' . $appid . ' template_id=' . $savedTemplateId);
             }
-            Log::warning('[merchant.staff.bind] saved template_id not found tenant_id=' . $tenantId . ' template_id=' . $savedTemplateId);
         }
 
         $templateId = '';
@@ -281,7 +278,7 @@ class StaffWechatBindingLogic
             throw new \RuntimeException('微信未返回员工绑定模板 ID');
         }
 
-        self::saveBindTemplateId($tenantId, $templateId);
+        self::saveBindTemplateId($tenantId, $appid, $templateId);
         return [
             'template_id' => $templateId,
             'title' => $title,
@@ -290,15 +287,34 @@ class StaffWechatBindingLogic
         ];
     }
 
-    private static function saveBindTemplateId(int $tenantId, string $templateId): void
+    private static function savedBindTemplateIds(int $tenantId, string $appid): array
     {
-        $query = ['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'];
-        $row = \app\common\model\TenantConfig::withoutGlobalScope()->where($query)->findOrEmpty();
-        if ($row->isEmpty()) {
-            \app\common\model\TenantConfig::create($query + ['value' => $templateId]);
-            return;
+        $names = [self::bindTemplateConfigName($appid), 'staff_bind_template_id'];
+        $values = [];
+        foreach ($names as $name) {
+            $values[] = trim((string)\app\common\model\TenantConfig::withoutGlobalScope()
+                ->where(['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => $name])
+                ->value('value'));
         }
-        $row->save(['value' => $templateId]);
+        return array_values(array_unique($values));
+    }
+
+    private static function saveBindTemplateId(int $tenantId, string $appid, string $templateId): void
+    {
+        foreach ([self::bindTemplateConfigName($appid), 'staff_bind_template_id'] as $name) {
+            $query = ['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => $name];
+            $row = \app\common\model\TenantConfig::withoutGlobalScope()->where($query)->findOrEmpty();
+            if ($row->isEmpty()) {
+                \app\common\model\TenantConfig::create($query + ['value' => $templateId]);
+                continue;
+            }
+            $row->save(['value' => $templateId]);
+        }
+    }
+
+    private static function bindTemplateConfigName(string $appid): string
+    {
+        return 'staff_bind_template_id_' . sha1($appid);
     }
 
     private static function isTemplateInvalidMessage(string $message): bool
@@ -309,25 +325,58 @@ class StaffWechatBindingLogic
             || (str_contains($message, '模板') && (str_contains($message, '无效') || str_contains($message, '不存在')));
     }
 
-    private static function wechatRequest(int $tenantId, string $path, array $payload, string $apiName, string $method = 'POST'): array
+    private static function bindingOfficialAppId(int $tenantId): string
     {
-        if (OpenPlatformService::hasAuthorizedOfficialAccount($tenantId)) {
-            return OpenPlatformService::authorizerRequest(
-                $tenantId,
-                'official',
-                $path,
-                $payload,
-                $apiName,
-                $method
-            );
+        $config = WeChatConfigService::getOaConfig();
+        if (!empty($config['app_id']) && !empty($config['secret'])) {
+            return (string)$config['app_id'];
+        }
+        $authorizerAppId = self::authorizedOfficialAppId($tenantId);
+        if ($authorizerAppId !== '') {
+            return $authorizerAppId;
+        }
+        throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
+    }
+
+    private static function authorizedOfficialAppId(int $tenantId): string
+    {
+        return (string)WechatAuthorizer::withoutGlobalScope()
+            ->where(['tenant_id' => $tenantId, 'authorizer_type' => 'official', 'authorization_status' => 1])
+            ->order('id desc')
+            ->value('authorizer_appid');
+    }
+
+    private static function manualOfficialConfigForAppid(string $appid): array
+    {
+        $config = WeChatConfigService::getOaConfig();
+        if (!empty($config['app_id']) && !empty($config['secret']) && hash_equals((string)$config['app_id'], $appid)) {
+            return $config;
+        }
+        return [];
+    }
+
+    private static function wechatRequest(int $tenantId, string $path, array $payload, string $apiName, string $method = 'POST', string $appid = ''): array
+    {
+        $appid = trim($appid);
+        if ($appid !== '') {
+            $manualConfig = self::manualOfficialConfigForAppid($appid);
+            if ($manualConfig !== []) {
+                return self::manualWechatRequest($tenantId, $manualConfig, $path, $payload, $method, $apiName);
+            }
+            if (hash_equals(self::authorizedOfficialAppId($tenantId), $appid)) {
+                return OpenPlatformService::authorizerRequest($tenantId, 'official', $path, $payload, $apiName, $method);
+            }
+            throw new \RuntimeException('员工绑定公众号与当前公众号配置不一致，请重新绑定');
         }
 
         $config = WeChatConfigService::getOaConfig();
-        if (empty($config['app_id']) || empty($config['secret'])) {
-            throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
+        if (!empty($config['app_id']) && !empty($config['secret'])) {
+            return self::manualWechatRequest($tenantId, $config, $path, $payload, $method, $apiName);
         }
-
-        return self::manualWechatRequest($tenantId, $config, $path, $payload, $method, $apiName);
+        if (OpenPlatformService::hasAuthorizedOfficialAccount($tenantId)) {
+            return OpenPlatformService::authorizerRequest($tenantId, 'official', $path, $payload, $apiName, $method);
+        }
+        throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
     }
 
     private static function manualWechatRequest(int $tenantId, array $config, string $path, array $payload, string $method, string $apiName, bool $retried = false): array
