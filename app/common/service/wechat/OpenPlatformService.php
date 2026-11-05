@@ -1738,7 +1738,7 @@ class OpenPlatformService
      * Use the effective open-platform account for tenant-scoped operations.
      * Direct-mode callers keep using their existing credentials and services.
      */
-    public static function authorizerRequest(int $tenantId, string $authorizerType, string $path, array $payload, string $apiName): array
+    public static function authorizerRequest(int $tenantId, string $authorizerType, string $path, array $payload, string $apiName, string $method = 'POST'): array
     {
         $authorizer = WechatAuthorizer::withoutGlobalScope()
             ->where([
@@ -1758,7 +1758,8 @@ class OpenPlatformService
             $apiName,
             ['access_token' => self::authorizerToken((int)$authorizer['id'])],
             $tenantId,
-            (int)$authorizer['id']
+            (int)$authorizer['id'],
+            strtoupper($method)
         );
     }
 

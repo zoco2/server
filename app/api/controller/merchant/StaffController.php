@@ -5,6 +5,7 @@ namespace app\api\controller\merchant;
 use app\api\controller\BaseApiController;
 use app\api\lists\merchant\StaffLists;
 use app\api\logic\merchant\StaffLogic;
+use app\api\logic\merchant\StaffWechatBindingLogic;
 use app\api\validate\merchant\StaffValidate;
 
 /**
@@ -72,5 +73,30 @@ class StaffController extends BaseApiController
             return $this->fail(StaffLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);
+    }
+
+    /**
+     * @notes 创建员工公众号绑定二维码
+     */
+    public function bindQrcode()
+    {
+        $params = (new StaffValidate())->get()->goCheck('bindQrcode');
+        try {
+            return $this->data(StaffWechatBindingLogic::createQrcode((int)$params['id']));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * @notes 同步员工绑定成功模板
+     */
+    public function syncBindTemplate()
+    {
+        try {
+            return $this->data(StaffWechatBindingLogic::syncTemplate());
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
     }
 }

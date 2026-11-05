@@ -259,6 +259,28 @@ class OpenPlatformCallbackService
         foreach ($message as $key => $value) {
             $payload[$key] = (string)$value;
         }
+        $bindingReply = \app\api\logic\merchant\StaffWechatBindingLogic::handleCallback(
+            (int)$authorizer['tenant_id'],
+            $authorizerAppId,
+            $payload
+        );
+        if ($bindingReply !== null) {
+            if ($bindingReply === '') {
+                return 'success';
+            }
+            $plain = self::textReplyXml(
+                (string)($message->FromUserName ?? ''),
+                $authorizerAppId,
+                $bindingReply
+            );
+            $encryptor = new Encryptor(
+                (string)$config['app_id'],
+                OpenPlatformService::credentialValue($config['token'] ?? ''),
+                OpenPlatformService::credentialValue($config['encoding_aes_key'] ?? ''),
+                (string)$config['app_id']
+            );
+            return $encryptor->encryptAsXml($plain);
+        }
         $reply = OfficialAccountReplyLogic::authorizerReply($payload, (int)$authorizer['tenant_id']);
         if ($reply === '') {
             return 'success';

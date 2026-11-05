@@ -56,4 +56,9 @@ class StaffValidate extends BaseValidate
     {
         return $this->only(['id']);
     }
+
+    public function sceneBindQrcode()
+    {
+        return $this->only(['id']);
+    }
 }
