@@ -119,11 +119,33 @@ final class WorkspaceAssetService
      * @param mixed $cid 不传查全部，0 为未分组，大于 0 为该分组及其子分组
      * @return array
      */
+    /** 本地素材允许出现在库里的文件表扩展名（type=30 的额外白名单） */
+    private const FILE_TABLE_EXTENSIONS = ['webm', 'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'];
+
+    /**
+     * 限定「库里可见」的上传记录。
+     *
+     * 图片 10、视频 20 全部可见；文件 30 只有白名单扩展名（historical webm、
+     * 以及智能剪辑用的音频）算素材，其余 zip/pdf 一类不进素材库。
+     *
+     * @param \think\db\Query $query
+     */
+    private static function scopeVisibleUploads($query): void
+    {
+        $like = [];
+        $bind = [];
+        foreach (self::FILE_TABLE_EXTENSIONS as $ext) {
+            $like[] = 'LOWER(uri) LIKE ?';
+            $bind[] = '%.' . $ext;
+        }
+        $query->whereRaw('(type IN (10, 20) OR (type = 30 AND (' . implode(' OR ', $like) . ')))', $bind);
+    }
+
     public static function uploads(int $tenant, int $user, int $page, $cid = null): array
     {
         self::identity($tenant, $user);
-        $query = TenantFile::where(['tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local'])
-            ->whereRaw('(type IN (10, 20) OR (type = 30 AND LOWER(uri) LIKE ?))', ['%.webm']);
+        $query = TenantFile::where(['tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local']);
+        self::scopeVisibleUploads($query);
         if ($cid !== null && $cid !== '') {
             if (!is_numeric($cid) || (int)$cid < 0) {
                 throw new InvalidArgumentException('分组参数无效');
@@ -237,8 +259,9 @@ final class WorkspaceAssetService
         [$source, $kind, $id] = explode(':', $ref);
         if ($source === 'canvas' && $kind === 'task') return WorkspaceCanvasAssetService::owned($tenant, $user, $ref);
         if ($source === 'upload') {
-            $file = ($includeDeleted ? TenantFile::withTrashed() : TenantFile::where([]))->where(['id' => (int)$id, 'tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local'])
-                ->whereRaw('(type IN (10, 20) OR (type = 30 AND LOWER(uri) LIKE ?))', ['%.webm'])->find();
+            $file = ($includeDeleted ? TenantFile::withTrashed() : TenantFile::where([]))->where(['id' => (int)$id, 'tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local']);
+            self::scopeVisibleUploads($file);
+            $file = $file->find();
             return $file ? self::presentUpload($file->toArray()) : null;
         }
         $prefix = self::SOURCES[$source] ?? null;
