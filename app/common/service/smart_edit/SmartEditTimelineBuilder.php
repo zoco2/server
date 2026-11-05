@@ -68,6 +68,12 @@ class SmartEditTimelineBuilder
             if ($out > 0 && $out > $in) {
                 $clip['Out'] = round($out, 4);
             }
+            // 消除原声：该片段音量置 0，成片里只保留其它片段/背景音乐的声音
+            if (!empty($item['mute'])) {
+                $clip['Effects'] = [
+                    ['Type' => 'Volume', 'Gain' => 0],
+                ];
+            }
             $clips[] = $clip;
         }
         if (count($clips) < 2) {

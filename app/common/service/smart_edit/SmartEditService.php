@@ -82,6 +82,8 @@ class SmartEditService
                 'media_url' => SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$clip['uri']),
                 'in' => (float)($clip['in'] ?? 0),
                 'out' => (float)($clip['out'] ?? 0),
+                // 消除原声：交给 Timeline 构建给该片段加 Volume=0 效果
+                'mute' => !empty($clip['mute']),
                 'raw' => $clip,
             ];
         }
@@ -494,7 +496,13 @@ class SmartEditService
             if ($out > 0 && $out <= $in) {
                 throw new Exception('截取结束时间必须大于开始时间');
             }
-            $normalized[] = ['uri' => (string)$clip['uri'], 'in' => $in, 'out' => $out];
+            $normalized[] = [
+                'uri' => (string)$clip['uri'],
+                'in' => $in,
+                'out' => $out,
+                // 消除原声：前端取消勾选「保留原声」时传 mute=true
+                'mute' => !empty($clip['mute']),
+            ];
         }
         $title = trim((string)($params['title'] ?? ''));
         if ($title === '') {
