@@ -206,7 +206,7 @@ class OpenPlatformCallbackService
             return self::encryptedTextReply($config, $fromUser, $toUser, 'TESTCOMPONENT_MSG_TYPE_TEXT_callback');
         }
 
-        if ($messageType === 'event') {
+        if ($messageType === 'event' && strcasecmp(trim((string)($message->Event ?? '')), 'LOCATION') === 0) {
             $event = trim((string)($message->Event ?? ''));
             if ($event !== '') return self::encryptedTextReply($config, $fromUser, $toUser, $event . 'from_callback');
         }
