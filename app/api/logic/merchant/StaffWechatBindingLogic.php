@@ -222,8 +222,7 @@ class StaffWechatBindingLogic
         $title = trim((string)($definition['title'] ?? ''));
         $fieldMap = (array)($definition['field_map'] ?? []);
         $hasContentField = !empty($fieldMap['content']);
-        $hasStructuredFields = !empty($fieldMap['staff_name']) && !empty($fieldMap['store_name']) && !empty($fieldMap['bind_time']);
-        if ($title === '' || (!$hasContentField && !$hasStructuredFields)) {
+        if ($title === '' || !self::hasNoticeFieldMap($fieldMap)) {
             throw new \RuntimeException('员工绑定模板尚未配置标题和字段映射');
         }
 
@@ -289,6 +288,16 @@ class StaffWechatBindingLogic
             'field_map' => $fieldMap,
             'has_content_field' => $hasContentField,
         ];
+    }
+
+    private static function hasNoticeFieldMap(array $fieldMap): bool
+    {
+        foreach ($fieldMap as $field) {
+            if (trim((string)$field) !== '') {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function savedBindTemplateIds(int $tenantId, string $appid): array
@@ -491,9 +500,7 @@ class StaffWechatBindingLogic
             ->where(['tenant_id' => $tenantId, 'type' => 'merchant', 'name' => 'staff_bind_template_id'])
             ->value('value'));
         $fieldMap = (array)(config('merchant.staff_bind_notice.field_map') ?? []);
-        $hasContentField = !empty($fieldMap['content']);
-        $hasStructuredFields = !empty($fieldMap['staff_name']) && !empty($fieldMap['store_name']) && !empty($fieldMap['bind_time']);
-        if ($templateId === '' || (!$hasContentField && !$hasStructuredFields)) {
+        if ($templateId === '' || !self::hasNoticeFieldMap($fieldMap)) {
             throw new \RuntimeException('请先配置并同步员工绑定通知模板');
         }
     }
