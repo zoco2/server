@@ -226,12 +226,16 @@ class SmartEditTimelineBuilder
                 $clip[$key] = $sticker[$key];
             }
         }
-        // 坚持有起止时间才写时间轴字段：缺省时 IMS 会按整段成片铺满。
-        foreach (['TimelineIn', 'TimelineOut'] as $key) {
-            if (array_key_exists($key, $sticker) && $sticker[$key] !== null) {
-                $clip[$key] = round((float)$sticker[$key], 4);
-            }
+        $timelineIn = isset($sticker['TimelineIn']) ? round((float)$sticker['TimelineIn'], 4) : 0.0;
+        $timelineOut = isset($sticker['TimelineOut']) ? round((float)$sticker['TimelineOut'], 4) : 0.0;
+        if ($timelineOut <= $timelineIn) {
+            $timelineOut = round($timelineIn + SmartEditService::STICKER_DEFAULT_SECONDS, 4);
         }
+        $clip['TimelineIn'] = $timelineIn;
+        $clip['TimelineOut'] = $timelineOut;
+        // 图片没有自身时长，IMS 靠 Duration 决定这张图占多久。
+        // 只给 TimelineIn/Out 时会被当成“自动推算”，图片可能被排成 0 长度而整段不渲染。
+        $clip['Duration'] = round($timelineOut - $timelineIn, 4);
         return $clip;
     }
 
