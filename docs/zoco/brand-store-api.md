@@ -241,6 +241,17 @@
 
 绑定完成后使用该模板向员工发送公众号模板消息。模板定义和字段映射保留在代码配置中；租户配置只保存微信返回的 `template_id`，不建立模板管理表。
 
+
+### 测试发送绑定成功模板
+
+`POST /api/merchant.staff/testBindNotice`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 员工 ID |
+
+员工必须已经完成公众号绑定，即已有 `appid` 和 `openid`。接口复用绑定成功后的模板发送逻辑，向该员工发送一条测试模板消息，用于验证模板 ID、字段映射、公众号 access_token 和 openid 是否可用。
+
 ### 添加
 
 `POST /api/merchant.staff/add`

@@ -37,6 +37,19 @@ class StaffController extends BaseApiController
     }
 
     /**
+     * @notes 测试发送员工绑定成功模板
+     */
+    public function testBindNotice()
+    {
+        $params = (new StaffValidate())->post()->goCheck('testBindNotice');
+        try {
+            return $this->data(StaffWechatBindingLogic::testSend((int)$params['id']));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
      * @notes 添加员工
      * @return \think\response\Json
      */

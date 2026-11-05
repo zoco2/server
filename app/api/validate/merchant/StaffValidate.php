@@ -61,4 +61,9 @@ class StaffValidate extends BaseValidate
     {
         return $this->only(['id']);
     }
+
+    public function sceneTestBindNotice()
+    {
+        return $this->only(['id']);
+    }
 }

@@ -123,6 +123,22 @@ class StaffWechatBindingLogic
         return ['template_id' => $templateId, 'title' => $title];
     }
 
+    public static function testSend(int $staffId): array
+    {
+        $tenantId = (int)request()->tenantId;
+        $staff = MerchantScope::query(MerchantStaff::class)->where('id', $staffId)->findOrEmpty();
+        if ($staff->isEmpty()) {
+            throw new \RuntimeException('员工不存在或无权限');
+        }
+        $appid = trim((string)$staff['appid']);
+        $openid = trim((string)$staff['openid']);
+        if ($appid === '' || $openid === '') {
+            throw new \RuntimeException('请先绑定公众号');
+        }
+        self::sendBindNotice($tenantId, $appid, $openid, (string)$staff['name'], (int)$staff['store_id']);
+        return ['sent' => true];
+    }
+
     /**
      * Process only employee-binding subscribe/scan events. Null means the event is unrelated.
      */
