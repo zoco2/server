@@ -789,10 +789,24 @@ class SmartEditService
         return $rows;
     }
 
-    private static function buildTimeline(string $editType, array $items, string $coverUrl = '', array $title = [], int $outputHeight = 0): array
-    {
+    private static function buildTimeline(
+        string $editType,
+        array $items,
+        string $coverUrl = '',
+        array $title = [],
+        int $outputHeight = 0,
+        array $stickers = [],
+        array $audios = []
+    ): array {
         return match ($editType) {
-            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge($items, $coverUrl, $title, $outputHeight),
+            SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge(
+                $items,
+                $coverUrl,
+                $title,
+                $outputHeight,
+                $stickers,
+                $audios
+            ),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
     }
