@@ -9,16 +9,17 @@ use app\common\service\ConfigService;
 use app\common\service\SubmitLockService;
 use app\common\service\wechat\OpenPlatformService;
 use app\common\service\wechat\WeChatConfigService;
-use EasyWeChat\OfficialAccount\Application;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
+use WpOrg\Requests\Requests;
 
 /** Employee-to-official-account binding flow. */
 class StaffWechatBindingLogic
 {
     private const SCENE_PREFIX = 'merchant_staff_bind_';
     private const TOKEN_PREFIX = 'merchant.staff.bind.';
+    private const ACCESS_TOKEN_PREFIX = 'merchant.staff.official_account.access_token.';
     private const QR_TTL = 600;
 
     public static function createQrcode(int $staffId): array
@@ -42,7 +43,7 @@ class StaffWechatBindingLogic
         if ($authorizerAppId === '') {
             $officialConfig = WeChatConfigService::getOaConfig();
             if (empty($officialConfig['app_id']) || empty($officialConfig['secret'])) {
-                throw new \RuntimeException('请先授权公众号或在公众号配置中填写 AppID 和 AppSecret');
+                throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
             }
             $authorizerAppId = (string)$officialConfig['app_id'];
         }
@@ -254,18 +255,112 @@ class StaffWechatBindingLogic
 
         $config = WeChatConfigService::getOaConfig();
         if (empty($config['app_id']) || empty($config['secret'])) {
-            throw new \RuntimeException('请先授权公众号或在公众号配置中填写 AppID 和 AppSecret');
+            throw new \RuntimeException('请先在公众号配置中填写 AppID 和 AppSecret');
         }
 
-        $client = (new Application($config))->getClient();
-        $response = strtoupper($method) === 'GET'
-            ? $client->get($path, $payload)
-            : $client->postJson($path, $payload);
-        $result = is_array($response) ? $response : $response->toArray();
+        return self::manualWechatRequest($tenantId, $config, $path, $payload, $method, $apiName);
+    }
+
+    private static function manualWechatRequest(int $tenantId, array $config, string $path, array $payload, string $method, string $apiName, bool $retried = false): array
+    {
+        $token = self::manualAccessToken($tenantId, $config);
+        $query = ['access_token' => $token];
+        $url = 'https://api.weixin.qq.com/' . ltrim($path, '/');
+        try {
+            if (strtoupper($method) === 'GET') {
+                $response = Requests::get($url . '?' . http_build_query($query + $payload), [], ['timeout' => 15, 'connect_timeout' => 5]);
+            } else {
+                $response = Requests::post(
+                    $url . '?' . http_build_query($query),
+                    ['Content-Type' => 'application/json'],
+                    json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+                    ['timeout' => 15, 'connect_timeout' => 5]
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[merchant.staff.bind] manual official account request failed api=' . $apiName . ' tenant_id=' . $tenantId . ' error=' . $e->getMessage());
+            throw new \RuntimeException('微信接口请求失败，请稍后重试');
+        }
+
+        $result = json_decode((string)$response->body, true);
+        if ($response->status_code !== 200 || !is_array($result)) {
+            throw new \RuntimeException('微信接口响应异常，请稍后重试');
+        }
+        if (self::isAccessTokenInvalid($result) && !$retried) {
+            Cache::delete(self::manualAccessTokenCacheKey($tenantId, $config));
+            self::manualAccessToken($tenantId, $config, true);
+            return self::manualWechatRequest($tenantId, $config, $path, $payload, $method, $apiName, true);
+        }
         if ((int)($result['errcode'] ?? 0) !== 0) {
             throw new \RuntimeException('微信接口调用失败：' . (string)($result['errmsg'] ?? $result['errcode']));
         }
         return $result;
+    }
+
+    private static function manualAccessToken(int $tenantId, array $config, bool $forceRefresh = false): string
+    {
+        $cacheKey = self::manualAccessTokenCacheKey($tenantId, $config);
+        if (!$forceRefresh) {
+            $cached = Cache::get($cacheKey);
+            if (is_string($cached) && $cached !== '') {
+                return $cached;
+            }
+        }
+
+        try {
+            $response = Requests::post(
+                'https://api.weixin.qq.com/cgi-bin/stable_token',
+                ['Content-Type' => 'application/json'],
+                json_encode([
+                    'grant_type' => 'client_credential',
+                    'appid' => (string)$config['app_id'],
+                    'secret' => (string)$config['secret'],
+                    'force_refresh' => $forceRefresh,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+                ['timeout' => 15, 'connect_timeout' => 5]
+            );
+        } catch (\Throwable $e) {
+            Log::warning('[merchant.staff.bind] stable token request failed tenant_id=' . $tenantId . ' error=' . $e->getMessage());
+            throw new \RuntimeException('公众号 access_token 获取失败，请稍后重试');
+        }
+
+        $result = json_decode((string)$response->body, true);
+        if ($response->status_code !== 200 || !is_array($result)) {
+            throw new \RuntimeException('公众号 access_token 响应异常，请稍后重试');
+        }
+        if ((int)($result['errcode'] ?? 0) !== 0) {
+            throw new \RuntimeException('公众号 access_token 获取失败：' . (string)($result['errmsg'] ?? $result['errcode']));
+        }
+        $token = trim((string)($result['access_token'] ?? ''));
+        if ($token === '') {
+            throw new \RuntimeException('公众号 access_token 为空，请稍后重试');
+        }
+        Cache::set($cacheKey, $token, max(60, (int)($result['expires_in'] ?? 7200) - 300));
+        return $token;
+    }
+
+    private static function manualAccessTokenCacheKey(int $tenantId, array $config): string
+    {
+        return self::ACCESS_TOKEN_PREFIX . $tenantId . '.' . sha1((string)($config['app_id'] ?? ''));
+    }
+
+    private static function isAccessTokenInvalid(array $result): bool
+    {
+        $code = (int)($result['errcode'] ?? 0);
+        if (in_array($code, [40001, 40014, 42001], true)) {
+            return true;
+        }
+        $message = strtolower((string)($result['errmsg'] ?? ''));
+        if ($message === '' || !str_contains($message, 'access_token')) {
+            return false;
+        }
+        return str_contains($message, 'invalid')
+            || str_contains($message, 'not latest')
+            || str_contains($message, 'expired')
+            || str_contains($message, '不合法')
+            || str_contains($message, '失效')
+            || str_contains($message, '过期')
+            || str_contains($message, '不是最新');
     }
 
     private static function assertBindNoticeReady(int $tenantId): void
