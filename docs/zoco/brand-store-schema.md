@@ -135,3 +135,70 @@
 | `files` | mediumtext | 装修引用图片 JSON，`[{id,url}]`。id 来自 `/upload/image` |
 | `revision` | int unsigned | 保存次数。每次保存 +1，用来判断有没有装过 |
 | `update_time` | int unsigned | |
+
+## 品牌知识库
+
+迁移：`upgrade/20261106_merchant_brand_knowledge.sql`。同一脚本在 `public/upgrade/20261106_merchant_brand_knowledge.sql`，并写入全新安装的 `public/install/db/like.sql`。
+
+知识库只支持一级分组，不做多级目录。文章可以不放入分组，`folder_id = 0` 表示未分组。元数据字段先预留给后续大模型索引和类似 Skill 的懒加载，不在本次实现向量索引。
+
+关系：
+
+```text
+品牌 la_merchant_brand
+  ├── 知识库文件夹 la_merchant_brand_knowledge_folder.brand_id
+  └── 知识库文章 la_merchant_brand_knowledge_article.brand_id
+        └── folder_id = 0 或 la_merchant_brand_knowledge_folder.id
+```
+
+### 知识库文件夹 `la_merchant_brand_knowledge_folder`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | bigint unsigned | 主键 |
+| `tenant_id` | int unsigned | 租户 |
+| `user_id` | int unsigned | 商家用户 |
+| `brand_id` | bigint unsigned | 所属品牌 |
+| `name` | varchar(60) | 文件夹名称，只支持一级 |
+| `sort` | int | 排序，越大越靠前 |
+| `metadata_json` | text，可空 | 预留元数据 JSON，对象格式 |
+| `create_time` | int unsigned | 创建时间 |
+| `update_time` | int unsigned | 更新时间 |
+| `delete_time` | int unsigned，可空 | 软删除时间 |
+
+索引：
+
+- 主键 `id`
+- 唯一 `uk_brand_name (tenant_id, user_id, brand_id, name, delete_time)`
+- 列表 `idx_brand (tenant_id, user_id, brand_id, delete_time, sort, id)`
+
+### 知识库文章 `la_merchant_brand_knowledge_article`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | bigint unsigned | 主键 |
+| `tenant_id` | int unsigned | 租户 |
+| `user_id` | int unsigned | 商家用户 |
+| `brand_id` | bigint unsigned | 所属品牌 |
+| `folder_id` | bigint unsigned | 文件夹 ID，`0` 表示未分组 |
+| `title` | varchar(120) | 文章标题 |
+| `content_html` | mediumtext，可空 | 富文本 HTML，服务端会做基础危险内容清理 |
+| `content_text` | mediumtext，可空 | 从 HTML 提取的纯文本，用于搜索和摘要 |
+| `summary` | varchar(500) | 摘要，不传时取正文前 120 字 |
+| `tags_json` | text，可空 | 标签 JSON 数组 |
+| `metadata_json` | text，可空 | 预留元数据 JSON，对象格式 |
+| `content_hash` | char(64) | 内容 Hash，用于判断正文是否变化 |
+| `token_estimate` | int unsigned | 预估 token 数 |
+| `ai_index_status` | varchar(20) | AI 索引状态，当前默认 `none` |
+| `ai_index_version` | int unsigned | AI 索引版本，当前默认 `0` |
+| `ai_indexed_at` | int unsigned | AI 索引时间，当前默认 `0` |
+| `sort` | int | 排序，越大越靠前 |
+| `create_time` | int unsigned | 创建时间 |
+| `update_time` | int unsigned | 更新时间 |
+| `delete_time` | int unsigned，可空 | 软删除时间 |
+
+索引：
+
+- 主键 `id`
+- 分组文章 `idx_brand_folder (tenant_id, user_id, brand_id, folder_id, delete_time, sort, id)`
+- 搜索辅助 `idx_brand_title (tenant_id, user_id, brand_id, delete_time, title)`

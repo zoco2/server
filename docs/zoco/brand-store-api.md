@@ -319,3 +319,113 @@
 `data` 为数组，每项 `store_id`、`revision`、`update_time`。未装修过的门店 `revision` 为 0。
 
 不做商家自定义装修模板，没有模板列表、保存和回收接口。
+
+## 品牌知识库
+
+知识库接口路径使用 `merchant.knowledge`。所有接口都按当前登录商家和租户过滤，只能操作自己的品牌。文件夹只支持一级；文章 `folder_id = 0` 表示未分组。
+
+### 文件夹列表
+
+`GET /api/merchant.knowledge/folders`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `brand_id` | 是 | 品牌 ID |
+
+成功返回：
+
+```json
+{
+  "folders": [],
+  "ungrouped_count": 0,
+  "total_count": 0
+}
+```
+
+`folders` 每项包含 `id`、`brand_id`、`name`、`sort`、`metadata_json`、`article_count`、`create_time`、`update_time`。
+
+### 创建文件夹
+
+`POST /api/merchant.knowledge/addFolder`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `brand_id` | 是 | 品牌 ID |
+| `name` | 是 | 文件夹名称，1–60 字。同一品牌未删除文件夹不能重名 |
+| `sort` | 否 | 排序，数字越大越靠前 |
+| `metadata_json` | 否 | JSON 对象，不传默认 `{}` |
+
+成功：`msg` 为「创建成功」。品牌不存在时返回「品牌不存在或无权限」。重名时返回「文件夹名称已存在」。
+
+### 编辑文件夹
+
+`POST /api/merchant.knowledge/editFolder`
+
+参数与创建相同，但只需要 `id`、`name`，`brand_id` 不作为编辑参数。成功：`msg` 为「保存成功」。
+
+### 删除文件夹
+
+`POST /api/merchant.knowledge/deleteFolder`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 文件夹 ID |
+
+文件夹下还有未删除文章时拒绝，返回「文件夹下还有文章，不能删除」。成功：`msg` 为「删除成功」。
+
+### 文章列表
+
+`GET /api/merchant.knowledge/articles`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `brand_id` | 是 | 品牌 ID |
+| `folder_id` | 否 | 传 `0` 只看未分组，传文件夹 ID 只看该文件夹，不传看全部 |
+| `keyword` | 否 | 按标题或正文搜索 |
+| `page_no` | 否 | 页码 |
+| `page_size` | 否 | 每页条数 |
+
+返回分页结构。列表项包含标题、摘要、纯文本、标签、元数据、token 预估和 AI 索引预留字段；不返回完整 `content_html`，编辑时读取详情。
+
+### 文章详情
+
+`GET /api/merchant.knowledge/detail`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 文章 ID |
+
+返回完整文章记录，包含 `content_html`。
+
+### 创建文章
+
+`POST /api/merchant.knowledge/addArticle`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `brand_id` | 是 | 品牌 ID |
+| `folder_id` | 否 | 文件夹 ID，默认 `0` 未分组 |
+| `title` | 是 | 标题，1–120 字 |
+| `content_html` | 是 | 富文本正文。服务端会去掉 `script`、事件属性和 `javascript:` 链接 |
+| `summary` | 否 | 摘要，最长 500。不传时从正文自动生成 |
+| `tags_json` | 否 | JSON 数组，不传默认 `[]` |
+| `metadata_json` | 否 | JSON 对象，不传默认 `{}` |
+| `sort` | 否 | 排序，数字越大越靠前 |
+
+成功：`msg` 为「创建成功」。文件夹必须属于同一品牌，否则返回「文件夹不存在或无权限」。
+
+### 编辑文章
+
+`POST /api/merchant.knowledge/editArticle`
+
+参数与创建相同，并增加必填 `id`。编辑不接收 `brand_id`，按文章原品牌校验分组归属。正文变化时会把 `ai_index_status` 重置为 `none`，`ai_indexed_at` 重置为 `0`。成功：`msg` 为「保存成功」。
+
+### 删除文章
+
+`POST /api/merchant.knowledge/deleteArticle`
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `id` | 是 | 文章 ID |
+
+软删除。成功：`msg` 为「删除成功」。
