@@ -6,6 +6,7 @@ use app\common\enum\FileEnum;
 use app\common\model\file\TenantFile;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\model\smart_edit\SmartEditTaskItem;
+use app\common\service\sticker\StickerService;
 use Exception;
 use think\facade\Log;
 
@@ -95,9 +96,19 @@ class SmartEditService
 
         // 贴纸与背景音乐同样要过归属校验，避免任意 URL 被塞进成片。
         // 校验完把 uri 换成 IMS 能直接拉取的 media_url，其余字段原样保留。
+        // 贴纸可能来自平台预置（不在 la_tenant_file 里），先查贴纸表；
+        // 查不到再回退到素材库校验，兼容现有「从素材库选图片当贴纸」的用法。
         $stickers = [];
         foreach ($stickerInputs as $input) {
-            $mediaUrl = SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$input['uri']);
+            $uri = (string)$input['uri'];
+            $sticker = StickerService::resolveForSmartEdit($tenantId, $uri);
+            if ($sticker !== null) {
+                $mediaUrl = $sticker['url'] !== ''
+                    ? $sticker['url']
+                    : SmartEditImsConfigService::objectUrl($config, $sticker['uri']);
+            } else {
+                $mediaUrl = SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
+            }
             $stickers[] = ['media_url' => $mediaUrl] + array_diff_key($input, ['uri' => true]);
         }
         $audios = [];

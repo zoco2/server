@@ -14334,3 +14334,50 @@ CREATE TABLE IF NOT EXISTS `la_merchant_staff` (
   UNIQUE KEY `uk_oa_openid` (`tenant_id`,`appid`,`openid`,`delete_time`),
   KEY `idx_store` (`tenant_id`,`user_id`,`store_id`,`delete_time`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='门店员工';
+
+-- ----------------------------
+-- Table structure for la_sticker_category
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_sticker_category` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
+  `code` varchar(64) NOT NULL DEFAULT '' COMMENT '分类标识，同租户内唯一',
+  `name` varchar(60) NOT NULL DEFAULT '' COMMENT '分类名称',
+  `icon` varchar(500) NOT NULL DEFAULT '' COMMENT '分类图标对象路径',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序，越大越靠前',
+  `status` tinyint unsigned NOT NULL DEFAULT 1 COMMENT '状态:0停用 1启用',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  `delete_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_tenant_code` (`tenant_id`,`code`,`delete_time`),
+  KEY `idx_tenant_status_sort` (`tenant_id`,`status`,`sort`,`delete_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸分类';
+
+-- ----------------------------
+-- Table structure for la_sticker_resource
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
+  `category_id` int unsigned NOT NULL DEFAULT 0 COMMENT '所属分类ID',
+  `name` varchar(128) NOT NULL DEFAULT '' COMMENT '资源名称',
+  `file_name` varchar(128) NOT NULL DEFAULT '' COMMENT '原始文件名',
+  `uri` varchar(500) NOT NULL DEFAULT '' COMMENT '资源对象路径，不含域名',
+  `cover_uri` varchar(500) NOT NULL DEFAULT '' COMMENT '封面对象路径，空则用 uri',
+  `mime_type` varchar(100) NOT NULL DEFAULT '' COMMENT 'MIME 类型',
+  `width` int unsigned NOT NULL DEFAULT 0 COMMENT '宽，0=未知',
+  `height` int unsigned NOT NULL DEFAULT 0 COMMENT '高，0=未知',
+  `file_size` bigint unsigned NOT NULL DEFAULT 0 COMMENT '字节',
+  `storage_scope` varchar(20) NOT NULL DEFAULT 'platform' COMMENT '存储作用域',
+  `storage_engine` varchar(30) NOT NULL DEFAULT 'aliyun' COMMENT '存储引擎',
+  `storage_domain` varchar(255) NOT NULL DEFAULT '' COMMENT '存储域名',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序，越大越靠前',
+  `status` tinyint unsigned NOT NULL DEFAULT 1 COMMENT '状态:0停用 1启用',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  `delete_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_id`,`file_name`,`delete_time`),
+  KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_id`,`status`,`sort`,`delete_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸资源';
