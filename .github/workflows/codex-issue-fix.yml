@@ -168,9 +168,12 @@ jobs:
           CODEX_RELAY_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          # --approve-for-me 本身就等价于「workspace-write 沙箱 + 自动审批」，
+          # 与显式 --sandbox 互斥（clap 会直接报 cannot be used with）。
+          # 因此这里改用 -c approval_policy=never，避免非交互环境下因等待审批而卡住。
           codex exec \
+            -c approval_policy="never" \
             --sandbox workspace-write \
-            --approve-for-me \
             --ephemeral \
             --output-last-message "$RUNNER_TEMP/codex-result.md" \
             -C "$GITHUB_WORKSPACE" \
