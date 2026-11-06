@@ -283,7 +283,9 @@ class GeoMediaSyncService
             'caseurl' => self::text($row['caseurl'] ?? '', 500),
             'remark' => self::text($row['remark'] ?? '', 500),
             'costprice' => $cost,
-            'price_types' => self::priceTypes($row),
+            // 必须写真实列名：模型 $json 声明的是 price_type_json，
+            // 写成 price_types 既不是列也不是 json 声明名，会被当普通数组塞进 SQL。
+            'price_type_json' => self::priceTypes($row),
             'linktype' => (int)($row['linktype'] ?? 0),
             'publishtime' => (int)($row['publishtime'] ?? 0),
             'newsresource' => (int)($row['newsresource'] ?? 0),
@@ -296,8 +298,8 @@ class GeoMediaSyncService
             'flag' => (int)($row['flag'] ?? 1),
             'deleted' => (int)($row['deleted'] ?? 1),
             'sync_status' => 'synced',
-            // json 字段要通过 $json 声明的字段名写入，直接写 price_type_json / detail_json
-            // 会被 Builder 当成普通数组，赋值时对空数组取下标 [0] 报错。
+            // detail_json 没声明成 json 字段，靠 setDetailJsonAttr 自行编码成字符串，
+            // 否则会被 Builder 当数组、走 $val[0] 分支报 Undefined array key 0。
             'detail_json' => $row,
             'last_sync_time' => time(),
             'update_time' => time(),

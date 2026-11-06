@@ -12,9 +12,9 @@ use app\common\model\geo\GeoMedia;
  */
 class GeoMediaCatalogService
 {
-    /** 前台可见字段：不含 costprice / price_ratio / sourceid / detail_json 等内部列 */
+    /** 前台可见字段：不含 price_ratio / sourceid / detail_json 等内部列；costprice 只用于算售价，输出前剔除 */
     public const PUBLIC_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,'
-        . 'searchcoll,entrancelink,caseurl,remark,price_ratio,price_types,'
+        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,update_time';
 
@@ -120,16 +120,34 @@ class GeoMediaCatalogService
     {
         $ratio = GeoMedia::ratio($row);
         $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
-        unset($row['costprice'], $row['price_ratio'], $row['tenant_id'], $row['sourceid']);
 
-        // price_types 的 getter 已带 sale_price；这里只去掉成本价 price，避免前端推算倍率。
-        foreach ((array)($row['price_types'] ?? []) as $index => $item) {
-            $row['price_types'][$index]['sale_price'] = $item['sale_price']
-                ?? GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio);
-            unset($row['price_types'][$index]['price']);
+        // 多价格类别：库里叫 price_type_json，对外仍叫 price_types。
+        // getter 已按倍率补好 sale_price，这里再去掉成本价 price，避免前端推算倍率。
+        $priceTypes = [];
+        foreach ((array)($row['price_type_json'] ?? []) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $type = (int)($item['type'] ?? 0);
+            if ($type <= 0) {
+                continue;
+            }
+            $priceTypes[] = [
+                'type' => $type,
+                'sale_price' => $item['sale_price']
+                    ?? GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
+            ];
         }
-        if (isset($row['price_types']) && $row['price_types'] === []) {
-            unset($row['price_types']);
+
+        unset(
+            $row['costprice'],
+            $row['price_ratio'],
+            $row['tenant_id'],
+            $row['sourceid'],
+            $row['price_type_json']
+        );
+        if ($priceTypes !== []) {
+            $row['price_types'] = $priceTypes;
         }
         return $row;
     }
