@@ -14,6 +14,7 @@
 
 namespace app\tenantapi\logic\channel;
 
+use app\api\logic\merchant\StaffWechatBindingLogic;
 use app\common\enum\OfficialAccountEnum;
 use app\common\enum\YesNoEnum;
 use app\common\logic\BaseLogic;
@@ -154,6 +155,21 @@ class OfficialAccountReplyLogic extends BaseLogic
         $server = (new WeChatOaService())->getServer();
         // 事件
         $server->addMessageListener(OfficialAccountEnum::MSG_TYPE_EVENT, function ($message, \Closure $next) {
+            $payload = [];
+            foreach (['MsgType', 'Event', 'EventKey', 'FromUserName', 'ToUserName'] as $key) {
+                if (isset($message[$key])) {
+                    $payload[$key] = (string)$message[$key];
+                }
+            }
+            $tenantId = (int)(request()->tenantId ?? 0);
+            $appId = (string)(WeChatConfigService::getOaConfig()['app_id'] ?? '');
+            if ($tenantId > 0 && $appId !== '') {
+                $bindingReply = StaffWechatBindingLogic::handleCallback($tenantId, $appId, $payload);
+                if ($bindingReply !== null) {
+                    return $bindingReply === '' ? 'success' : $bindingReply;
+                }
+            }
+
             switch ($message['Event']) {
                 case OfficialAccountEnum::EVENT_SUBSCRIBE: // 关注事件
                     $replyContent = OfficialAccountReply::where([

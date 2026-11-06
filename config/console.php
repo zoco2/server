@@ -17,6 +17,10 @@ return [
         'brand:maintain' => 'app\\common\\command\\BrandMaintain',
         'decoration:agent-worker' => 'app\\common\\command\\DecorationAgentWorker',
         'open-platform:worker' => 'app\\common\\command\\OpenPlatformWorker',
+        // GEO 海讯社媒体资源同步
+        'geo:media-sync' => 'app\\common\\command\\GeoMediaSync',
+        // GEO 海讯社投稿单状态同步
+        'geo:order-sync' => 'app\\common\\command\\GeoOrderSync',
         'short-drama:episode-worker' => 'app\common\command\ShortDramaEpisodeWorker',
         'short-drama:planning-worker' => 'app\common\command\ShortDramaPlanningWorker',
         'short-drama:reconcile-planning' => 'app\common\command\ReconcileShortDramaPlanning',
@@ -41,6 +45,7 @@ return [
         'ai:recover-timeout-tasks' => 'app\common\command\AiRecoverTimeoutTasks',
         // 租户合约到期扫描
         'tenant:expire_contracts' => 'app\common\command\ExpireTenantContracts',
+        'zoco:sync-menus' => 'app\common\command\SyncAppMenus',
         // 算力套餐支付状态核对与补偿
         'tenant_power:reconcile' => 'app\common\command\ReconcileTenantPowerOrders',
         // 贴牌订单超时释放预占额度
@@ -48,5 +53,14 @@ return [
         // 短剧任务提示词修复
         'short-drama:repair-prompts' => 'app\common\command\RepairShortDramaPrompts',
         'short-drama:dedupe-assets' => 'app\common\command\RepairShortDramaDuplicateAssets',
+        // 智能剪辑（阿里云 IMS）轮询
+        'smart-edit:worker' => 'app\common\command\SmartEditWorker',
+        // 智能剪辑标题字体预热（部署时执行，避免提交请求内下载字体）
+        'smart-edit:fonts' => 'app\common\command\SmartEditFonts',
+        // 轻量消息队列（原 MNS）
+        'mns:send' => 'app\common\command\MnsSend',
+        'mns:consume' => 'app\common\command\MnsConsume',
+        // Workerman 常驻服务（MNS 队列消费）
+        'workerman' => 'app\common\command\Workerman',
     ],
 ];

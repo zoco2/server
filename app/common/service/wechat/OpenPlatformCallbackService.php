@@ -206,7 +206,7 @@ class OpenPlatformCallbackService
             return self::encryptedTextReply($config, $fromUser, $toUser, 'TESTCOMPONENT_MSG_TYPE_TEXT_callback');
         }
 
-        if ($messageType === 'event') {
+        if ($messageType === 'event' && strcasecmp(trim((string)($message->Event ?? '')), 'LOCATION') === 0) {
             $event = trim((string)($message->Event ?? ''));
             if ($event !== '') return self::encryptedTextReply($config, $fromUser, $toUser, $event . 'from_callback');
         }
@@ -258,6 +258,28 @@ class OpenPlatformCallbackService
         $payload = [];
         foreach ($message as $key => $value) {
             $payload[$key] = (string)$value;
+        }
+        $bindingReply = \app\api\logic\merchant\StaffWechatBindingLogic::handleCallback(
+            (int)$authorizer['tenant_id'],
+            $authorizerAppId,
+            $payload
+        );
+        if ($bindingReply !== null) {
+            if ($bindingReply === '') {
+                return 'success';
+            }
+            $plain = self::textReplyXml(
+                (string)($message->FromUserName ?? ''),
+                $authorizerAppId,
+                $bindingReply
+            );
+            $encryptor = new Encryptor(
+                (string)$config['app_id'],
+                OpenPlatformService::credentialValue($config['token'] ?? ''),
+                OpenPlatformService::credentialValue($config['encoding_aes_key'] ?? ''),
+                (string)$config['app_id']
+            );
+            return $encryptor->encryptAsXml($plain);
         }
         $reply = OfficialAccountReplyLogic::authorizerReply($payload, (int)$authorizer['tenant_id']);
         if ($reply === '') {

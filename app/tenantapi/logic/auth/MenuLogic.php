@@ -1060,6 +1060,9 @@ class MenuLogic extends BaseLogic
             'is_cache' => $params['is_cache'],
             'is_show' => $params['is_show'],
             'is_disable' => $params['is_disable'],
+            'app_code' => '',
+            'source' => 'tenant',
+            'is_core' => 0,
         ]);
     }
 

@@ -14,6 +14,7 @@
 
 namespace app\api\controller;
 
+use app\api\logic\file\FileLogic;
 use app\common\enum\FileEnum;
 use app\common\service\UploadService;
 use Exception;
@@ -37,7 +38,8 @@ class UploadController extends BaseApiController
     {
         try {
             $this->syncTenantContext();
-            $result = UploadService::image(0, $this->userId,FileEnum::SOURCE_USER);
+            $cid = FileLogic::uploadCid(FileEnum::IMAGE_TYPE, $this->request->post('cid', 0));
+            $result = UploadService::image($cid, $this->userId, FileEnum::SOURCE_USER);
             return $this->success('上传成功', $result);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
@@ -48,7 +50,8 @@ class UploadController extends BaseApiController
     {
         try {
             $this->syncTenantContext();
-            $result = UploadService::file(0, $this->userId, FileEnum::SOURCE_USER);
+            $cid = FileLogic::uploadCid(FileEnum::FILE_TYPE, $this->request->post('cid', 0));
+            $result = UploadService::file($cid, $this->userId, FileEnum::SOURCE_USER);
             return $this->success('上传成功', $result);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
@@ -59,7 +62,23 @@ class UploadController extends BaseApiController
     {
         try {
             $this->syncTenantContext();
-            $result = UploadService::video(0, $this->userId, FileEnum::SOURCE_USER);
+            $cid = FileLogic::uploadCid(FileEnum::VIDEO_TYPE, $this->request->post('cid', 0));
+            $result = UploadService::video($cid, $this->userId, FileEnum::SOURCE_USER);
+            return $this->success('上传成功', $result);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 上传音频（type=40，与图片、视频同级）。
+     */
+    public function audio()
+    {
+        try {
+            $this->syncTenantContext();
+            $cid = FileLogic::uploadCid(FileEnum::AUDIO_TYPE, $this->request->post('cid', 0));
+            $result = UploadService::audio($cid, $this->userId, FileEnum::SOURCE_USER);
             return $this->success('上传成功', $result);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());

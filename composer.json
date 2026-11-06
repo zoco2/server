@@ -38,7 +38,11 @@
         "alipaysdk/easysdk": "^2.2",
         "ext-curl": "*",
         "ext-zip": "*",
-        "neuron-core/neuron-ai": "4.1.9"
+        "ext-pcntl": "*",
+        "ext-posix": "*",
+        "neuron-core/neuron-ai": "4.1.9",
+        "workerman/workerman": "^5.1",
+        "aliyun/aliyun-mns-php-sdk": "^1.4"
     },
     "require-dev": {
         "symfony/var-dumper": ">=4.2",

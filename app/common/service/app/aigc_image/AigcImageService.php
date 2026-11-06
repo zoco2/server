@@ -205,177 +205,94 @@ class AigcImageService
         }
     }
 
+    /**
+     * 生图提交的实际实现。
+     *
+     * 现在只会走出两条活路径，然后直接 return：
+     * 渠道 provider 是 power_market_app_api 时走 Nano Banana；
+     * 是 power_market_model 时走算力市场模型。
+     * 两条都不匹配就抛错。
+     *
+     * 创作页一次提交的示例（对应下面每一行注释里的值）：
+     * $tenantId = 1
+     * $userId = 18
+     * $params = [
+     *     'prompt' => '一只金毛在草地上奔跑',
+     *     'negative_prompt' => '',
+     *     'reference_images' => ['uploads/image/2026/dog.png'],
+     *     'ratio' => '1:1',
+     *     'quality' => '1k',
+     *     'quantity' => 1,
+     *     'channel' => 'qwen-image-3.0',
+     *     'market_sku_id' => 7001,
+     *     'batch_key' => 'pc-image-1730600000-1',
+     * ]
+     * $billingOverride = []
+     * $onTaskCreated = null
+     * 返回示例：['task_id' => 88, 'results' => [], 'status' => 'running']
+     *
+     * @param int $tenantId 租户编号，示例 1
+     * @param int $userId 用户编号，示例 18
+     * @param array $params 前端生图参数，字段见上面的 $params
+     * @param array $billingOverride 调用方指定扣费。普通生图是 []；覆盖时如 ['tenant_cost_points' => 8.5, 'user_charge_points' => 12]
+     * @param callable|null $onTaskCreated 本地任务落库后的回调，普通生图是 null
+     * @return array 本地任务编号、已有结果和状态。示例 ['task_id' => 88, 'results' => [], 'status' => 'running']
+     */
     private static function generateInternal(int $tenantId, int $userId, array $params, array $billingOverride = [], ?callable $onTaskCreated = null): array
     {
+        // 入参示例：$params['advanced_params'] 通常没有。有的话如 ['seed' => 42]，校验通过后写回 $params['seed'] = 42；没有则 $params 不变
         $params = \app\common\service\power\MarketCreationParameters::apply($tenantId, $params, 'image');
+        // 入参示例：$params['prompt'] = '一只金毛在草地上奔跑 @素材1'。清洗后引用被编译成模型可读文本，其余字段不变
         $params = ReferenceMentionPromptService::compile(self::sanitizeUtf8Payload($params));
+        // 取出示例：'一只金毛在草地上奔跑'。空字符串 '' 会在下面被拒绝
         $prompt = trim((string)($params['prompt'] ?? ''));
+        // 普通创作页这里是 null。开放平台冻结时如 ['selection' => ['channel' => [...], 'spec' => [...]]]
         $frozen = \app\common\service\open_platform\OpenImagePricing::selection($tenantId, $userId);
+        // 解析示例：channel.code = 'qwen-image-3.0'，channel.provider = 'power_market_model'，spec.quality = '1k'，spec.ratio = '1:1'
         $selection = $frozen['selection'] ?? AigcImageChannelService::resolveSelection($tenantId, $params);
+        // 示例：$prompt = '' 且 channel.material_modes = [] 时抛错。material_modes 非空（渠道声明了素材模式）时允许空提示词
         if ($prompt === '' && empty($selection['channel']['material_modes'])) throw new Exception('请输入提示词');
+        // 示例：$params['market_sku_id'] = 7001，写入 $selection['market_sku_id'] = 7001。两个字段都空则跳过
         if (!empty($params['market_sku_id']) || !empty($params['sku_id'])) {
             $selection['market_sku_id'] = (int)($params['market_sku_id'] ?? $params['sku_id']);
         }
+        // 示例：$params['quantity'] = 1，得到 $quantity = 1。缺省、0、负数都会收成 1
         $quantity = AigcImageChannelService::normalizeQuantity($params['quantity'] ?? 1);
+        // 示例：渠道 quantity_options = [1]，传入 1 通过；传入 4 且选项里没有 4 就抛错
         AigcImageChannelService::assertChannelQuantity($selection['channel'], $quantity);
+        // 示例：['uploads/image/2026/dog.png', '', 'uploads/image/2026/dog.png'] 收成 ['uploads/image/2026/dog.png']。data:image/png;base64,... 会先存成文件地址
         $referenceImages = self::normalizeReferenceImages((array)($params['reference_images'] ?? []), $tenantId, $userId);
+        // 示例：参考图 1 张，channel.max_reference_images = 3，通过。4 张且上限 3 时抛「参考图数量超出限制」
         if (count($referenceImages) > (int)$selection['channel']['max_reference_images']) {
             throw new Exception('参考图数量超出限制');
         }
+        // 示例：启用词有「违禁」且提示词含「违禁」就抛错。本次提示词「一只金毛在草地上奔跑」通过
         self::checkSensitiveWords($tenantId, $prompt);
+        // 活路径一示例：channel.provider = 'power_market_app_api' 时进入。返回 ['task_id' => 88, 'results' => [], 'status' => 'running']
         if ((string)($selection['channel']['provider'] ?? '') === 'power_market_app_api') {
             return self::generateNanoBanana($tenantId, $userId, $params, $selection, $referenceImages, $onTaskCreated, $billingOverride);
         }
+        // 活路径二示例：channel.provider = 'power_market_model'。下面补进的字段示例见各行注释
         if ((string)($selection['channel']['provider'] ?? '') === 'power_market_model') {
             return self::generateMarketModelWithBillingOverride(
-                $tenantId,
-                $userId,
+                $tenantId, // 示例 1
+                $userId, // 示例 18
                 array_merge($params, [
-                    'channel' => $selection['channel']['code'],
-                    'model_id' => $selection['channel']['code'],
-                    'quality' => $selection['spec']['quality'],
-                    'ratio' => $selection['spec']['ratio'],
-                    'market_product_id' => (int)($selection['spec']['market_product_id'] ?? 0),
-                    'market_sku_id' => (int)($selection['spec']['market_sku_id'] ?? 0),
-                    'reference_images' => $referenceImages,
+                    'channel' => $selection['channel']['code'], // 示例 'qwen-image-3.0'
+                    'model_id' => $selection['channel']['code'], // 示例 'qwen-image-3.0'，和市场模型编号用同一个渠道编码
+                    'quality' => $selection['spec']['quality'], // 示例 '1k'
+                    'ratio' => $selection['spec']['ratio'], // 示例 '1:1'
+                    'market_product_id' => (int)($selection['spec']['market_product_id'] ?? 0), // 示例 102，没有时是 0
+                    'market_sku_id' => (int)($selection['spec']['market_sku_id'] ?? 0), // 示例 7001，没有时是 0
+                    'reference_images' => $referenceImages, // 示例 ['uploads/image/2026/dog.png']
                 ]),
-                $billingOverride,
-                self::APP_CODE,
-                $onTaskCreated
+                $billingOverride, // 普通生图示例 []。覆盖示例 ['tenant_cost_points' => 8.5, 'user_charge_points' => 12]
+                self::APP_CODE, // 示例 'aigc_image'
+                $onTaskCreated // 普通生图示例 null
             );
         }
+        // 既不是应用 API 也不是市场模型，当前生图不再接受别的渠道
         throw new Exception('图片生成必须选择算力市场模型或应用 API');
-        $providerParams = self::providerParamsForRequest($selection['spec']['provider_params_json'] ?? [], $params);
-        $duplicateCriteria = [
-            'prompt' => $prompt,
-            'negative_prompt' => (string)($params['negative_prompt'] ?? ''),
-            'style' => (string)($params['style'] ?? 'general'),
-            'channel' => (string)$selection['channel']['code'],
-            'quality' => (string)$selection['spec']['quality'],
-            'ratio' => (string)$selection['spec']['ratio'],
-            'quantity' => $quantity,
-            'reference_images' => $referenceImages,
-            'provider_params_json' => $providerParams,
-        ];
-        $estimate = AigcImageChannelService::estimate($tenantId, array_merge($params, [
-            'channel' => $selection['channel']['code'],
-            'quality' => $selection['spec']['quality'],
-            'ratio' => $selection['spec']['ratio'],
-            'quantity' => $quantity,
-        ]));
-        $estimate = self::applyBillingOverride($estimate, $quantity, $billingOverride);
-        if ($billingOverride === []) {
-            $estimate = AiUsageService::resolveImageMarketEstimate($tenantId, $selection, $estimate, $quantity);
-        }
-
-        Db::startTrans();
-        try {
-            self::lockSubmitOwner($userId);
-            $duplicateTask = self::findRecentDuplicateTask($tenantId, $userId, $duplicateCriteria);
-            if ($duplicateTask) {
-                Db::commit();
-                return self::buildDuplicateGenerateResponse($duplicateTask, $tenantId, $userId);
-            }
-            self::checkQuota($tenantId, $userId, $quantity);
-            PointService::assertCanConsumeAmounts($tenantId, $userId, (float)$estimate['tenant_cost_points'], (float)$estimate['user_charge_points']);
-            $usage = AiUsageService::createImageSubmission($tenantId, $userId, array_merge($params, [
-                'channel' => $selection['channel']['code'],
-                'quality' => $selection['spec']['quality'],
-                'ratio' => $selection['spec']['ratio'],
-                'quantity' => $quantity,
-                'reference_images' => $referenceImages,
-            ]), $selection, $estimate);
-            $task = AigcImageTask::create([
-                'app_task_id' => (int)$usage['app_task']['id'],
-                'tenant_id' => $tenantId,
-                'user_id' => $userId,
-                'prompt' => $prompt,
-                'negative_prompt' => $params['negative_prompt'] ?? '',
-                'reference_images' => $referenceImages,
-                'provider_params_json' => $providerParams,
-                'style' => $params['style'] ?? 'general',
-                'channel' => $selection['channel']['code'],
-                'quality' => $selection['spec']['quality'],
-                'ratio' => $selection['spec']['ratio'],
-                'quantity' => $quantity,
-                'tenant_cost_points' => $estimate['tenant_cost_points'],
-                'user_charge_points' => $estimate['user_charge_points'],
-                'provider' => $selection['channel']['provider'],
-                'model' => $selection['channel']['model'],
-                'status' => 'running',
-                'error' => '',
-                'delete_time' => 0,
-                'create_time' => time(),
-                'update_time' => time(),
-            ]);
-            AiUsageService::attachImageTask((int)$usage['app_task']['id'], (int)$task['id']);
-            Db::commit();
-        } catch (\Throwable $e) {
-            \app\common\service\open_platform\OpenCallContext::rethrowLostAuthority($e);
-            Db::rollback();
-            throw $e;
-        }
-
-        throw new Exception('旧图片 Provider 提交链路已移除，请使用算力市场模型或应用 API');
-        $providerName = (string)$selection['channel']['provider'];
-        $provider = self::providerFor($providerName);
-        $channelConfig = array_merge($selection['channel']['config_json'] ?? [], [
-            'model' => $selection['channel']['model'],
-            'tenant_id' => $tenantId,
-            'user_id' => $userId,
-        ]);
-        if (self::isAsyncProvider($providerName)) {
-            $channelConfig['poll_attempts'] = 0;
-        }
-        try {
-            $result = $provider->generate(new AigcImageGenerateRequest(
-                $prompt,
-                (string)($params['negative_prompt'] ?? ''),
-                (string)($params['style'] ?? 'general'),
-                $selection['channel']['code'],
-                $selection['spec']['quality'],
-                $selection['spec']['ratio'],
-                $quantity,
-                $referenceImages,
-                $selection['spec'],
-                $providerParams,
-                $channelConfig
-            ));
-        } catch (\Throwable $e) {
-            \app\common\service\open_platform\OpenCallContext::rethrowLostAuthority($e);
-            $task->status = 'failed';
-            $task->error = '生图提交失败';
-            $task->finish_time = time();
-            $task->update_time = time();
-            $task->save();
-            AiUsageService::failImageTask((int)$task['id'], $e->getMessage(), 'submit_exception');
-            throw $e;
-        }
-
-        $task->provider_task_id = $result->providerTaskId;
-        $task->update_time = time();
-        $task->save();
-        AiUsageService::markImageSubmitted((int)$task['id'], (string)$result->providerTaskId, [
-            'provider_task_id' => (string)$result->providerTaskId,
-            'image_count' => count($result->images),
-        ]);
-
-        if (!$result->success) {
-            $task->status = 'failed';
-            $task->error = $result->error;
-            $task->finish_time = time();
-            $task->save();
-            AiUsageService::failImageTask((int)$task['id'], (string)$task->error, 'submit_failed');
-            return ['task_id' => $task['id'], 'results' => [], 'status' => 'failed', 'error' => $task->error];
-        }
-
-        if (empty($result->images) && $result->providerTaskId !== '') {
-            return ['task_id' => $task['id'], 'results' => [], 'status' => 'running'];
-        }
-
-        $rows = self::finishTaskWithImages($task, $selection, $estimate, $result->images);
-
-        return ['task_id' => $task['id'], 'results' => $rows];
     }
 
     /** Submit Nano Banana through its application-API runtime and market SKU. */

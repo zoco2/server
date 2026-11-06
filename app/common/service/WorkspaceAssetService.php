@@ -3,6 +3,7 @@ namespace app\common\service;
 
 use app\common\enum\FileEnum;
 use app\common\model\file\TenantFile;
+use app\common\model\file\UserFileCate;
 use think\facade\Db;
 use InvalidArgumentException;
 
@@ -111,12 +112,49 @@ final class WorkspaceAssetService
         });
     }
 
-    public static function uploads(int $tenant, int $user, int $page): array
+    /**
+     * @param int $tenant
+     * @param int $user
+     * @param int $page
+     * @param mixed $cid 不传查全部，0 为未分组，大于 0 为该分组及其子分组
+     * @return array
+     */
+    /**
+     * 限定「库里可见」的上传记录。
+     *
+     * 图片 10、视频 20、音频 40 全部可见；文件 30 只有历史遗留的 webm 算素材，
+     * 其余 zip/pdf 一类不进素材库。
+     *
+     * @param \think\db\Query $query
+     */
+    private static function scopeVisibleUploads($query): void
+    {
+        $query->whereRaw(
+            '(type IN (10, 20, 40) OR (type = 30 AND LOWER(uri) LIKE ?))',
+            ['%.webm']
+        );
+    }
+
+    public static function uploads(int $tenant, int $user, int $page, $cid = null): array
     {
         self::identity($tenant, $user);
-        $rows = TenantFile::where(['tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local'])
-            ->whereRaw('(type IN (10, 20) OR (type = 30 AND LOWER(uri) LIKE ?))', ['%.webm'])
-            ->order('id', 'desc')->page(max(1, $page), 100)->select()->toArray();
+        $query = TenantFile::where(['tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local']);
+        self::scopeVisibleUploads($query);
+        if ($cid !== null && $cid !== '') {
+            if (!is_numeric($cid) || (int)$cid < 0) {
+                throw new InvalidArgumentException('分组参数无效');
+            }
+            $cid = (int)$cid;
+            if ($cid === 0) {
+                $query->where('cid', 0);
+            } else {
+                if (!UserFileCate::where(['user_id' => $user, 'id' => $cid])->find()) {
+                    throw new InvalidArgumentException('分组不存在或无权操作');
+                }
+                $query->whereIn('cid', UserFileCate::branchIds($user, $cid));
+            }
+        }
+        $rows = $query->order('id', 'desc')->page(max(1, $page), 100)->select()->toArray();
         return ['lists' => array_map(fn($row) => self::presentUpload($row), $rows), 'has_more' => count($rows) === 100];
     }
 
@@ -215,8 +253,9 @@ final class WorkspaceAssetService
         [$source, $kind, $id] = explode(':', $ref);
         if ($source === 'canvas' && $kind === 'task') return WorkspaceCanvasAssetService::owned($tenant, $user, $ref);
         if ($source === 'upload') {
-            $file = ($includeDeleted ? TenantFile::withTrashed() : TenantFile::where([]))->where(['id' => (int)$id, 'tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local'])
-                ->whereRaw('(type IN (10, 20) OR (type = 30 AND LOWER(uri) LIKE ?))', ['%.webm'])->find();
+            $file = ($includeDeleted ? TenantFile::withTrashed() : TenantFile::where([]))->where(['id' => (int)$id, 'tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local']);
+            self::scopeVisibleUploads($file);
+            $file = $file->find();
             return $file ? self::presentUpload($file->toArray()) : null;
         }
         $prefix = self::SOURCES[$source] ?? null;
@@ -257,8 +296,8 @@ final class WorkspaceAssetService
     private static function presentUpload(array $row): array
     {
         return ['source' => 'upload', 'ref' => 'upload:result:' . $row['id'], 'raw' => [
-            'id' => (int)$row['id'], 'title' => $row['name'], 'type' => (int)$row['type'],
-            'url' => self::url($row, 'uri'), 'create_time' => $row['create_time'],
+            'id' => (int)$row['id'], 'cid' => (int)($row['cid'] ?? 0), 'title' => $row['name'], 'type' => (int)$row['type'],
+            'url' => self::url($row, 'uri'), 'uri' => (string)($row['uri'] ?? ''), 'create_time' => $row['create_time'],
         ]];
     }
 

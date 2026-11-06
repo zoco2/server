@@ -118,6 +118,11 @@ return [
         'wmv', 'avi', 'mpg', 'mpeg', '3gp', 'mov', 'mp4', 'flv', 'f4v', 'rmvb', 'mkv'
     ],
 
+    // 文件上传限制 (音频)：与图片、视频同级，独立类型 type=40
+    'file_audio' => [
+        'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'
+    ],
+
     //上传文件的格式 (文件)
     'file_file' => [
         'zip','rar','txt','md','markdown','pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt','ftr','7z','gz',

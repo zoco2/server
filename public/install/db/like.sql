@@ -1520,6 +1520,30 @@ CREATE TABLE `la_tenant_file_cate`
   ROW_FORMAT = Dynamic;
 
 -- ----------------------------
+-- Table structure for la_user_file_cate
+-- ----------------------------
+DROP TABLE IF EXISTS `la_user_file_cate`;
+CREATE TABLE `la_user_file_cate`
+(
+    `id`          int(10) UNSIGNED                                             NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `tenant_id`   int(11)                                                      NOT NULL COMMENT '租户ID',
+    `user_id`     int(10) UNSIGNED                                             NOT NULL COMMENT '用户ID',
+    `pid`         int(10) UNSIGNED                                             NOT NULL DEFAULT 0 COMMENT '父级ID',
+    `type`        tinyint(2) UNSIGNED                                          NOT NULL DEFAULT 10 COMMENT '类型[10=图片，20=视频，30=文件]',
+    `name`        varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '分类名称',
+    `create_time` int(10) UNSIGNED                                             NULL     DEFAULT NULL COMMENT '创建时间',
+    `update_time` int(10) UNSIGNED                                             NULL     DEFAULT NULL COMMENT '更新时间',
+    `delete_time` int(10) UNSIGNED                                             NULL     DEFAULT NULL COMMENT '删除时间',
+    PRIMARY KEY (`id`) USING BTREE,
+    KEY `idx_tenant_user_type_id` (`tenant_id`, `user_id`, `type`, `id`) USING BTREE,
+    KEY `idx_pid` (`pid`) USING BTREE
+) ENGINE = InnoDB
+  AUTO_INCREMENT = 1
+  CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_general_ci COMMENT = '用户文件分组'
+  ROW_FORMAT = Dynamic;
+
+-- ----------------------------
 -- Table structure for la_tenant_jobs
 -- ----------------------------
 DROP TABLE IF EXISTS `la_tenant_jobs`;
@@ -14239,7 +14263,7 @@ CREATE TABLE IF NOT EXISTS `la_distribution_poster_version` (
 -- Merchant brand, store, and staff.
 -- 品牌、门店、员工。归属是 tenant_id + user_id（商家账号）。
 -- 品牌对门店、门店对员工都是一对多：门店.brand_id、员工.store_id。
--- 图片直接存 URL，空字符串表示未上传。delete_time=0 表示未删除。
+-- 图片直接存 URL，空字符串表示未上传。delete_time 为空表示未删除，与 SoftDelete 一致。
 
 CREATE TABLE IF NOT EXISTS `la_merchant_brand` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -14254,9 +14278,13 @@ CREATE TABLE IF NOT EXISTS `la_merchant_brand` (
   `address` varchar(255) NOT NULL DEFAULT '' COMMENT '联系地址',
   `logo_url` varchar(500) NOT NULL DEFAULT '' COMMENT '品牌Logo URL',
   `cover_url` varchar(500) NOT NULL DEFAULT '' COMMENT '品牌封面 URL',
+  `company_intro` text NULL COMMENT '企业介绍',
+  `products_services` text NULL COMMENT '产品与服务',
+  `target_customers` text NULL COMMENT '目标客户与地区',
+  `competitor_facts` text NULL COMMENT '竞品与差异事实',
   `create_time` int unsigned NOT NULL DEFAULT 0 COMMENT '创建时间',
   `update_time` int unsigned NOT NULL DEFAULT 0 COMMENT '更新时间',
-  `delete_time` int unsigned NOT NULL DEFAULT 0 COMMENT '删除时间，0为未删除',
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_owner_name` (`tenant_id`,`user_id`,`name`,`delete_time`),
   KEY `idx_owner` (`tenant_id`,`user_id`,`delete_time`,`id`)
@@ -14283,7 +14311,7 @@ CREATE TABLE IF NOT EXISTS `la_merchant_store` (
   `logo_url` varchar(500) NOT NULL DEFAULT '' COMMENT '门店Logo URL',
   `create_time` int unsigned NOT NULL DEFAULT 0 COMMENT '创建时间',
   `update_time` int unsigned NOT NULL DEFAULT 0 COMMENT '更新时间',
-  `delete_time` int unsigned NOT NULL DEFAULT 0 COMMENT '删除时间，0为未删除',
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
   PRIMARY KEY (`id`),
   KEY `idx_owner` (`tenant_id`,`user_id`,`delete_time`,`id`),
   KEY `idx_brand` (`tenant_id`,`user_id`,`brand_id`,`delete_time`)
@@ -14300,7 +14328,7 @@ CREATE TABLE IF NOT EXISTS `la_merchant_staff` (
   `openid` varchar(128) DEFAULT NULL COMMENT '公众号OpenID，未关联为空',
   `create_time` int unsigned NOT NULL DEFAULT 0 COMMENT '创建时间',
   `update_time` int unsigned NOT NULL DEFAULT 0 COMMENT '更新时间',
-  `delete_time` int unsigned NOT NULL DEFAULT 0 COMMENT '删除时间，0为未删除',
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_store_mobile` (`tenant_id`,`user_id`,`store_id`,`mobile`,`delete_time`),
   UNIQUE KEY `uk_oa_openid` (`tenant_id`,`appid`,`openid`,`delete_time`),
