@@ -12,30 +12,31 @@ use app\common\service\geo\GeoMediaSyncService;
  * 否则调倍率要全表回写。多价格类别同理，读出时补上实时价格。
  *
  * 注意 JSON 字段：
- * - price_types 是 $json 声明的字段名，读时是与 price_type_json 合并后的数组，
- *   写时必须写 price_types（模型按规则转成 price_type_json 再 json_encode）；
- *   直接写 price_type_json 会走 Builder 的删除式更新，数组下标越界报错。
- * - detail_json 是原始行，不声明为 json 字段，由 setDetailJsonAttr 自行编码，
- *   避免把整个海讯原始行也当成 price_types 合并进来。
+ * - ThinkPHP 的 `$json` 里必须写**真实列名**，框架不做名称映射。
+ *   本表列名是 `price_type_json`，写/查用别的名字（如 price_types）会直接
+ *   SQLSTATE[42S22] Unknown column。项目内其他模型同理（如 AigcCanvasProject）。
+ * - 对外接口仍叫 price_types，由 GeoMediaCatalogService::publicRow() 映射，
+ *   免得前端拿到成本价自己推算倍率。
+ * - detail_json 是原始行，不声明为 json 字段，由 setDetailJsonAttr 自行编码。
  *
  * @property float $costprice
  * @property float $price_ratio
  * @property float $sale_price
- * @property array $price_types
+ * @property array $price_type_json
  */
 class GeoMedia extends BaseModel
 {
     protected $name = 'geo_media';
-    protected $json = ['price_types'];
+    protected $json = ['price_type_json'];
     protected $jsonAssoc = true;
     protected $type = [
         'costprice' => 'float',
         'price_ratio' => 'float',
     ];
 
-    /** 返回给前端的字段，sale_price / price_types 为运行时计算。 */
+    /** 返回给前端的字段，sale_price / price_type_json 为运行时计算。 */
     public const OUTPUT_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,searchcoll,'
-        . 'entrancelink,caseurl,remark,costprice,price_ratio,price_types,'
+        . 'entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,flag,deleted,local_hidden,sync_status,last_sync_time,update_time';
 
@@ -53,11 +54,14 @@ class GeoMedia extends BaseModel
     /**
      * 多价格类别，价格按同一倍率实时换算。
      *
-     * @param mixed $value price_types（json 字段）
+     * 方法名必须与列名对齐：get + studly(price_type_json) + Attr，
+     * 叫 getPriceTypesAttr 是取不到的，会原样返回未换算的 json。
+     *
+     * @param mixed $value price_type_json（json 字段，已解码成数组）
      * @param array<string, mixed> $data 当前行
      * @return array<int, array{type:int, price:float, sale_price:float}>
      */
-    public function getPriceTypesAttr($value, array $data): array
+    public function getPriceTypeJsonAttr($value, array $data): array
     {
         $items = is_array($value) ? array_values($value) : [];
         $ratio = self::ratio($data);

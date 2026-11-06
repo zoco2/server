@@ -337,7 +337,7 @@ class GeoOrderService
     private static function resolvePrice(GeoMedia $media, int $priceType): array
     {
         $ratio = (float)$media['price_ratio'] > 0 ? (float)$media['price_ratio'] : GeoMediaSyncService::markup((int)$media['tenant_id']);
-        foreach ((array)$media->getAttr('price_types') as $item) {
+        foreach ((array)$media->getAttr('price_type_json') as $item) {
             if ((int)($item['type'] ?? 0) === $priceType) {
                 $cost = (float)($item['price'] ?? 0);
                 return [$cost, GeoMediaSyncService::suggestSalePrice($cost, $ratio)];
