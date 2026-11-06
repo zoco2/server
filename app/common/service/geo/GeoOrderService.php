@@ -2,6 +2,7 @@
 
 namespace app\common\service\geo;
 
+use app\common\exception\GeoTokenExpiredException;
 use app\common\model\geo\GeoArticle;
 use app\common\model\geo\GeoMedia;
 use app\common\model\geo\GeoOrder;
@@ -115,18 +116,24 @@ class GeoOrderService
             GeoOrderLog::record($order, $from, $from, 'push', sprintf('海讯价格变动 %.2f -> %.2f', (float)$order['cost_price'], $costPrice));
         }
 
-        $openToken = AigcGeoManuscriptService::accessToken((int)$order['tenant_id']);
         try {
-            AigcGeoManuscriptService::createOrder($openToken, [
-                'ordernum' => (string)$order['order_no'],
-                'title' => (string)$order['title'],
-                'content' => (string)$order['content_url'],
-                'price' => $costPrice,
-                'sourceid' => (string)$order['sourceid'],
-                'priceType' => (int)$order['price_type'],
-                'remark' => (string)$order['remark'],
-                'origin' => (string)$order['origin'],
-            ]);
+            self::callWithToken(
+                (int)$order['tenant_id'],
+                // createOrder 返回 void，包一层返回空数组以匹配调用器签名。
+                static function (string $token) use ($order, $costPrice): array {
+                    AigcGeoManuscriptService::createOrder($token, [
+                        'ordernum' => (string)$order['order_no'],
+                        'title' => (string)$order['title'],
+                        'content' => (string)$order['content_url'],
+                        'price' => $costPrice,
+                        'sourceid' => (string)$order['sourceid'],
+                        'priceType' => (int)$order['price_type'],
+                        'remark' => (string)$order['remark'],
+                        'origin' => (string)$order['origin'],
+                    ]);
+                    return [];
+                }
+            );
         } catch (Exception $e) {
             // orderExist 说明已经推送过，按待安排处理继续轮询。
             if (str_contains($e->getMessage(), '订单已存在')) {
@@ -162,8 +169,10 @@ class GeoOrderService
         if ((int)$order['status'] === GeoOrder::STATUS_LOCAL) {
             throw new Exception('订单尚未推送，无法查询');
         }
-        $openToken = AigcGeoManuscriptService::accessToken((int)$order['tenant_id']);
-        $result = AigcGeoManuscriptService::queryOrder($openToken, (string)$order['order_no']);
+        $result = self::callWithToken(
+            (int)$order['tenant_id'],
+            static fn (string $token): array => AigcGeoManuscriptService::queryOrder($token, (string)$order['order_no'])
+        );
         $from = (int)$order['status'];
         $to = (int)$result['flag'];
         $data = [
@@ -241,8 +250,14 @@ class GeoOrderService
             throw new Exception('只有"发布成功待确认"的订单可以确认或反馈，当前状态：'
                 . (GeoOrder::STATUS_TEXT[(int)$order['status']] ?? $order['status']));
         }
-        $openToken = AigcGeoManuscriptService::accessToken((int)$order['tenant_id']);
-        AigcGeoManuscriptService::processOrder($openToken, (string)$order['order_no'], $flag, $feedback);
+        self::callWithToken(
+            (int)$order['tenant_id'],
+            // processOrder 返回 void，包一层返回空数组以匹配调用器签名。
+            static function (string $token) use ($order, $flag, $feedback): array {
+                AigcGeoManuscriptService::processOrder($token, (string)$order['order_no'], $flag, $feedback);
+                return [];
+            }
+        );
         $from = (int)$order['status'];
         $to = $flag === 5 ? GeoOrder::STATUS_DONE : GeoOrder::STATUS_FEEDBACK;
         $order->save([
@@ -355,6 +370,36 @@ class GeoOrderService
     private static function costOf(GeoMedia $media, int $priceType): float
     {
         return self::resolvePrice($media, $priceType)[0];
+    }
+
+    /**
+     * 带令牌自愈的调用。
+     *
+     * 批量轮询（geo:order-sync）会在同一个进程里连续查询很多订单，令牌中途过期
+     * 或者被别处刷新覆盖时，旧令牌当场作废。这里收到令牌失效就换新令牌重试一次，
+     * 其余异常原样抛出交给调用方累计失败数，不会无谓重发请求。
+     *
+     * @param int $tenantId 租户 ID
+     * @param callable $call 实际请求，签名为 fn(string $openToken): array
+     * @return array<string, mixed>
+     */
+    private static function callWithToken(int $tenantId, callable $call): array
+    {
+        $token = AigcGeoManuscriptService::accessToken($tenantId);
+        try {
+            return $call($token);
+        } catch (GeoTokenExpiredException $e) {
+            try {
+                $token = AigcGeoManuscriptService::renewAccessToken($tenantId);
+            } catch (Exception $renewError) {
+                throw new Exception('访问令牌已失效且无法重新获取：' . $renewError->getMessage());
+            }
+            try {
+                return $call($token);
+            } catch (GeoTokenExpiredException $retryError) {
+                throw new Exception('访问令牌已失效，请检查海讯社账号配置：' . $retryError->getMessage());
+            }
+        }
     }
 
     /**

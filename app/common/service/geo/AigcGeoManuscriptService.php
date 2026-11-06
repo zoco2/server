@@ -3,6 +3,7 @@
 namespace app\common\service\geo;
 
 use app\common\cache\GeoManuscriptTokenCache;
+use app\common\exception\GeoTokenExpiredException;
 use app\common\service\ConfigService;
 use Exception;
 
@@ -124,6 +125,28 @@ class AigcGeoManuscriptService
         }
         $tokenCache->setAccessToken($tenantId, $next, self::TOKEN_TTL);
         return $next;
+    }
+
+    /**
+     * 强制换取一个新令牌，忽略缓存。
+     *
+     * 用途：长任务中途收到令牌失效时，手里的令牌多半已被别处刷新覆盖
+     * （缓存按租户共享，后台保存配置或另一个进程刷新都会让旧令牌作废），
+     * 此时按缓存时间判断是否该刷新已经不可靠，只能换新。
+     *
+     * @param int $tenantId 租户 ID
+     * @return string openToken
+     */
+    public static function renewAccessToken(int $tenantId): string
+    {
+        $account = self::account($tenantId);
+        $accountToken = trim((string)($account['token'] ?? ''));
+        $accountKey = trim((string)($account['key'] ?? ''));
+        if ($accountToken === '' || $accountKey === '') {
+            throw new Exception('请先配置海讯社账号');
+        }
+        (new GeoManuscriptTokenCache())->deleteAccessToken($tenantId);
+        return self::accessToken($tenantId);
     }
 
     /**
@@ -410,8 +433,36 @@ class AigcGeoManuscriptService
             if ($message === '') {
                 $message = trim((string)($payload['msgen'] ?? ''));
             }
-            throw new Exception($message !== '' ? $message : '文稿代发失败');
+            $message = $message !== '' ? $message : '文稿代发失败';
+            // 令牌失效单独抛，避免长任务把它当成数据问题直接判失败。
+            if (self::looksLikeTokenExpired((int)($payload['code'] ?? 0), $message)) {
+                throw new GeoTokenExpiredException($message);
+            }
+            throw new Exception($message);
         }
         return $payload;
+    }
+
+    /**
+     * 判断响应是否为访问令牌失效。
+     *
+     * 海讯社没有给出固定的令牌失效错误码，这里按错误码 + 文案双重识别；
+     * 宁可漏判（退化成普通失败）也不要误判（无谓地反复重换令牌）。
+     *
+     * @param int $code 响应码
+     * @param string $message 响应文案
+     */
+    public static function looksLikeTokenExpired(int $code, string $message): bool
+    {
+        if (in_array($code, [401, 403], true)) {
+            return true;
+        }
+        $needles = ['令牌', 'token', 'Token', '登录已过期', '未登录', '重新登录', '鉴权', '授权失效'];
+        foreach ($needles as $needle) {
+            if (str_contains($message, $needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
