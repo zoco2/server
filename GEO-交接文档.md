@@ -203,21 +203,21 @@ php think geo:media-sync --tenant=1 --limit=100  # 试跑
 
 | 阶段 | 内容 |
 |---|---|
-| **S5** | GEO 诊断收录：对接 `https://118.89.28.187/api/v1`，`GeoDiagProvider` + `geo:diag-poll` 命令 + 后台诊断页 + PC 诊断页 |
+| **S5** | GEO 诊断收录：对接 `https://118.89.28.187/api/v1`，`GeoDiagProvider` + `geo:diag-poll` 命令 + PC 诊断页 `/godata/diagnosis`（已实现） |
 | **S6** | 租户菜单 SQL + 权限点（`la_tenant_menu`），GEO 设置页合并（海讯 key、加成倍率） |
 
-**S5 接口要点（已核对文档 v1.5）：**
-- 认证：`Authorization: Bearer API_KEY`
-- `POST /api/v1/runs`（**必带 `Idempotency-Key`**）→ 202 `{id, status, reused}`
-- 轮询：`GET /runs/{id}/status`（10s 一次，`terminal=true` 停）
-- 结果：`GET /runs/{id}` → `platformRuns[]`（answer / citations / brandMentioned / competitors / screenshotUrl）
-- `GET /usage` 查余额；`GET /platforms` 平台目录与计费
-- 计费单位「分」，**受理即扣**，失败自动退款；402 = 余额不足
-- 错误码：401/402/403/409(幂等冲突)/410/500
-- 采集失败码：`LOGIN_REQUIRED` / `CAPTCHA_REQUIRED` / `COLLECTION_TIMEOUT` / `COLLECTION_FAILED`
+**S5 接口要点（已按开放文档 v1.11 实现）：**
+- 认证：`Authorization: Bearer API_KEY`，代码读取 `geo_diag.api_key` 或环境变量 `GEO_DIAG_API_KEY`，不要把真实 key 提交进仓库。
+- Base URL 默认 `https://118.89.28.187/api/v1`，可用 `geo_diag.base_url` 覆盖；IP HTTPS 默认关闭证书校验，可用 `geo_diag.ssl_verify=true` 打开。
+- `POST /api/v1/runs` 支持批量 `items`，**必带 `Idempotency-Key`**，本地按诊断批次生成稳定幂等键。
+- 轮询：`GET /batches/{batchId}/status`，终态后读取 `GET /batches/{batchId}?page=` 和 `GET /runs/{runId}/report`。
+- 平台和计费：`GET /platforms`；省份：`GET /regions`（只允许 Web 平台）；余额：`GET /usage`。
+- PC 入口：侧栏「GEO诊断」→ `/godata/diagnosis`，可选品牌、平台、重复次数、截图、对话链接、省份，提交后页面轮询详情。
 
-**S5 表结构已写好**：`upgrade/20261104_geo_diagnosis.sql`
-（`la_geo_diag_batch` / `la_geo_diag_run` / `la_geo_diag_sample`）—— 但**模型和代码都还没写**。
+**S5 表结构：**
+- 老库先执行 `upgrade/20261104_geo_diagnosis.sql` 的，继续执行 `upgrade/20261107_geo_diagnosis_runtime.sql` 补齐运行时字段。
+- 新安装库已把 `la_geo_diag_batch` / `la_geo_diag_run` / `la_geo_diag_sample` 写入 `public/install/db/like.sql`。
+- 轮询命令：`php think geo:diag-poll --limit=50 --no-progress`，建议 cron 每分钟一次。
 
 ---
 
@@ -239,7 +239,8 @@ php think geo:media-sync --tenant=1 --limit=100  # 试跑
 迁移放在 `upgrade/`（**不是** `public/upgrade/`）：
 
 - `upgrade/20261103_geo_media_article_order.sql` —— S1/S2/S3 共 4 张表
-- `upgrade/20261104_geo_diagnosis.sql` —— S5 诊断 3 张表（**表已建，代码未写**）
+- `upgrade/20261104_geo_diagnosis.sql` —— S5 诊断基础 3 张表
+- `upgrade/20261107_geo_diagnosis_runtime.sql` —— S5 诊断运行时字段与新表兼容建表
 
 **部署时手动执行**，本项目没有自动迁移。
 
@@ -255,6 +256,9 @@ php think geo:media-sync --tenant=1
 # 投稿单状态同步（必须挂 cron，每 5 分钟）
 php think geo:order-sync --no-progress
 
+# GEO 品牌诊断状态同步（建议每分钟）
+php think geo:diag-poll --limit=50 --no-progress
+
 # 查看命令列表
 php think list | grep geo
 ```
@@ -266,6 +270,7 @@ php think list | grep geo
 | 入口 | 路径 | 说明 |
 |---|---|---|
 | 「GEO发稿」（侧栏工具组） | `/godata` | **自研功能页** |
+| 「GEO诊断」（侧栏工具组） | `/godata/diagnosis` | **自研品牌诊断页** |
 | 「GEO营销」（侧栏工具组） | `/app/aigc_geo` | 第三方静态演示页，不动 |
 
 新增入口改了两个文件（各 1~2 行）：

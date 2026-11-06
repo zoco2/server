@@ -8336,7 +8336,7 @@ CREATE TABLE IF NOT EXISTS `la_ai_task_job` (
   `job_type` varchar(32) NOT NULL DEFAULT '', `status` varchar(20) NOT NULL DEFAULT 'pending', `priority` int NOT NULL DEFAULT 0, `payload` text,
   `attempts` int unsigned NOT NULL DEFAULT 0, `max_attempts` int unsigned NOT NULL DEFAULT 0, `next_run_time` int unsigned NOT NULL DEFAULT 0, `lease_token` varchar(96) NOT NULL DEFAULT '', `lease_expire_time` int unsigned NOT NULL DEFAULT 0,
   `last_error` varchar(1000) NOT NULL DEFAULT '', `idempotency_key` varchar(120) NOT NULL DEFAULT '', `create_time` int unsigned NOT NULL DEFAULT 0, `update_time` int unsigned NOT NULL DEFAULT 0, `finish_time` int unsigned NOT NULL DEFAULT 0,
-  PRIMARY KEY (`id`), UNIQUE KEY `uk_idempotency` (`idempotency_key`), KEY `idx_claim` (`status`,`next_run_time`,`priority`,`lease_expire_time`), KEY `idx_consumption` (`consumption_id`,`job_type`), KEY `idx_asset` (`result_asset_id`,`job_type`)
+  PRIMARY KEY (`id`), KEY `idx_idempotency` (`idempotency_key`), KEY `idx_claim` (`status`,`next_run_time`,`priority`,`lease_expire_time`), KEY `idx_consumption` (`consumption_id`,`job_type`), KEY `idx_asset` (`result_asset_id`,`job_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI异步结果任务队列';
 
 CREATE TABLE IF NOT EXISTS `la_ai_task_result_asset` (
@@ -9646,6 +9646,129 @@ CREATE TABLE IF NOT EXISTS `la_aigc_fashion_lookbook_task` (
   KEY `idx_status` (`tenant_id`,`status`),
   KEY `idx_delete` (`tenant_id`,`delete_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='服饰套图任务';
+
+-- ----------------------------
+-- Table structure for la_geo_diag_batch / la_geo_diag_run / la_geo_diag_sample
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_geo_diag_batch` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `merchant_brand_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT '系统品牌ID',
+  `title` varchar(200) NOT NULL DEFAULT '' COMMENT '诊断名称',
+  `brand_name` varchar(120) NOT NULL DEFAULT '',
+  `brand_aliases_json` text NULL COMMENT '品牌别名，本地命中用',
+  `question_count` int unsigned NOT NULL DEFAULT 0,
+  `platforms_json` text NULL COMMENT '平台ID数组',
+  `region_code` varchar(12) NOT NULL DEFAULT '' COMMENT '省份代码，仅Web',
+  `repeat_count` tinyint unsigned NOT NULL DEFAULT 1,
+  `screenshot` tinyint unsigned NOT NULL DEFAULT 0,
+  `conversation_link` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '是否要求平台对话链接',
+  `unit_count` int unsigned NOT NULL DEFAULT 0 COMMENT '采集单元数',
+  `status` varchar(20) NOT NULL DEFAULT 'queued' COMMENT 'queued/running/completed/partial_failed/failed/cancelled',
+  `terminal` tinyint unsigned NOT NULL DEFAULT 0,
+  `completed_count` int unsigned NOT NULL DEFAULT 0,
+  `failed_count` int unsigned NOT NULL DEFAULT 0,
+  `poll_count` smallint unsigned NOT NULL DEFAULT 0,
+  `next_poll_time` int unsigned NOT NULL DEFAULT 0,
+  `mention_rate` decimal(6,4) NOT NULL DEFAULT 0,
+  `coverage_rate` decimal(6,4) NOT NULL DEFAULT 0,
+  `citation_rate` decimal(6,4) NOT NULL DEFAULT 0,
+  `summary_json` text NULL COMMENT '服务商report summary与本地汇总',
+  `upstream_batch_id` varchar(64) NOT NULL DEFAULT '' COMMENT '服务商批次ID',
+  `idempotency_key` varchar(80) NOT NULL DEFAULT '' COMMENT '服务商批次幂等键',
+  `provider_request_id` varchar(80) NOT NULL DEFAULT '',
+  `charged_cents` int unsigned NOT NULL DEFAULT 0,
+  `balance_cents` int unsigned NOT NULL DEFAULT 0,
+  `request_json` mediumtext NULL,
+  `response_json` mediumtext NULL,
+  `status_json` mediumtext NULL,
+  `error` varchar(500) NOT NULL DEFAULT '',
+  `finish_time` int unsigned NOT NULL DEFAULT 0,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_idempotency` (`idempotency_key`),
+  KEY `idx_tenant` (`tenant_id`,`id`),
+  KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
+  KEY `idx_brand` (`tenant_id`,`user_id`,`merchant_brand_id`,`id`),
+  KEY `idx_status` (`status`),
+  KEY `idx_poll` (`terminal`,`next_poll_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GEO诊断批次';
+
+CREATE TABLE IF NOT EXISTS `la_geo_diag_run` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `batch_id` int unsigned NOT NULL DEFAULT 0,
+  `batch_item_index` int unsigned NOT NULL DEFAULT 0,
+  `prompt` varchar(2000) NOT NULL DEFAULT '',
+  `platforms_json` text NULL COMMENT '本次提交的平台数组',
+  `idempotency_key` varchar(80) NOT NULL DEFAULT '' COMMENT '服务商幂等键，重试必须复用',
+  `upstream_run_id` varchar(64) NOT NULL DEFAULT '' COMMENT '服务商runId',
+  `status` varchar(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/queued/running/completed/partial_failed/failed/cancelled',
+  `terminal` tinyint unsigned NOT NULL DEFAULT 0,
+  `poll_count` smallint unsigned NOT NULL DEFAULT 0,
+  `next_poll_time` int unsigned NOT NULL DEFAULT 0,
+  `provider_request_id` varchar(80) NOT NULL DEFAULT '',
+  `charged_cents` int unsigned NOT NULL DEFAULT 0,
+  `balance_cents` int unsigned NOT NULL DEFAULT 0,
+  `request_json` mediumtext NULL,
+  `response_json` mediumtext NULL,
+  `status_json` mediumtext NULL,
+  `result_json` mediumtext NULL,
+  `report_json` mediumtext NULL,
+  `error` varchar(500) NOT NULL DEFAULT '',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_idempotency` (`idempotency_key`),
+  KEY `idx_batch` (`batch_id`),
+  KEY `idx_batch_item` (`batch_id`,`batch_item_index`),
+  KEY `idx_poll` (`terminal`,`next_poll_time`),
+  KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GEO诊断任务';
+
+CREATE TABLE IF NOT EXISTS `la_geo_diag_sample` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `batch_id` int unsigned NOT NULL DEFAULT 0,
+  `run_id` int unsigned NOT NULL DEFAULT 0,
+  `upstream_sample_id` varchar(80) NOT NULL DEFAULT '',
+  `prompt` varchar(2000) NOT NULL DEFAULT '',
+  `prompt_id` varchar(80) NOT NULL DEFAULT '',
+  `platform_id` varchar(40) NOT NULL DEFAULT '',
+  `platform_name` varchar(80) NOT NULL DEFAULT '',
+  `client` varchar(10) NOT NULL DEFAULT '' COMMENT 'web/mobile',
+  `sample_index` tinyint unsigned NOT NULL DEFAULT 0,
+  `status` varchar(20) NOT NULL DEFAULT '',
+  `error_code` varchar(60) NOT NULL DEFAULT '',
+  `error_message` varchar(500) NOT NULL DEFAULT '',
+  `answer_content` mediumtext NULL,
+  `brand_mentioned` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '服务商判断',
+  `local_mentioned` tinyint unsigned NOT NULL DEFAULT 0 COMMENT '本地品牌别名命中',
+  `mention_count` int unsigned NOT NULL DEFAULT 0,
+  `mention_position` int unsigned NOT NULL DEFAULT 0,
+  `sentiment` varchar(20) NOT NULL DEFAULT '',
+  `citations_json` text NULL COMMENT '实际引用[{url,title}]',
+  `references_json` text NULL COMMENT '额外来源集合',
+  `competitors_json` text NULL COMMENT '竞品排行',
+  `goods_json` text NULL COMMENT '商品卡',
+  `provider_result_json` mediumtext NULL,
+  `monitoring_options_json` text NULL,
+  `requested_region_code` text NULL,
+  `screenshot_url` varchar(1000) NOT NULL DEFAULT '',
+  `response_url` varchar(1000) NOT NULL DEFAULT '',
+  `quoted_price_cents` int unsigned NOT NULL DEFAULT 0,
+  `raw_json` mediumtext NULL,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_run_sample` (`run_id`,`platform_id`,`sample_index`),
+  KEY `idx_batch` (`batch_id`),
+  KEY `idx_tenant_platform` (`tenant_id`,`platform_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GEO诊断平台采样结果';
 
 -- Source: app/apps/aigc_geo/migrations/install.sql
 CREATE TABLE IF NOT EXISTS `la_aigc_geo_article` (
@@ -11018,7 +11141,7 @@ CREATE TABLE IF NOT EXISTS `la_aigc_short_drama_canvas_poster_job` (
   `update_time` int unsigned NOT NULL DEFAULT 0,
   `finish_time` int unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_idempotency` (`idempotency_key`),
+  KEY `idx_idempotency` (`idempotency_key`),
   KEY `idx_claim` (`status`,`next_run_time`,`lease_expire_time`),
   KEY `idx_canvas` (`tenant_id`,`user_id`,`canvas_id`,`node_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI短剧画布视频首帧任务';

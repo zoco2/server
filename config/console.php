@@ -21,6 +21,8 @@ return [
         'geo:media-sync' => 'app\\common\\command\\GeoMediaSync',
         // GEO 海讯社投稿单状态同步
         'geo:order-sync' => 'app\\common\\command\\GeoOrderSync',
+        // GEO 品牌诊断状态同步
+        'geo:diag-poll' => 'app\\common\\command\\GeoDiagPoll',
         'short-drama:episode-worker' => 'app\common\command\ShortDramaEpisodeWorker',
         'short-drama:planning-worker' => 'app\common\command\ShortDramaPlanningWorker',
         'short-drama:reconcile-planning' => 'app\common\command\ReconcileShortDramaPlanning',
