@@ -87,6 +87,42 @@ jobs:
         if: steps.preflight.outputs.existing_pr == ''
         run: npm install --global @openai/codex@0.166.0
 
+      - name: Allow unprivileged user namespaces
+        if: steps.preflight.outputs.existing_pr == ''
+        run: |
+          # Ubuntu 24.04（GitHub 的 ubuntu-latest）默认开启
+          # kernel.apparmor_restrict_unprivileged_userns=1，AppArmor 会拒绝
+          # bwrap 在用户命名空间内获取 net_admin，沙箱连 loopback 都建不起来，
+          # 表现为：bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+          # 结果 Codex 连 pwd 都无法执行。放开该限制后沙箱即可正常工作。
+          current="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo unsupported)"
+          echo "kernel.apparmor_restrict_unprivileged_userns = $current"
+          if [ "$current" = "1" ]; then
+            if sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; then
+              echo '已关闭 AppArmor 对非特权用户命名空间的限制。'
+            else
+              echo '::warning::无法关闭 AppArmor userns 限制，沙箱可能不可用。'
+            fi
+          fi
+
+      - name: Verify Codex sandbox works
+        if: steps.preflight.outputs.existing_pr == ''
+        run: |
+          # 提前自检，避免 Codex 跑满 45 分钟才发现一条命令都执行不了。
+          # 这里直接调用 codex 依赖的 bwrap，与失败的原始命令保持一致。
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo 'bwrap 未安装，workspace-write 沙箱不可用。' >&2
+            exit 1
+          fi
+          if out="$(bwrap --dev-bind / / --unshare-net --proc /proc true 2>&1)"; then
+            echo '沙箱自检通过。'
+          else
+            printf '沙箱自检失败：%s\n' "$out" >&2
+            echo 'userns: kernel.apparmor_restrict_unprivileged_userns='"$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo '?')" >&2
+            echo 'unprivileged_userns_clone: '"$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo '?')" >&2
+            exit 1
+          fi
+
       - name: Configure Codex provider
         if: steps.preflight.outputs.existing_pr == ''
         env:
