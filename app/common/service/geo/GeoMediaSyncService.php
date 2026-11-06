@@ -2,6 +2,7 @@
 
 namespace app\common\service\geo;
 
+use app\common\exception\GeoTokenExpiredException;
 use app\common\model\geo\GeoMedia;
 use app\common\service\ConfigService;
 use Exception;
@@ -22,6 +23,9 @@ class GeoMediaSyncService
 
     /** 单页抓取最大重试次数。 */
     public const MAX_ATTEMPTS = 3;
+
+    /** 单次调用内最多换几次令牌，避免令牌持续失效时无限重试。 */
+    public const MAX_TOKEN_RENEW = 2;
 
     /** @var array<int, string> 资源类型字典，与海讯 list{n}ON 的 n 对应。 */
     public const RESOURCE_TYPES = AigcGeoManuscriptService::RESOURCE_TYPES;
@@ -59,7 +63,12 @@ class GeoMediaSyncService
         $limited = false;
 
         do {
-            $payload = self::fetchPage($openToken, $type, $page);
+            // 令牌在循环里失效时自动换新并回写到 $openToken，后续页继续用新令牌。
+            $payload = self::callWithToken(
+                $tenantId,
+                $openToken,
+                static fn (string $token): array => AigcGeoManuscriptService::resources($token, $type, $page, self::PAGE_SIZE)
+            );
             $total = (int)$payload['total'];
             // data.list 可能是对象（海讯偶尔按 sourceid 做 key），统一成列表。
             $list = array_values(is_array($payload['list']) ? $payload['list'] : []);
@@ -137,7 +146,12 @@ class GeoMediaSyncService
         $removed = 0;
         foreach ($sourceIds as $sourceId) {
             try {
-                $state = AigcGeoManuscriptService::resourceState($openToken, $sourceId);
+                // 逐个校正可能跑很久，同样交给带令牌自愈的调用器。
+                $state = self::callWithToken(
+                    $tenantId,
+                    $openToken,
+                    static fn (string $token): array => AigcGeoManuscriptService::resourceState($token, $sourceId)
+                );
             } catch (Exception $e) {
                 Log::warning('geo media state failed: ' . $sourceId . ' ' . $e->getMessage());
                 continue;
@@ -236,19 +250,36 @@ class GeoMediaSyncService
     }
 
     /**
-     * 抓取一页，失败重试。
+     * 带令牌自愈的调用。
      *
-     * @param string $openToken 访问令牌
-     * @param int $type 资源类型
-     * @param int $page 页码
-     * @return array{total:int, list:array<int, array<string, mixed>>}
+     * 全量同步要跑很久，令牌可能在循环中途失效；缓存里的令牌又是按租户共享的，
+     * 后台保存配置或另一个进程刷新都会让手里的旧令牌当场作废。这里收到令牌失效
+     * 就换新令牌立即重试，而不是拿同一个过期令牌空转到次数耗尽。
+     *
+     * @param int $tenantId 租户 ID
+     * @param string $openToken 访问令牌，失效换新后回写
+     * @param callable $call 实际请求，签名为 fn(string $openToken): array
+     * @return array<string, mixed>
      */
-    private static function fetchPage(string $openToken, int $type, int $page): array
+    private static function callWithToken(int $tenantId, string &$openToken, callable $call): array
     {
         $lastError = null;
+        $renewed = 0;
         for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
             try {
-                return AigcGeoManuscriptService::resources($openToken, $type, $page, self::PAGE_SIZE);
+                return $call($openToken);
+            } catch (GeoTokenExpiredException $e) {
+                $lastError = $e;
+                if ($renewed >= self::MAX_TOKEN_RENEW) {
+                    break;
+                }
+                $renewed++;
+                try {
+                    $openToken = AigcGeoManuscriptService::renewAccessToken($tenantId);
+                } catch (Exception $renewError) {
+                    // 换令牌都失败了（账号被撤销、网络不通），重试没有意义。
+                    throw new Exception('访问令牌已失效且无法重新获取：' . $renewError->getMessage());
+                }
             } catch (Exception $e) {
                 $lastError = $e;
                 usleep(300000 * $attempt);
