@@ -1,5 +1,10 @@
 name: Codex issue fix
-# Requires the repository secret OPENAI_API_KEY and Actions write permissions.
+# 需要仓库配置：
+#   Secrets:  CODEX_API_KEY        中转/官方密钥（未配置时回退到 OPENAI_API_KEY）
+#             CODEX_BASE_URL       中转地址，形如 https://xxx/api/v1；留空则走 OpenAI 官方端点
+#             AUTOMATION_TOKEN     PAT（Issues/Pull requests/Contents 写权限）。用于让评论、PR、推送
+#                                  能触发仓库里其它 workflow（内置 GITHUB_TOKEN 产生的事件会被屏蔽）
+#   Variables: CODEX_MODEL         中转/官方模型名，留空则用 CLI 默认
 
 on:
   issues:
@@ -10,8 +15,12 @@ permissions:
   issues: write
   pull-requests: write
 
+# 全局串行：同一时刻只允许一个修复任务运行。
+# 不带 issue.number，否则不同 issue 会并行，出现同时改默认分支 / 标签 / 分支名的竞争。
+# 注意：GitHub 的排队只保留一个 pending，并发打标签时中间的 pending 会被取消，
+# 这些 issue 仍保留“待修复”标签，重新触发一次即可。
 concurrency:
-  group: codex-issue-${{ github.event.issue.number }}
+  group: codex-issue-fix
   cancel-in-progress: false
 
 jobs:
@@ -26,6 +35,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # 配置了 PAT 就用 PAT，这样 gh 产生的评论 / PR / 推送才会触发下游 workflow。
+      GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || github.token }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v4
@@ -36,13 +48,22 @@ jobs:
       - name: Check for an existing issue PR
         id: preflight
         env:
-          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
           prefix="codex/issue-${ISSUE_NUMBER}-"
           pr_url="$(gh pr list --repo "$REPOSITORY" --state open --limit 1000 --json url,headRefName --jq "map(select(.headRefName | startswith(\"${prefix}\"))) | .[0].url // \"\"")"
           echo "existing_pr=${pr_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Warn when no automation token is configured
+        if: steps.preflight.outputs.existing_pr == ''
+        env:
+          # secrets 上下文不能用于 if 条件，只能在这里判断。
+          AUTOMATION_TOKEN: ${{ secrets.AUTOMATION_TOKEN }}
+        run: |
+          if [ -z "$AUTOMATION_TOKEN" ]; then
+            echo '::warning::未配置 AUTOMATION_TOKEN，将使用内置 GITHUB_TOKEN。GitHub 会屏蔽它产生的事件，本次运行创建的评论、PR 与分支推送都不会触发其它 workflow（如企业微信通知）。'
+          fi
 
       - name: Create issue branch
         if: steps.preflight.outputs.existing_pr == ''
@@ -65,6 +86,60 @@ jobs:
       - name: Install Codex CLI
         if: steps.preflight.outputs.existing_pr == ''
         run: npm install --global @openai/codex@0.166.0
+
+      - name: Configure Codex provider
+        if: steps.preflight.outputs.existing_pr == ''
+        env:
+          CODEX_HOME_DIR: ${{ runner.temp }}/codex-home
+          RELAY_BASE_URL: ${{ secrets.CODEX_BASE_URL || vars.CODEX_BASE_URL }}
+          RELAY_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
+          RELAY_MODEL: ${{ vars.CODEX_MODEL }}
+        run: |
+          set -euo pipefail
+          home="$CODEX_HOME_DIR"
+          mkdir -p "$home"
+          umask 077
+          echo "CODEX_HOME=$home" >> "$GITHUB_ENV"
+
+          if [ -z "$RELAY_BASE_URL" ]; then
+            echo '未配置 CODEX_BASE_URL，使用 OpenAI 官方端点。'
+            if [ -n "$RELAY_MODEL" ]; then
+              printf 'model = "%s"\n' "$RELAY_MODEL" > "$home/config.toml"
+            fi
+            exit 0
+          fi
+
+          if [ -z "$RELAY_API_KEY" ]; then
+            echo '已配置 CODEX_BASE_URL，但缺少 CODEX_API_KEY（或 OPENAI_API_KEY）。' >&2
+            exit 1
+          fi
+
+          case "$RELAY_API_KEY" in
+            *'"'*|*'\'*|*$'\n'*)
+              echo 'CODEX_API_KEY 含有 TOML 基本字符串不支持的字符（" \ 或换行）。' >&2
+              exit 1
+              ;;
+          esac
+
+          # 本版本 CLI 的 wire_api 只接受 responses；中转若只支持 /chat/completions 需换用支持 Responses API 的中转。
+          base_url="${RELAY_BASE_URL%/}"
+
+          {
+            printf 'model_provider = "relay"\n'
+            if [ -n "$RELAY_MODEL" ]; then
+              printf 'model = "%s"\n' "$RELAY_MODEL"
+            fi
+            printf '\n[model_providers.relay]\n'
+            printf 'name = "relay"\n'
+            printf 'base_url = "%s"\n' "$base_url"
+            printf 'wire_api = "responses"\n'
+            printf 'requires_openai_auth = false\n'
+            # 只写 env_key：密钥从环境变量读取，不落盘到配置文件。
+            # 注意不能同时写 experimental_bearer_token，两者并存会因缺少环境变量直接报错。
+            printf 'env_key = "CODEX_RELAY_API_KEY"\n'
+          } > "$home/config.toml"
+
+          echo "Codex 已配置为中转：$base_url"
 
       - name: Prepare Codex prompt
         if: steps.preflight.outputs.existing_pr == ''
@@ -90,12 +165,9 @@ jobs:
         if: steps.preflight.outputs.existing_pr == ''
         continue-on-error: true
         env:
+          CODEX_RELAY_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo 'Repository secret OPENAI_API_KEY is required.' >&2
-            exit 1
-          fi
           codex exec \
             --sandbox workspace-write \
             --approve-for-me \
@@ -157,7 +229,6 @@ jobs:
         if: steps.validate.outcome == 'success' && steps.validate.outputs.has_changes == 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -186,7 +257,6 @@ jobs:
         if: steps.pull_request.outcome == 'success'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -213,13 +283,15 @@ jobs:
           CHECK_RESULT_PATH: ${{ runner.temp }}/codex-checks.md
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
+          # 用 PAT 评论，评论事件才能再触发其它 workflow（企业微信通知等）。
+          github-token: ${{ secrets.AUTOMATION_TOKEN || github.token }}
           script: |
             const fs = require('fs');
             const marker = '<!-- codex-issue-fix-report -->';
             const read = (path) => {
               try { return fs.readFileSync(path, 'utf8').trim(); } catch { return ''; }
             };
-            const safe = (value) => value.replace(/@/g, '@\u200b').slice(0, 7000);
+            const safe = (value) => value.replace(/@/g, '@​').slice(0, 7000);
             const codexResult = safe(read(process.env.CODEX_RESULT_PATH));
             const checks = safe(read(process.env.CHECK_RESULT_PATH));
             let outcome;
@@ -254,3 +326,7 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+      - name: Remove relay credentials
+        if: always()
+        run: rm -rf "${{ runner.temp }}/codex-home"
