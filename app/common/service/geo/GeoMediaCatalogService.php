@@ -77,7 +77,7 @@ class GeoMediaCatalogService
      */
     public static function lists(array $params): array
     {
-        $pageSize = min(48, max(1, (int)($params['page_size'] ?? 20)));
+        $pageSize = min(100, max(1, (int)($params['page_size'] ?? 20)));
         $pageNo = max(1, (int)($params['page_no'] ?? 1));
 
         $query = GeoMedia::where(self::ON_SALE);
