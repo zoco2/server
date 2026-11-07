@@ -14381,3 +14381,98 @@ CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
   UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_id`,`file_name`,`delete_time`),
   KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_id`,`status`,`sort`,`delete_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸资源';
+
+-- ----------------------------
+-- Table structure for la_smart_edit_task
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_smart_edit_task` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `task_no` varchar(40) NOT NULL DEFAULT '' COMMENT '对外任务号',
+  `edit_type` varchar(30) NOT NULL DEFAULT 'merge' COMMENT '剪辑类型：merge/subtitle/sticker/bgm',
+  `title` varchar(200) NOT NULL DEFAULT '',
+  `batch_no` varchar(40) NOT NULL DEFAULT '' COMMENT '所属组号，空串=单任务',
+  `combo_index` int unsigned NOT NULL DEFAULT 0 COMMENT '组内组合序号，从 1 起',
+  `params_json` text NULL COMMENT '原始请求参数快照',
+  `timeline_json` text NULL COMMENT '提交给 IMS 的完整 Timeline 快照',
+  `provider` varchar(30) NOT NULL DEFAULT 'aliyun_ims',
+  `region` varchar(40) NOT NULL DEFAULT '',
+  `provider_job_id` varchar(120) NOT NULL DEFAULT '' COMMENT 'IMS JobId',
+  `output_target` varchar(500) NOT NULL DEFAULT '' COMMENT '输出 OSS object key',
+  `output_uri` varchar(500) NOT NULL DEFAULT '',
+  `cover_uri` varchar(500) NOT NULL DEFAULT '',
+  `storage_scope` varchar(20) NOT NULL DEFAULT '',
+  `storage_engine` varchar(30) NOT NULL DEFAULT '',
+  `storage_domain` varchar(255) NOT NULL DEFAULT '',
+  `duration` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT '成片时长秒',
+  `input_duration` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT '输入素材总时长秒（用量统计）',
+  `status` varchar(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/submitting/processing/success/failed/canceled',
+  `error_code` varchar(80) NOT NULL DEFAULT '',
+  `error_message` varchar(500) NOT NULL DEFAULT '',
+  `poll_attempts` int unsigned NOT NULL DEFAULT 0 COMMENT '轮询次数，用于退避',
+  `next_poll_time` int unsigned NOT NULL DEFAULT 0,
+  `tenant_cost_points` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT '预留：租户成本扣点',
+  `user_charge_points` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT '预留：用户消费扣点',
+  `app_task_id` int unsigned NOT NULL DEFAULT 0 COMMENT '预留：统一应用任务ID',
+  `consumption_id` int unsigned NOT NULL DEFAULT 0 COMMENT '预留：统一消耗日志ID',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  `finish_time` int unsigned NOT NULL DEFAULT 0,
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_task_no` (`task_no`),
+  KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
+  KEY `idx_tenant_status` (`tenant_id`,`status`),
+  KEY `idx_job` (`provider_job_id`),
+  KEY `idx_poll` (`status`,`next_poll_time`),
+  KEY `idx_batch` (`batch_no`,`combo_index`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑任务';
+
+-- ----------------------------
+-- Table structure for la_smart_edit_task_item
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_smart_edit_task_item` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `task_id` int unsigned NOT NULL DEFAULT 0,
+  `item_type` varchar(20) NOT NULL DEFAULT 'video' COMMENT 'video/subtitle/sticker/audio',
+  `sort` int NOT NULL DEFAULT 0,
+  `source_uri` varchar(500) NOT NULL DEFAULT '',
+  `storage_scope` varchar(20) NOT NULL DEFAULT '',
+  `storage_engine` varchar(30) NOT NULL DEFAULT '',
+  `storage_domain` varchar(255) NOT NULL DEFAULT '',
+  `in_sec` decimal(10,4) NOT NULL DEFAULT 0.0000,
+  `out_sec` decimal(10,4) NOT NULL DEFAULT 0.0000,
+  `duration` decimal(10,4) NOT NULL DEFAULT 0.0000,
+  `raw_meta` text NULL,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_task` (`task_id`,`sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑任务素材明细';
+
+-- ----------------------------
+-- Table structure for la_smart_edit_group
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_smart_edit_group` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `batch_no` varchar(40) NOT NULL DEFAULT '' COMMENT '对外组号',
+  `title` varchar(200) NOT NULL DEFAULT '',
+  `shots_json` text NULL COMMENT '镜头定义快照',
+  `config_json` text NULL COMMENT '整组共用配置快照',
+  `combo_count` int unsigned NOT NULL DEFAULT 0 COMMENT '组合总数',
+  `status` varchar(20) NOT NULL DEFAULT 'expanding' COMMENT 'expanding/submitted/failed',
+  `error_code` varchar(80) NOT NULL DEFAULT '',
+  `error_message` varchar(500) NOT NULL DEFAULT '',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  `delete_time` int unsigned NULL DEFAULT NULL COMMENT '删除时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_batch_no` (`batch_no`),
+  KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
+  KEY `idx_tenant_status` (`tenant_id`,`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑镜头组';

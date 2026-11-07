@@ -75,14 +75,65 @@ class SmartEditService
     {
         $validated = self::validate($tenantId, $params);
         [$editType, $title, $clips, $coverUri, $aspectRatio, $titleConfig] = $validated;
-        $stickerInputs = $validated[6];
-        $audioInputs = $validated[7];
+
+        $shared = [
+            'edit_type' => $editType,
+            'title' => $title,
+            'cover_uri' => $coverUri,
+            'aspect_ratio' => $aspectRatio,
+            'title_overlay' => $titleConfig,
+            'stickers' => $validated[6],
+            'audios' => $validated[7],
+        ];
+        $task = self::createTask($tenantId, $userId, $shared, $clips);
+
+        // 提交动作交给 MNS：接口不再等供应商返回。
+        // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
+        try {
+            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
+        } catch (\Throwable $e) {
+            Log::write('[smart_edit] 投递失败 task=' . (string)$task['task_no'] . ' ' . $e->getMessage());
+            $task->save(self::failPayload($e));
+        }
+
+        return self::formatTask($task->refresh()->toArray());
+    }
+
+    /**
+     * 只建任务：解析素材地址 → 构建 Timeline → 落任务行与明细。
+     *
+     * 不投递 MNS，调用方决定何时提交。单任务与镜头组共用这一条建任务路径。
+     *
+     * @param int    $tenantId   租户 ID
+     * @param int    $userId     用户 ID
+     * @param array  $shared     共用配置（edit_type/title/cover_uri/aspect_ratio/title_overlay/stickers/audios）
+     * @param array  $clips      片段列表（uri/in/out/mute）
+     * @param string $batchNo    所属组号，空串表示单任务
+     * @param int    $comboIndex 组内组合序号，从 1 起
+     * @return SmartEditTask
+     */
+    public static function createTask(
+        int $tenantId,
+        int $userId,
+        array $shared,
+        array $clips,
+        string $batchNo = '',
+        int $comboIndex = 0
+    ): SmartEditTask {
+        $editType = (string)($shared['edit_type'] ?? SmartEditTask::TYPE_MERGE);
+        $title = (string)($shared['title'] ?? '多视频合并');
+        $coverUri = (string)($shared['cover_uri'] ?? '');
+        $aspectRatio = (string)($shared['aspect_ratio'] ?? self::DEFAULT_ASPECT_RATIO);
+        $titleConfig = (array)($shared['title_overlay'] ?? []);
+        $stickerInputs = (array)($shared['stickers'] ?? []);
+        $audioInputs = (array)($shared['audios'] ?? []);
+
         $config = SmartEditImsConfigService::require($tenantId);
         $taskNo = self::newTaskNo();
-        [$outputWidth, $outputHeight] = self::resolveOutputSize($aspectRatio);
+        [, $outputHeight] = self::resolveOutputSize($aspectRatio);
 
         $items = [];
-        foreach ($clips as $index => $clip) {
+        foreach ($clips as $clip) {
             $items[] = [
                 'media_url' => SmartEditMaterialService::mediaUrl($config, $tenantId, (string)$clip['uri']),
                 'in' => (float)($clip['in'] ?? 0),
@@ -99,9 +150,8 @@ class SmartEditService
             : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
 
         // 贴纸与背景音乐同样要过归属校验，避免任意 URL 被塞进成片。
-        // 校验完把 uri 换成 IMS 能直接拉取的 media_url，其余字段原样保留。
         // 贴纸可能来自平台预置（不在 la_tenant_file 里），先查贴纸表；
-        // 查不到再回退到素材库校验，兼容现有「从素材库选图片当贴纸」的用法。
+        // 查不到再回退到素材库校验，兼容「从素材库选图片当贴纸」的用法。
         $stickers = [];
         foreach ($stickerInputs as $input) {
             $uri = (string)$input['uri'];
@@ -131,6 +181,8 @@ class SmartEditService
             'task_no' => $taskNo,
             'edit_type' => $editType,
             'title' => $title,
+            'batch_no' => $batchNo,
+            'combo_index' => $comboIndex,
             'params_json' => [
                 'edit_type' => $editType,
                 'title' => $title,
@@ -141,6 +193,8 @@ class SmartEditService
                 'title' => $titleConfig,
                 'stickers' => $stickerInputs,
                 'audios' => $audioInputs,
+                'batch_no' => $batchNo,
+                'combo_index' => $comboIndex,
             ],
             'timeline_json' => $timeline,
             'provider' => 'aliyun_ims',
@@ -153,7 +207,7 @@ class SmartEditService
             'storage_engine' => 'aliyun',
             'storage_domain' => $config['domain'],
             // out=0 表示「用完整时长」，本地无法得知真实时长，这里只累加可确定的区间；
-            // 成片成功后 markSuccess() 会用 IMS 返回的成片时长回填（拼接不会比素材总长更长）。
+            // 成片成功后 markSuccess() 会用 IMS 返回的成片时长回填。
             'input_duration' => array_sum(array_map(
                 static fn(array $item) => max(0, (float)$item['out'] - (float)$item['in']),
                 $items
@@ -246,16 +300,7 @@ class SmartEditService
             SmartEditTaskItem::insertAll($rows);
         }
 
-        // 提交动作交给 MNS：接口不再等供应商返回。
-        // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
-        try {
-            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
-        } catch (\Throwable $e) {
-            Log::write('[smart_edit] 投递失败 task=' . $taskNo . ' ' . $e->getMessage());
-            $task->save(self::failPayload($e));
-        }
-
-        return self::formatTask($task->refresh()->toArray());
+        return $task;
     }
 
     /**
@@ -522,6 +567,78 @@ class SmartEditService
         $stickers = self::normalizeStickers($params['stickers'] ?? []);
         $audios = self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []);
         return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleConfig, $stickers, $audios];
+    }
+
+    /**
+     * 镜头组共用配置归一化：只处理整组共用的部分，片段由调用方按组合传入。
+     *
+     * 与 validate() 共用同一套子方法，保证组和单任务对同名字段的理解一致。
+     *
+     * @param array $params 前端参数
+     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, stickers: array, audios: array}
+     */
+    public static function normalizeSharedForGroup(array $params): array
+    {
+        $editType = trim((string)($params['edit_type'] ?? SmartEditTask::TYPE_MERGE));
+        if ($editType !== SmartEditTask::TYPE_MERGE) {
+            throw new Exception('暂不支持的剪辑类型：' . $editType);
+        }
+        $title = trim((string)($params['title'] ?? ''));
+        if ($title === '') {
+            $title = '镜头组';
+        }
+        $coverUri = trim((string)($params['cover_uri'] ?? ''));
+        $aspectRatio = trim((string)($params['aspect_ratio'] ?? ''));
+        if ($aspectRatio === '') {
+            $aspectRatio = self::DEFAULT_ASPECT_RATIO;
+        } elseif (!isset(self::OUTPUT_SIZES[$aspectRatio])) {
+            throw new Exception('不支持的视频比例：' . $aspectRatio);
+        }
+
+        return [
+            'edit_type' => $editType,
+            'title' => mb_substr($title, 0, 100),
+            'cover_uri' => $coverUri,
+            'aspect_ratio' => $aspectRatio,
+            'title_overlay' => self::normalizeTitle($params),
+            'stickers' => self::normalizeStickers($params['stickers'] ?? []),
+            'audios' => self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []),
+        ];
+    }
+
+    /**
+     * 建组前的素材预检：封面 / 贴纸 / 背景音乐必须归属当前租户且能被 IMS 拉到。
+     *
+     * 这些素材整组共用，先在这里校验一次，避免上千条任务逐条失败。
+     *
+     * @param int   $tenantId 租户 ID
+     * @param array $shared   normalizeSharedForGroup() 的结果
+     */
+    public static function assertSharedResolvable(int $tenantId, array $shared): void
+    {
+        $config = SmartEditImsConfigService::require($tenantId);
+
+        $coverUri = (string)($shared['cover_uri'] ?? '');
+        if ($coverUri !== '') {
+            SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
+        }
+
+        foreach ((array)($shared['stickers'] ?? []) as $sticker) {
+            $uri = (string)($sticker['uri'] ?? '');
+            if ($uri === '') {
+                continue;
+            }
+            if (StickerService::resolveForSmartEdit($tenantId, $uri) === null) {
+                SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
+            }
+        }
+
+        foreach ((array)($shared['audios'] ?? []) as $audio) {
+            $uri = (string)($audio['uri'] ?? '');
+            if ($uri !== '') {
+                SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
+            }
+        }
     }
 
     /**
