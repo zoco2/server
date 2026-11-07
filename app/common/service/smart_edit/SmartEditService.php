@@ -3,6 +3,7 @@
 namespace app\common\service\smart_edit;
 
 use app\common\enum\FileEnum;
+use app\common\job\SmartEditSubmitJob;
 use app\common\model\file\TenantFile;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\model\smart_edit\SmartEditTaskItem;
@@ -11,7 +12,10 @@ use Exception;
 use think\facade\Log;
 
 /**
- * 智能剪辑业务：建任务 → 构建 Timeline → 提交 IMS → 轮询 → 落地成片。
+ * 智能剪辑业务：建任务 → 构建 Timeline → 投递 MNS 提交 IMS → 轮询 → 落地成片。
+ *
+ * 提交走 MNS job，接口只做参数校验、落库和投递，不在请求里等供应商。
+ * 轮询仍由 smart-edit:worker 与详情 / 列表读路径同步完成。
  *
  * 第一轮不收费：tenant_cost_points / user_charge_points 恒为 0，也不建 consumption 记录。
  * 表里的计费字段与 app_task_id / consumption_id 已预留，后续开收时只改本类内部。
@@ -242,17 +246,12 @@ class SmartEditService
             SmartEditTaskItem::insertAll($rows);
         }
 
+        // 提交动作交给 MNS：接口不再等供应商返回。
+        // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
         try {
-            $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
-            $jobId = $client->submit($timeline, $output['url'], $outputWidth, $outputHeight);
-            $task->save([
-                'provider_job_id' => $jobId,
-                'status' => SmartEditTask::STATUS_PROCESSING,
-                'next_poll_time' => time() + 5,
-                'update_time' => time(),
-            ]);
+            SmartEditSubmitJob::dispatch(['task_id' => (int)$task['id']], 0, '', $tenantId);
         } catch (\Throwable $e) {
-            Log::write('[smart_edit] 提交失败 task=' . $taskNo . ' ' . $e->getMessage());
+            Log::write('[smart_edit] 投递失败 task=' . $taskNo . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
         }
 
@@ -330,15 +329,11 @@ class SmartEditService
      */
     public static function retry(SmartEditTask $task): void
     {
-        $params = (array)$task['params_json'];
         $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
         $output = SmartEditMaterialService::outputTarget($config, (string)$task['task_no']);
-        $timeline = (array)$task['timeline_json'];
-        if ($timeline === []) {
+        if ((array)$task['timeline_json'] === []) {
             throw new Exception('任务参数缺失，无法重试');
         }
-        // 沿用提交时的比例；老任务没有该字段，resolveOutputSize 会回退默认值。
-        [$outputWidth, $outputHeight] = self::resolveOutputSize((string)($params['aspect_ratio'] ?? ''));
         $task->save([
             'status' => SmartEditTask::STATUS_SUBMITTING,
             'provider_job_id' => '',
@@ -350,18 +345,12 @@ class SmartEditService
             'finish_time' => 0,
             'update_time' => time(),
         ]);
+        // 与首次提交同一条链路：投递给 MNS，不在请求里等 IMS。
+        $tenantId = (int)$task['tenant_id'];
         try {
-            $client = new ImsClient($config['access_key'], $config['secret_key'], $config['region']);
-            $jobId = $client->submit($timeline, $output['url'], $outputWidth, $outputHeight);
-            $task->save([
-                'provider_job_id' => $jobId,
-                'region' => $config['region'],
-                'status' => SmartEditTask::STATUS_PROCESSING,
-                'next_poll_time' => time() + 5,
-                'update_time' => time(),
-            ]);
+            SmartEditSubmitJob::dispatch(['task_id' => (int)$task['id']], 0, '', $tenantId);
         } catch (\Throwable $e) {
-            Log::write('[smart_edit] 重试提交失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
+            Log::write('[smart_edit] 重试投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
         }
     }
@@ -877,6 +866,9 @@ class SmartEditService
     private static function refreshIfStale(SmartEditTask $task): void
     {
         if (!in_array((string)$task['status'], SmartEditTask::RUNNING_STATUSES, true)) {
+            return;
+        }
+        if ((string)$task['provider_job_id'] === '') {
             return;
         }
         if ((int)$task['next_poll_time'] > time()) {
