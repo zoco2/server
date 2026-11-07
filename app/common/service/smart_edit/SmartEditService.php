@@ -249,7 +249,7 @@ class SmartEditService
         // 提交动作交给 MNS：接口不再等供应商返回。
         // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
         try {
-            SmartEditSubmitJob::dispatch(['task_id' => (int)$task['id']], 0, '', $tenantId);
+            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
         } catch (\Throwable $e) {
             Log::write('[smart_edit] 投递失败 task=' . $taskNo . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
@@ -348,7 +348,7 @@ class SmartEditService
         // 与首次提交同一条链路：投递给 MNS，不在请求里等 IMS。
         $tenantId = (int)$task['tenant_id'];
         try {
-            SmartEditSubmitJob::dispatch(['task_id' => (int)$task['id']], 0, '', $tenantId);
+            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
         } catch (\Throwable $e) {
             Log::write('[smart_edit] 重试投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
