@@ -3,7 +3,9 @@
 namespace app\common\command;
 
 use app\common\model\FailedJob;
+use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\mq\LightMqService;
+use app\common\service\smart_edit\SmartEditService;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Argument;
@@ -33,6 +35,12 @@ class Workerman extends Command
     private const CONSUMER_INTERVAL = 0.2;
     /** 空闲心跳日志间隔秒数 */
     private const IDLE_HEARTBEAT_SECONDS = 60;
+
+    /** 智能剪辑轮询间隔秒数 */
+    private const SMART_EDIT_POLL_INTERVAL = 3;
+
+    /** 单轮最多轮询的剪辑任务数 */
+    private const SMART_EDIT_POLL_BATCH = 50;
 
     protected function configure(): void
     {
@@ -76,6 +84,7 @@ class Workerman extends Command
         $worker->onWorkerStart = function (Worker $worker) use ($queue) {
             Log::channel('mns')->info(sprintf('[mns] consumer started queue=%s', $queue));
             self::consume($queue, $worker);
+            self::pollSmartEdit($worker);
         };
 
         Worker::runAll();
@@ -142,6 +151,54 @@ class Workerman extends Command
                 }
                 // 避免异常时空转打满 CPU
                 usleep(100000);
+            }
+        });
+    }
+
+    /**
+     * 智能剪辑轮询：把到期的剪辑任务查一次 IMS，把成片落地。
+     *
+     * 独立定时器，与 MNS 消费互不阻塞；替代原先单独启动的 smart-edit:worker。
+     */
+    private static function pollSmartEdit(Worker $worker): void
+    {
+        Timer::add(self::SMART_EDIT_POLL_INTERVAL, function () use ($worker) {
+            if ($worker->stopping) {
+                return;
+            }
+            try {
+                self::reconnectDatabase();
+                $tasks = SmartEditTask::whereIn('status', SmartEditTask::RUNNING_STATUSES)
+                    ->where('provider_job_id', '<>', '')
+                    ->where('next_poll_time', '<=', time())
+                    ->order('next_poll_time', 'asc')
+                    ->limit(self::SMART_EDIT_POLL_BATCH)
+                    ->column('id');
+                if ($tasks === []) {
+                    return;
+                }
+                foreach ($tasks as $taskId) {
+                    try {
+                        SmartEditService::refresh((int)$taskId);
+                    } catch (\Throwable $e) {
+                        Log::channel('mns')->error(sprintf(
+                            '[smart_edit] poll failed id=%d %s',
+                            (int)$taskId,
+                            $e->getMessage()
+                        ));
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::channel('mns')->error(sprintf(
+                    '[smart_edit] poll error: %s @ %s:%d',
+                    $e->getMessage(),
+                    $e->getFile(),
+                    $e->getLine()
+                ));
+                if (str_contains($e->getMessage(), 'MySQL server has gone away')
+                    || str_contains($e->getMessage(), 'Lost connection')) {
+                    self::closeDatabase();
+                }
             }
         });
     }
