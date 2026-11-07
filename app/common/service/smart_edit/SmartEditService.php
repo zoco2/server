@@ -151,12 +151,11 @@ class SmartEditService
             : SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
 
         // 贴纸与背景音乐同样要过归属校验，避免任意 URL 被塞进成片。
-        // 贴纸可能来自平台预置（不在 la_tenant_file 里），先查贴纸表；
-        // 查不到再回退到素材库校验，兼容「从素材库选图片当贴纸」的用法。
+        // 贴纸先查贴纸表；查不到再回退到素材库校验，兼容「从素材库选图片当贴纸」的用法。
         $stickers = [];
         foreach ($stickerInputs as $input) {
             $uri = (string)$input['uri'];
-            $sticker = StickerService::resolveForSmartEdit($tenantId, $uri);
+            $sticker = StickerService::resolveForSmartEdit($uri);
             if ($sticker !== null) {
                 $mediaUrl = $sticker['url'] !== ''
                     ? $sticker['url']
@@ -630,7 +629,7 @@ class SmartEditService
             if ($uri === '') {
                 continue;
             }
-            if (StickerService::resolveForSmartEdit($tenantId, $uri) === null) {
+            if (StickerService::resolveForSmartEdit($uri) === null) {
                 SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
             }
         }
