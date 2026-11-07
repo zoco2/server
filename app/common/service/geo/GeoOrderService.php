@@ -306,7 +306,7 @@ class GeoOrderService
     public static function lists(array $params, int $userId = 0): array
     {
         $query = GeoOrder::field('id,user_id,order_no,article_id,media_name,resource_type,price_type,'
-            . 'cost_price,sale_price,title,status,remote_flag,publish_url,fail_reason,can_retry,'
+            . 'cost_price,sale_price,title,status,remote_flag,publish_url,fail_reason,retryable,'
             . 'create_time,update_time,finish_time,power_log_id');
         if ($userId > 0) {
             $query->where('user_id', $userId);
@@ -336,7 +336,11 @@ class GeoOrderService
         $rows = $query->order('id', 'desc')->limit(($pageNo - 1) * $pageSize, $pageSize)->select()->toArray();
         foreach ($rows as &$row) {
             $row['status_text'] = GeoOrder::STATUS_TEXT[$row['status']] ?? (string)$row['status'];
+            $row['can_retry'] = in_array((int)$row['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
+                && ((int)$row['status'] === GeoOrder::STATUS_LOCAL || (bool)$row['retryable']);
             $row['can_confirm'] = (int)$row['remote_flag'] === GeoOrder::STATUS_PUBLISHED;
+            // 内部列不下发给前端，前端只认 can_retry。
+            unset($row['retryable']);
         }
         unset($row);
         return ['count' => $count, 'lists' => $rows];
