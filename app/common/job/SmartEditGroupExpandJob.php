@@ -51,6 +51,13 @@ class SmartEditGroupExpandJob extends Job
         }
 
         $attempt = (int)($this->data['attempt'] ?? 0);
+        Log::channel('mns')->info(sprintf(
+            '[smart_edit] group expand start batch=%s tenant=%d combos=%d attempt=%d',
+            $batchNo,
+            $tenantId,
+            (int)$group['combo_count'],
+            $attempt
+        ));
 
         try {
             $taskIds = $this->expand($group, $tenantId);
@@ -66,14 +73,25 @@ class SmartEditGroupExpandJob extends Job
         }
 
         // 按 MNS 单消息上限分片投递提交 job
-        foreach (array_chunk($taskIds, SmartEditSubmitJob::MAX_TASKS_PER_JOB) as $chunk) {
+        foreach (array_chunk($taskIds, SmartEditSubmitJob::MAX_TASKS_PER_JOB) as $chunkIndex => $chunk) {
             try {
                 SmartEditSubmitJob::dispatch(['task_ids' => array_values($chunk)], 0, '', $tenantId);
+                Log::channel('mns')->info(sprintf(
+                    '[smart_edit] group submit dispatched batch=%s chunk=%d size=%d ids=%s',
+                    $batchNo,
+                    $chunkIndex + 1,
+                    count($chunk),
+                    implode(',', $chunk)
+                ));
             } catch (\Throwable $e) {
                 // 提交消息投递失败：任务停在 submitting，用户可在列表里看到并重试
-                Log::channel('mns')->error(
-                    '[smart_edit] group submit dispatch failed batch=' . $batchNo . ' ' . $e->getMessage()
-                );
+                Log::channel('mns')->error(sprintf(
+                    '[smart_edit] group submit dispatch failed batch=%s chunk=%d ids=%s %s',
+                    $batchNo,
+                    $chunkIndex + 1,
+                    implode(',', $chunk),
+                    $e->getMessage()
+                ));
             }
         }
 
@@ -110,16 +128,33 @@ class SmartEditGroupExpandJob extends Job
         $combos = SmartEditGroupService::expandShots($shots);
         $taskIds = [];
         foreach ($combos as $index => $clips) {
-            $task = SmartEditService::createTask(
-                $tenantId,
-                $userId,
-                $shared,
-                $clips,
-                $batchNo,
-                $index + 1
-            );
+            try {
+                $task = SmartEditService::createTask(
+                    $tenantId,
+                    $userId,
+                    $shared,
+                    $clips,
+                    $batchNo,
+                    $index + 1
+                );
+            } catch (\Throwable $e) {
+                // 带上组合序号和素材，排查时直接知道是哪条视频出的问题
+                Log::channel('mns')->error(sprintf(
+                    '[smart_edit] group create task failed batch=%s combo=%d uris=%s %s',
+                    $batchNo,
+                    $index + 1,
+                    implode(',', array_column($clips, 'uri')),
+                    $e->getMessage()
+                ));
+                throw $e;
+            }
             $taskIds[] = (int)$task['id'];
         }
+        Log::channel('mns')->info(sprintf(
+            '[smart_edit] group tasks created batch=%s count=%d',
+            $batchNo,
+            count($taskIds)
+        ));
         return $taskIds;
     }
 
