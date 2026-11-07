@@ -41,6 +41,12 @@ class SmartEditSubmitJob extends Job
 
         $attempt = (int)($this->data['attempt'] ?? 0);
         $tenantId = (int)($this->tenantId ?? 0);
+        Log::channel('mns')->info(sprintf(
+            '[smart_edit] submit job start tenant=%d attempt=%d ids=%s',
+            $tenantId,
+            $attempt,
+            implode(',', $taskIds)
+        ));
 
         $failedTaskIds = [];
         foreach ($taskIds as $taskId) {
@@ -126,6 +132,12 @@ class SmartEditSubmitJob extends Job
             'next_poll_time' => time() + 5,
             'update_time' => time(),
         ]);
+        Log::channel('mns')->info(sprintf(
+            '[smart_edit] submitted task=%s id=%d ims_job=%s',
+            (string)$task['task_no'],
+            (int)$task['id'],
+            $jobId
+        ));
         return true;
     }
 

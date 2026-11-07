@@ -91,8 +91,9 @@ class SmartEditService
         // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
         try {
             SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
+            Log::channel('mns')->info('[smart_edit] submit dispatched task=' . (string)$task['task_no'] . ' id=' . (int)$task['id']);
         } catch (\Throwable $e) {
-            Log::write('[smart_edit] 投递失败 task=' . (string)$task['task_no'] . ' ' . $e->getMessage());
+            Log::channel('mns')->error('[smart_edit] 投递失败 task=' . (string)$task['task_no'] . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
         }
 
@@ -394,8 +395,9 @@ class SmartEditService
         $tenantId = (int)$task['tenant_id'];
         try {
             SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
+            Log::channel('mns')->info('[smart_edit] retry dispatched task=' . $task['task_no'] . ' id=' . (int)$task['id']);
         } catch (\Throwable $e) {
-            Log::write('[smart_edit] 重试投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
+            Log::channel('mns')->error('[smart_edit] 重试投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
             $task->save(self::failPayload($e));
         }
     }

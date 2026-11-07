@@ -6,6 +6,7 @@ use app\common\job\SmartEditGroupExpandJob;
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\model\smart_edit\SmartEditTask;
 use Exception;
+use think\facade\Log;
 
 /**
  * 镜头组：镜头定义、笛卡尔积展开、组列表与详情。
@@ -67,12 +68,24 @@ class SmartEditGroupService
 
         try {
             SmartEditGroupExpandJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+            Log::channel('mns')->info(sprintf(
+                '[smart_edit] group dispatched batch=%s tenant=%d combos=%d',
+                $batchNo,
+                $tenantId,
+                $comboCount
+            ));
         } catch (\Throwable $e) {
-            // 投递失败：组行保留为 expanding，用户可在列表里删除后重试
+            // 投递失败必须留痕：常见原因是 MNS 未配置或队列不存在
+            Log::channel('mns')->error(sprintf(
+                '[smart_edit] group dispatch failed batch=%s tenant=%d %s',
+                $batchNo,
+                $tenantId,
+                $e->getMessage()
+            ));
             $group->save([
                 'status' => SmartEditGroup::STATUS_FAILED,
                 'error_code' => 'DISPATCH_FAILED',
-                'error_message' => '任务投递失败，请稍后重试',
+                'error_message' => mb_substr('任务投递失败：' . $e->getMessage(), 0, 480),
                 'update_time' => time(),
             ]);
         }
