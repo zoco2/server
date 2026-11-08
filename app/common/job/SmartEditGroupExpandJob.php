@@ -128,14 +128,17 @@ class SmartEditGroupExpandJob extends Job
         $combos = SmartEditGroupService::expandShots($shots);
         $taskIds = [];
         foreach ($combos as $index => $clips) {
+            $comboIndex = $index + 1;
+            // 多组标题按 combo 序号循环对应：C1→G0，C2→G1，…，用完从头再来
+            $taskShared = SmartEditService::sharedForCombo($shared, $comboIndex);
             try {
                 $task = SmartEditService::createTask(
                     $tenantId,
                     $userId,
-                    $shared,
+                    $taskShared,
                     $clips,
                     $batchNo,
-                    $index + 1
+                    $comboIndex
                 );
             } catch (\Throwable $e) {
                 // 带上组合序号和素材，排查时直接知道是哪条视频出的问题

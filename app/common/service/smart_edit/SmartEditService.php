@@ -25,8 +25,14 @@ class SmartEditService
     public const MAX_CLIPS = 20;
     public const MAX_POLL_ATTEMPTS = 240;
 
-    /** 贴纸数量上限 */
-    public const MAX_STICKERS = 20;
+    /** 单组内最多贴纸数（对齐竞品） */
+    public const MAX_STICKERS_PER_GROUP = 2;
+
+    /** 最多贴纸组数；笛卡尔积成片按 combo 序号循环取组 */
+    public const MAX_STICKER_GROUPS = 50;
+
+    /** @deprecated 兼容旧常量名，等同每组上限 */
+    public const MAX_STICKERS = 2;
 
     /** 背景音乐数量上限 */
     public const MAX_AUDIOS = 3;
@@ -36,6 +42,12 @@ class SmartEditService
 
     /** 标题文案最大字数 */
     public const MAX_TITLE_TEXT_LENGTH = 30;
+
+    /** 单组内最多叠加的标题条数 */
+    public const MAX_TITLES = 10;
+
+    /** 最多标题组数；笛卡尔积成片按 combo 序号循环取组 */
+    public const MAX_TITLE_GROUPS = 50;
 
     /** 默认比例：竖屏 9:16，与短视频场景一致 */
     public const DEFAULT_ASPECT_RATIO = '9:16';
@@ -172,7 +184,7 @@ class SmartEditService
         }
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
-        $titleConfig = self::resolveTitleFont($config, $titleConfig);
+        $titleConfig = self::resolveTitleFonts($config, $titleConfig);
         $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleConfig, $outputHeight, $stickers, $audios);
 
         $task = SmartEditTask::create([
@@ -189,8 +201,10 @@ class SmartEditService
                 'clips' => $clips,
                 'cover_uri' => $coverUri,
                 'aspect_ratio' => $aspectRatio,
-                'title_text' => (string)($titleConfig['text'] ?? ''),
-                'title' => $titleConfig,
+                'title_text' => implode(' / ', array_column($titleConfig, 'text')),
+                'title_overlay' => $titleConfig,
+                'title_group_index' => (int)($shared['title_group_index'] ?? 0),
+                'sticker_group_index' => (int)($shared['sticker_group_index'] ?? 0),
                 'stickers' => $stickerInputs,
                 'audios' => $audioInputs,
                 'batch_no' => $batchNo,
@@ -563,8 +577,8 @@ class SmartEditService
         } elseif (!isset(self::OUTPUT_SIZES[$aspectRatio])) {
             throw new Exception('不支持的视频比例：' . $aspectRatio);
         }
-        // 标题：文案与排版全部由前端决定，这里只校验取值范围。
-        $titleConfig = self::normalizeTitle($params);
+        // 标题组：文案与排版全部由前端决定，这里只校验取值范围。
+        $titleConfig = self::normalizeTitles($params);
         $stickers = self::normalizeStickers($params['stickers'] ?? []);
         $audios = self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []);
         return [$editType, mb_substr($title, 0, 100), $normalized, $coverUri, $aspectRatio, $titleConfig, $stickers, $audios];
@@ -576,7 +590,7 @@ class SmartEditService
      * 与 validate() 共用同一套子方法，保证组和单任务对同名字段的理解一致。
      *
      * @param array $params 前端参数
-     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, stickers: array, audios: array}
+     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array}
      */
     public static function normalizeSharedForGroup(array $params): array
     {
@@ -596,15 +610,52 @@ class SmartEditService
             throw new Exception('不支持的视频比例：' . $aspectRatio);
         }
 
+        $titleGroups = self::normalizeTitleGroups($params);
+        $stickerGroups = self::normalizeStickerGroups($params);
         return [
             'edit_type' => $editType,
             'title' => mb_substr($title, 0, 100),
             'cover_uri' => $coverUri,
             'aspect_ratio' => $aspectRatio,
-            'title_overlay' => self::normalizeTitle($params),
-            'stickers' => self::normalizeStickers($params['stickers'] ?? []),
+            // 默认落第一组，展开时再按 combo 循环替换
+            'title_overlay' => $titleGroups[0] ?? [],
+            'title_groups' => $titleGroups,
+            'stickers' => $stickerGroups[0] ?? [],
+            'sticker_groups' => $stickerGroups,
             'audios' => self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []),
         ];
+    }
+
+    /**
+     * 按组合序号循环取标题组 / 贴纸组，写回供建任务使用。
+     *
+     * combo_index 从 1 起：C1→G0，C2→G1，…，用完再从头。
+     * 标题组与贴纸组各自独立循环。
+     *
+     * @param array $shared     normalizeSharedForGroup 的结果
+     * @param int   $comboIndex 组合序号（从 1 起）
+     */
+    public static function sharedForCombo(array $shared, int $comboIndex): array
+    {
+        $titleGroups = $shared['title_groups'] ?? null;
+        if (is_array($titleGroups) && $titleGroups !== []) {
+            $count = count($titleGroups);
+            $index = $comboIndex > 0 ? ($comboIndex - 1) % $count : 0;
+            $picked = $titleGroups[$index] ?? [];
+            $shared['title_overlay'] = is_array($picked) ? $picked : [];
+            $shared['title_group_index'] = $index;
+        }
+
+        $stickerGroups = $shared['sticker_groups'] ?? null;
+        if (is_array($stickerGroups) && $stickerGroups !== []) {
+            $count = count($stickerGroups);
+            $index = $comboIndex > 0 ? ($comboIndex - 1) % $count : 0;
+            $picked = $stickerGroups[$index] ?? [];
+            $shared['stickers'] = is_array($picked) ? $picked : [];
+            $shared['sticker_group_index'] = $index;
+        }
+
+        return $shared;
     }
 
     /**
@@ -624,7 +675,23 @@ class SmartEditService
             SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
         }
 
-        foreach ((array)($shared['stickers'] ?? []) as $sticker) {
+        $stickerList = [];
+        $stickerGroups = $shared['sticker_groups'] ?? null;
+        if (is_array($stickerGroups) && $stickerGroups !== []) {
+            foreach ($stickerGroups as $group) {
+                if (is_array($group)) {
+                    foreach ($group as $sticker) {
+                        $stickerList[] = $sticker;
+                    }
+                }
+            }
+        } else {
+            $stickerList = (array)($shared['stickers'] ?? []);
+        }
+        foreach ($stickerList as $sticker) {
+            if (!is_array($sticker)) {
+                continue;
+            }
             $uri = (string)($sticker['uri'] ?? '');
             if ($uri === '') {
                 continue;
@@ -643,23 +710,93 @@ class SmartEditService
     }
 
     /**
-     * 标题配置归一化。
+     * 多组标题归一化。
      *
-     * 兼容两种入参：只给 title_text 的旧格式，以及带完整排版的 title 对象。
-     * 文案为空表示不加标题；其余字段缺省时交给 Timeline 构建补默认值，
-     * 这里只拦明显非法的输入，避免把错误参数静默传给 IMS。
+     * - title_groups: [[{text,...}, ...], ...] 多组，成片按 combo 循环取组
+     * - 仅 title_overlay / title_text：视为单组（兼容旧协议）
+     *
+     * @return array<int, array<int, array<string, mixed>>>
      */
-    private static function normalizeTitle(array $params): array
+    private static function normalizeTitleGroups(array $params): array
     {
-        $raw = $params['title_overlay'] ?? $params['title'] ?? null;
-        // title 参数历史上是任务名称，只有对象形式才当排版配置用。
-        $config = is_array($raw) ? $raw : [];
-        $text = trim((string)($config['text'] ?? $params['title_text'] ?? ''));
+        $raw = $params['title_groups'] ?? null;
+        if (is_array($raw) && $raw !== [] && array_is_list($raw)) {
+            if (count($raw) > self::MAX_TITLE_GROUPS) {
+                throw new Exception('一次最多添加 ' . self::MAX_TITLE_GROUPS . ' 组标题');
+            }
+            $groups = [];
+            foreach ($raw as $index => $group) {
+                if (!is_array($group)) {
+                    continue;
+                }
+                $titles = self::normalizeTitles(['title_overlay' => $group]);
+                if ($titles !== []) {
+                    $groups[] = $titles;
+                }
+            }
+            return $groups;
+        }
+
+        $single = self::normalizeTitles($params);
+        return $single === [] ? [] : [$single];
+    }
+
+    /**
+     * 单组内多条标题归一化（叠到同一条成片）。
+     *
+     * 兼容三种入参：
+     * - title_overlay: [{text, ...}, ...] 标题列表
+     * - title_overlay: {text, ...} 单条（旧协议）
+     * - title_text：补成单条
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function normalizeTitles(array $params): array
+    {
+        $raw = $params['title_overlay'] ?? null;
+        $items = [];
+        if (is_array($raw) && $raw !== []) {
+            if (array_is_list($raw) && isset($raw[0]) && is_array($raw[0])) {
+                $items = $raw;
+            } elseif (isset($raw['text']) || isset($raw['font_key']) || isset($raw['font_size'])) {
+                $items = [$raw];
+            }
+        } elseif (trim((string)($params['title_text'] ?? '')) !== '') {
+            $items = [['text' => (string)$params['title_text']]];
+        }
+
+        if (count($items) > self::MAX_TITLES) {
+            throw new Exception('一组最多添加 ' . self::MAX_TITLES . ' 条标题');
+        }
+
+        $result = [];
+        foreach ($items as $index => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $normalized = self::normalizeTitleItem($item, $index + 1);
+            if ($normalized !== []) {
+                $result[] = $normalized;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * 单条标题归一化。文案为空则跳过（返回 []）。
+     *
+     * @param array $config 单条标题配置
+     * @param int   $index  1-based，用于报错定位
+     * @return array<string, mixed>
+     */
+    private static function normalizeTitleItem(array $config, int $index = 1): array
+    {
+        $text = trim((string)($config['text'] ?? ''));
         if ($text === '') {
             return [];
         }
         if (mb_strlen($text) > self::MAX_TITLE_TEXT_LENGTH) {
-            throw new Exception('标题文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
+            throw new Exception('标题' . $index . '文案不能超过 ' . self::MAX_TITLE_TEXT_LENGTH . ' 个字');
         }
         $result = ['text' => $text];
 
@@ -669,7 +806,7 @@ class SmartEditService
             $start = max(0, (float)($start ?? 0));
             $end = $end === null ? $start + SmartEditTimelineBuilder::TITLE_SECONDS : (float)$end;
             if ($end <= $start) {
-                throw new Exception('标题结束时间必须大于开始时间');
+                throw new Exception('标题' . $index . '结束时间必须大于开始时间');
             }
             $result['timeline_in'] = $start;
             $result['timeline_out'] = $end;
@@ -681,7 +818,7 @@ class SmartEditService
         $fontSize = self::numberOrNull($config['font_size'] ?? null);
         if ($fontSize !== null) {
             if ($fontSize < 8 || $fontSize > 400) {
-                throw new Exception('标题字号需在 8 ~ 400 之间');
+                throw new Exception('标题' . $index . '字号需在 8 ~ 400 之间');
             }
             $result['font_size'] = (int)round($fontSize);
         }
@@ -689,7 +826,7 @@ class SmartEditService
         $color = trim((string)($config['font_color'] ?? $config['color'] ?? ''));
         if ($color !== '') {
             if (!preg_match('/^#([0-9a-fA-F]{6})$/', $color)) {
-                throw new Exception('标题颜色需为 #RRGGBB 格式');
+                throw new Exception('标题' . $index . '颜色需为 #RRGGBB 格式');
             }
             $result['font_color'] = $color;
         }
@@ -697,28 +834,25 @@ class SmartEditService
         $y = self::numberOrNull($config['y'] ?? null);
         if ($y !== null) {
             if ($y < 0) {
-                throw new Exception('标题高度不能为负数');
+                throw new Exception('标题' . $index . '高度不能为负数');
             }
             $result['y'] = $y;
         }
 
         $alignment = trim((string)($config['alignment'] ?? ''));
         if ($alignment !== '') {
-            // 只接受 IMS 的横向对齐取值；其余一律报错，避免 typo 静默变成默认值。
             $allowed = ['TopLeft', 'TopCenter', 'TopRight', 'Left', 'Center', 'Right',
                 'CenterLeft', 'CenterCenter', 'CenterRight', 'BottomLeft', 'BottomCenter', 'BottomRight'];
             if (!in_array($alignment, $allowed, true)) {
-                throw new Exception('不支持的标题对齐方式：' . $alignment);
+                throw new Exception('标题' . $index . '不支持的对齐方式：' . $alignment);
             }
             $result['alignment'] = $alignment;
         }
 
-        // 字体：优先用预置字体库的 code（font_key），其次才接受系统字体名 / 自定义地址。
-        // FontURL 在提交阶段按表内 uri 拼接，避免打开页面就拉字体文件。
         $fontKey = trim((string)($config['font_key'] ?? ''));
         if ($fontKey !== '') {
             if (!SmartEditFontService::has($fontKey)) {
-                throw new Exception('不支持的标题字体：' . $fontKey);
+                throw new Exception('标题' . $index . '不支持的字体：' . $fontKey);
             }
             $result['font_key'] = $fontKey;
         }
@@ -729,7 +863,7 @@ class SmartEditService
         $fontUrl = trim((string)($config['font_url'] ?? $config['fontUrl'] ?? ''));
         if ($fontUrl !== '' && $fontKey === '') {
             if (!preg_match('#^https?://#i', $fontUrl)) {
-                throw new Exception('标题字体地址必须是完整的 http(s) 地址');
+                throw new Exception('标题' . $index . '字体地址必须是完整的 http(s) 地址');
             }
             $result['font_url'] = $fontUrl;
         }
@@ -747,13 +881,29 @@ class SmartEditService
     }
 
     /**
-     * 把标题的字体 code 解析成 IMS 能直接拉取的 FontURL。
+     * 标题组：逐条把 font_key 解析成 FontURL。
      *
-     * 字体文件已预置在 OSS；准备失败时退回系统字体名（若有），
-     * 再失败交给 IMS 默认字体，保证任务能提交。
+     * @param array $config  阿里云配置
+     * @param array $titles  归一化后的标题列表
+     * @return array<int, array<string, mixed>>
+     */
+    private static function resolveTitleFonts(array $config, array $titles): array
+    {
+        $result = [];
+        foreach ($titles as $title) {
+            if (!is_array($title)) {
+                continue;
+            }
+            $result[] = self::resolveTitleFont($config, $title);
+        }
+        return $result;
+    }
+
+    /**
+     * 把单条标题的字体 code 解析成 IMS 能直接拉取的 FontURL。
      *
      * @param array $config 阿里云配置
-     * @param array $title  归一化后的标题配置
+     * @param array $title  归一化后的单条标题
      */
     private static function resolveTitleFont(array $config, array $title): array
     {
@@ -776,6 +926,38 @@ class SmartEditService
     }
 
     /**
+     * 多组贴纸归一化。
+     *
+     * - sticker_groups: [[{uri,...}, ...], ...] 多组，成片按 combo 循环取组
+     * - 仅 stickers：视为单组（兼容旧协议）
+     *
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    private static function normalizeStickerGroups(array $params): array
+    {
+        $raw = $params['sticker_groups'] ?? null;
+        if (is_array($raw) && $raw !== [] && array_is_list($raw)) {
+            if (count($raw) > self::MAX_STICKER_GROUPS) {
+                throw new Exception('一次最多添加 ' . self::MAX_STICKER_GROUPS . ' 组贴纸');
+            }
+            $groups = [];
+            foreach ($raw as $group) {
+                if (!is_array($group)) {
+                    continue;
+                }
+                $stickers = self::normalizeStickers($group);
+                if ($stickers !== []) {
+                    $groups[] = $stickers;
+                }
+            }
+            return $groups;
+        }
+
+        $single = self::normalizeStickers($params['stickers'] ?? []);
+        return $single === [] ? [] : [$single];
+    }
+
+    /**
      * 贴纸片段归一化。
      *
      * 只负责「取值是否合法」，不替前端决定位置：
@@ -787,8 +969,8 @@ class SmartEditService
         if (!is_array($raw) || $raw === []) {
             return [];
         }
-        if (count($raw) > self::MAX_STICKERS) {
-            throw new Exception('一次最多添加 ' . self::MAX_STICKERS . ' 个贴纸');
+        if (count($raw) > self::MAX_STICKERS_PER_GROUP) {
+            throw new Exception('一组最多添加 ' . self::MAX_STICKERS_PER_GROUP . ' 个贴纸');
         }
         // 归一化后的键名直接用 IMS 字段名，再拼到 Timeline 时不必二次映射。
         // 前端可以传小写（x/y/width）也可以直接传 IMS 风格的大写（X/Y/Width），
