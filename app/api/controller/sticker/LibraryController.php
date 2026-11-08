@@ -24,13 +24,13 @@ class LibraryController extends BaseApiController
     }
 
     /**
-     * 资源列表。category_id 不传或 0 表示不限分类。
+     * 资源列表。category_code 不传或空表示不限分类。
      */
     public function resources()
     {
         try {
             $result = StickerService::resources(
-                (int)$this->request->get('category_id', 0),
+                (string)$this->request->get('category_code', ''),
                 (int)$this->request->get('page_no', 1),
                 (int)$this->request->get('page_size', 50)
             );

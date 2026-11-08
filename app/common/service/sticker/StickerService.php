@@ -10,7 +10,8 @@ use Exception;
 /**
  * 贴纸库读取与归属校验。
  *
- * 租户隔离由 BaseModel 全局 scope 自动加 tenant_id，这里不再手写。
+ * 租户隔离由 BaseModel 全局 scope 自动加 tenant_id。
+ * 资源按分类 code 关联，不按分类自增 id。
  *
  * 贴纸文件存 OSS，地址统一走 FileService::getFileUrlByStorage()，
  * 与素材库、画布、短剧模板同一套：本地、OSS、私有签名都由该函数处理。
@@ -47,19 +48,20 @@ class StickerService
     }
 
     /**
-     * 资源列表。category_id 为 0 时不限分类。
+     * 资源列表。category_code 为空时不限分类。
      *
      * @return array{lists: array<int, array<string, mixed>>, count: int}
      */
-    public static function resources(int $categoryId = 0, int $pageNo = 1, int $pageSize = 50): array
+    public static function resources(string $categoryCode = '', int $pageNo = 1, int $pageSize = 50): array
     {
         $pageNo = max(1, $pageNo);
         $pageSize = min(self::MAX_PAGE_SIZE, max(1, $pageSize));
+        $categoryCode = trim($categoryCode);
 
         $query = StickerResource::where('status', 1)
             ->where('delete_time', 0);
-        if ($categoryId > 0) {
-            $query->where('category_id', $categoryId);
+        if ($categoryCode !== '') {
+            $query->where('category_code', $categoryCode);
         }
 
         $count = (clone $query)->count();
@@ -142,7 +144,7 @@ class StickerService
         $cover = (string)$row['cover_uri'];
         return [
             'id' => (int)$row['id'],
-            'category_id' => (int)$row['category_id'],
+            'category_code' => (string)$row['category_code'],
             'name' => (string)$row['name'],
             // uri 给智能剪辑提交用，url 给前端预览用
             'uri' => $uri,
