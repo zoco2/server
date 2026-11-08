@@ -10,8 +10,7 @@ use Exception;
 /**
  * 贴纸库读取与归属校验。
  *
- * 分类 / 资源列表不做租户过滤，按 status、delete_time 等业务条件查询。
- * 同 code 分类去重时保留先命中的一条（排序靠前优先）。
+ * 贴纸数据按租户隔离，只查当前 tenant_id，不做跨租户并集，不做去重。
  *
  * 贴纸文件存 OSS，地址统一走 FileService::getFileUrlByStorage()，
  * 与素材库、画布、短剧模板同一套：本地、OSS、私有签名都由该函数处理。
@@ -22,32 +21,24 @@ class StickerService
     public const MAX_PAGE_SIZE = 200;
 
     /**
-     * 分类列表。
+     * 分类列表：仅当前租户。
      *
      * @return array<int, array<string, mixed>>
      */
-    public static function categories(): array
+    public static function categories(int $tenantId): array
     {
-        $rows = StickerCategory::where('status', 1)
+        $rows = StickerCategory::where('tenant_id', $tenantId)
+            ->where('status', 1)
             ->where('delete_time', 0)
             ->order(['sort' => 'desc', 'id' => 'asc'])
             ->select()
             ->toArray();
 
-        // 同 code 去重：按当前排序保留第一条
-        $seen = [];
         $result = [];
         foreach ($rows as $row) {
-            $code = (string)$row['code'];
-            if ($code !== '' && isset($seen[$code])) {
-                continue;
-            }
-            if ($code !== '') {
-                $seen[$code] = true;
-            }
             $result[] = [
                 'id' => (int)$row['id'],
-                'code' => $code,
+                'code' => (string)$row['code'],
                 'name' => (string)$row['name'],
                 'icon' => FileService::getFileUrlByStorage((string)$row['icon']),
                 'sort' => (int)$row['sort'],
@@ -57,16 +48,17 @@ class StickerService
     }
 
     /**
-     * 资源列表。category_id 为 0 时不限分类。
+     * 资源列表：仅当前租户。category_id 为 0 时不限分类。
      *
      * @return array{lists: array<int, array<string, mixed>>, count: int}
      */
-    public static function resources(int $categoryId = 0, int $pageNo = 1, int $pageSize = 50): array
+    public static function resources(int $tenantId, int $categoryId = 0, int $pageNo = 1, int $pageSize = 50): array
     {
         $pageNo = max(1, $pageNo);
         $pageSize = min(self::MAX_PAGE_SIZE, max(1, $pageSize));
 
-        $query = StickerResource::where('status', 1)
+        $query = StickerResource::where('tenant_id', $tenantId)
+            ->where('status', 1)
             ->where('delete_time', 0);
         if ($categoryId > 0) {
             $query->where('category_id', $categoryId);
@@ -86,21 +78,22 @@ class StickerService
     }
 
     /**
-     * 按 uri 解析贴纸，供智能剪辑提交时校验。
+     * 按 uri 解析贴纸，供智能剪辑提交时校验归属。
      *
      * 找不到返回 null，由调用方回退到素材库校验，
      * 兼容「从素材库选图片当贴纸」的用法。
      *
      * @return array{uri: string, mime_type: string, url: string}|null
      */
-    public static function resolveForSmartEdit(string $uri): ?array
+    public static function resolveForSmartEdit(int $tenantId, string $uri): ?array
     {
         $uri = ltrim(trim($uri), '/');
         if ($uri === '' || str_contains($uri, '..')) {
             throw new Exception('贴纸地址非法');
         }
 
-        $row = StickerResource::where('uri', $uri)
+        $row = StickerResource::where('tenant_id', $tenantId)
+            ->where('uri', $uri)
             ->where('status', 1)
             ->where('delete_time', 0)
             ->findOrEmpty();

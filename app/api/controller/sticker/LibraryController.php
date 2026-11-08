@@ -12,12 +12,20 @@ use Exception;
 class LibraryController extends BaseApiController
 {
     /**
+     * 当前请求租户。
+     */
+    private function tenantId(): int
+    {
+        return (int)($this->request->tenantId ?? 0);
+    }
+
+    /**
      * 分类列表。
      */
     public function categories()
     {
         try {
-            return $this->success('获取成功', StickerService::categories());
+            return $this->success('获取成功', StickerService::categories($this->tenantId()));
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
@@ -30,6 +38,7 @@ class LibraryController extends BaseApiController
     {
         try {
             $result = StickerService::resources(
+                $this->tenantId(),
                 (int)$this->request->get('category_id', 0),
                 (int)$this->request->get('page_no', 1),
                 (int)$this->request->get('page_size', 50)

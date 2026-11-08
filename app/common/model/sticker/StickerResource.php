@@ -5,7 +5,7 @@ namespace app\common\model\sticker;
 use app\common\model\BaseModel;
 
 /**
- * 贴纸资源。列表查询不按租户过滤。
+ * 贴纸资源。业务查询自行带 tenant_id，关闭全局租户 scope。
  *
  * delete_time 为 int NOT NULL DEFAULT 0，不使用 SoftDelete。
  */
