@@ -40,7 +40,7 @@ class SmartEditTimelineBuilder
      *
      * @param array  $items        [['media_url'=>string,'in'=>float,'out'=>float], ...]
      * @param string $coverUrl     封面图片的公网地址；为空表示不加封面
-     * @param array  $title        标题配置，元素见 titleClip()；为空表示不加标题
+     * @param array  $titles       标题组（多条配置）；空数组表示不加标题。兼容旧单对象。
      * @param int    $outputHeight 成片高度（像素），用于换算标题的纵向位置
      * @param array  $stickers     贴纸片段，元素见 stickerClip()
      * @param array  $audioClips   背景音乐片段，元素见 audioClip()
@@ -48,7 +48,7 @@ class SmartEditTimelineBuilder
     public static function buildMerge(
         array $items,
         string $coverUrl = '',
-        array $title = [],
+        array $titles = [],
         int $outputHeight = 0,
         array $stickers = [],
         array $audioClips = []
@@ -105,11 +105,11 @@ class SmartEditTimelineBuilder
             ];
         }
 
-        // 标题走独立的文字轨。起止时间、字体、颜色、对齐都由前端决定，
-        // 这里只把缺省值补上，不替用户做排版假设。
-        if (($title['text'] ?? '') !== '') {
+        // 标题组走独立文字轨：多条 clip 叠加，起止/字体/颜色/对齐都由前端决定。
+        $titleClips = self::titleClips($titles, $outputHeight);
+        if ($titleClips !== []) {
             $timeline['SubtitleTracks'] = [
-                ['SubtitleTrackClips' => [self::titleClip($title, $outputHeight)]],
+                ['SubtitleTrackClips' => $titleClips],
             ];
         }
 
@@ -127,6 +127,32 @@ class SmartEditTimelineBuilder
     }
 
     /**
+     * 把标题组（或旧单对象）转成字幕 clip 列表。
+     *
+     * @param array $titles       标题组 / 旧单对象
+     * @param int   $outputHeight 成片高度
+     * @return array<int, array<string, mixed>>
+     */
+    private static function titleClips(array $titles, int $outputHeight = 0): array
+    {
+        if ($titles === []) {
+            return [];
+        }
+        // 旧协议：单对象 {text: ...}
+        if (isset($titles['text']) && is_string($titles['text'])) {
+            return [self::titleClip($titles, $outputHeight)];
+        }
+        $clips = [];
+        foreach ($titles as $title) {
+            if (!is_array($title) || trim((string)($title['text'] ?? '')) === '') {
+                continue;
+            }
+            $clips[] = self::titleClip($title, $outputHeight);
+        }
+        return $clips;
+    }
+
+    /**
      * 标题文字片段。
      *
      * IMS 的坐标语义（见官方字幕示例）：
@@ -138,7 +164,7 @@ class SmartEditTimelineBuilder
      *
      * 字体：Font 是系统字体名，FontURL 是自定义字体文件地址，两者同时给时以 FontURL 为准。
      *
-     * @param array $title        归一化后的标题配置（见 SmartEditService::normalizeTitle）
+     * @param array $title        归一化后的单条标题配置
      * @param int   $outputHeight 成片高度（像素）；0 表示未知，退回固定像素值
      */
     private static function titleClip(array $title, int $outputHeight = 0): array

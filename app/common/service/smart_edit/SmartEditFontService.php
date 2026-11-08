@@ -62,16 +62,20 @@ class SmartEditFontService
     /**
      * 前端下拉用的字体列表。
      *
-     * @return array<int, array{key:string,label:string,preview:string}>
+     * url 供预览页 @font-face 使用；提交任务仍走 prepare()。
+     *
+     * @return array<int, array{key:string,label:string,preview:string,url:string}>
      */
     public static function options(): array
     {
         $rows = [];
         foreach (self::catalog() as $key => $item) {
+            $uri = self::FONT_DIR . '/' . $item['file'];
             $rows[] = [
                 'key' => $key,
                 'label' => $item['label'],
                 'preview' => $item['preview'],
+                'url' => SmartEditImsConfigService::joinUrl(self::FONT_DOMAIN, $uri),
             ];
         }
         return $rows;
