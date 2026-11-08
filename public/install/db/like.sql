@@ -14505,9 +14505,9 @@ CREATE TABLE IF NOT EXISTS `la_merchant_brand_knowledge_article` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品牌知识库文章';
 
 -- ----------------------------
--- Table structure for la_sticker_category
+-- Table structure for la_smart_edit_sticker_category
 -- ----------------------------
-CREATE TABLE IF NOT EXISTS `la_sticker_category` (
+CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_category` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
   `code` varchar(64) NOT NULL DEFAULT '' COMMENT '分类标识，同租户内唯一',
@@ -14521,12 +14521,12 @@ CREATE TABLE IF NOT EXISTS `la_sticker_category` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_tenant_code` (`tenant_id`,`code`,`delete_time`),
   KEY `idx_tenant_status_sort` (`tenant_id`,`status`,`sort`,`delete_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸分类';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸分类';
 
 -- ----------------------------
--- Table structure for la_sticker_resource
+-- Table structure for la_smart_edit_sticker_resource
 -- ----------------------------
-CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
+CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_resource` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
   `category_id` int unsigned NOT NULL DEFAULT 0 COMMENT '所属分类ID',
@@ -14549,7 +14549,7 @@ CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_id`,`file_name`,`delete_time`),
   KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_id`,`status`,`sort`,`delete_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸资源';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸资源';
 
 -- ----------------------------
 -- Table structure for la_smart_edit_task

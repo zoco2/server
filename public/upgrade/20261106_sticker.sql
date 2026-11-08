@@ -3,7 +3,7 @@
 -- 媒体文件只存对象路径，域名由服务端按 storage_* 三件套还原；不使用外键。
 -- 脚本可重复执行：建表 IF NOT EXISTS，写入 INSERT IGNORE（命中唯一键则跳过）。
 
-CREATE TABLE IF NOT EXISTS `la_sticker_category` (
+CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_category` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
   `code` varchar(64) NOT NULL DEFAULT '' COMMENT '分类标识，同租户内唯一',
@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS `la_sticker_category` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_tenant_code` (`tenant_id`,`code`,`delete_time`),
   KEY `idx_tenant_status_sort` (`tenant_id`,`status`,`sort`,`delete_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸分类';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸分类';
 
-CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
+CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_resource` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
   `category_id` int unsigned NOT NULL DEFAULT 0 COMMENT '所属分类ID',
@@ -42,9 +42,9 @@ CREATE TABLE IF NOT EXISTS `la_sticker_resource` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_id`,`file_name`,`delete_time`),
   KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_id`,`status`,`sort`,`delete_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='贴纸资源';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸资源';
 
-INSERT IGNORE INTO `la_sticker_category`
+INSERT IGNORE INTO `la_smart_edit_sticker_category`
   (`id`, `tenant_id`, `code`, `name`, `icon`, `sort`, `status`, `create_time`, `update_time`) VALUES
   (1, 0, 'qixi', '七夕', '', 99, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()),
   (2, 0, 'world-cup', '世界杯', '', 98, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()),
@@ -61,7 +61,7 @@ INSERT IGNORE INTO `la_sticker_category`
   (13, 0, 'meishi', '美食', '', 87, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()),
   (14, 0, 'zhedang', '遮挡', '', 86, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP());
 
-INSERT IGNORE INTO `la_sticker_resource`
+INSERT IGNORE INTO `la_smart_edit_sticker_resource`
   (`tenant_id`, `category_id`, `name`, `file_name`, `uri`, `cover_uri`, `mime_type`, `width`, `height`, `file_size`, `storage_scope`, `storage_engine`, `storage_domain`, `sort`, `status`, `create_time`, `update_time`) VALUES
   (0, 1, '001', '001.gif', 'preset/image/qixi/001.gif', '', 'image/gif', 0, 0, 76010, 'platform', 'aliyun', 'https://zoco2.oss-cn-beijing.aliyuncs.com', 46, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()),
   (0, 1, '002', '002.gif', 'preset/image/qixi/002.gif', '', 'image/gif', 0, 0, 56245, 'platform', 'aliyun', 'https://zoco2.oss-cn-beijing.aliyuncs.com', 45, 1, UNIX_TIMESTAMP(), UNIX_TIMESTAMP()),
