@@ -11,16 +11,15 @@ use think\console\input\Option;
 use think\console\Output;
 
 /**
- * 智能剪辑字体预热。
+ * 智能剪辑字体地址校验。
  *
- * 中文字体动辄 20MB 以上，从 GitHub 拉取很慢。若等到用户提交时再下载，
- * 请求会卡在同步下载上直到 PHP 超时。这里在部署阶段先把字体取下来传到
- * 每个租户自己的 OSS，之后提交只做一次 exists 判断。
+ * 字体清单写死在 SmartEditFontService，文件预置在 OSS fonts/。
+ * 本命令只检查 key 能否拼出可访问 URL，不再下载或上传。
  *
  * 用法：
- *   php think smart-edit:fonts                    # 所有已配置 IMS 的租户，全部字体
+ *   php think smart-edit:fonts
  *   php think smart-edit:fonts --tenant=1
- *   php think smart-edit:fonts --font=wenkai,smiley
+ *   php think smart-edit:fonts --font=xinqingnian,douyin-meihao
  */
 class SmartEditFonts extends Command
 {
@@ -29,7 +28,7 @@ class SmartEditFonts extends Command
         $this->setName('smart-edit:fonts')
             ->addOption('tenant', 't', Option::VALUE_REQUIRED, '租户ID，不传则遍历已配置智能剪辑阿里云的租户')
             ->addOption('font', null, Option::VALUE_REQUIRED, '字体 key，多个用逗号分隔，不传则全部')
-            ->setDescription('预热智能剪辑标题字体到租户 OSS');
+            ->setDescription('校验智能剪辑标题字体 URL 是否可解析');
     }
 
     protected function execute(Input $input, Output $output)
@@ -47,7 +46,7 @@ class SmartEditFonts extends Command
 
         $failed = 0;
         foreach ($tenants as $tenantId) {
-            $output->writeln(sprintf('[tenant %d] 开始预热 %d 款字体', $tenantId, count($keys)));
+            $output->writeln(sprintf('[tenant %d] 校验 %d 款字体', $tenantId, count($keys)));
             try {
                 $config = SmartEditImsConfigService::require($tenantId);
             } catch (\Throwable $e) {
@@ -56,15 +55,14 @@ class SmartEditFonts extends Command
                 continue;
             }
             foreach ($keys as $key) {
-                $output->write(sprintf('  %-16s ', $key));
-                // 命令行不受请求超时限制，给足下载时间
+                $output->write(sprintf('  %-24s ', $key));
                 $url = SmartEditFontService::prepare($config, $key);
                 if ($url === '') {
                     $output->writeln('<error>失败</error>');
                     $failed++;
                     continue;
                 }
-                $output->writeln('<info>完成</info>');
+                $output->writeln('<info>' . $url . '</info>');
             }
         }
 
@@ -72,8 +70,6 @@ class SmartEditFonts extends Command
     }
 
     /**
-     * 需要处理的租户。
-     *
      * @return array<int, int>
      */
     private function resolveTenants(int $tenantId): array
@@ -81,20 +77,17 @@ class SmartEditFonts extends Command
         if ($tenantId > 0) {
             return [$tenantId];
         }
-        // 只处理真正配置过 IMS 的租户，避免对空租户报错
         $rows = TenantConfig::where(['type' => 'smart_edit', 'name' => 'aliyun'])
             ->column('tenant_id');
         return array_values(array_unique(array_map('intval', $rows)));
     }
 
     /**
-     * 需要预热的字体 key。
-     *
      * @return array<int, string>
      */
     private function resolveKeys(string $raw): array
     {
-        $all = array_keys(SmartEditFontService::catalog());
+        $all = SmartEditFontService::codes();
         $raw = trim($raw);
         if ($raw === '') {
             return $all;
