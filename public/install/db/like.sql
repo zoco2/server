@@ -14529,7 +14529,7 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_category` (
 CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_resource` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
-  `category_id` int unsigned NOT NULL DEFAULT 0 COMMENT '所属分类ID',
+  `category_code` varchar(64) NOT NULL DEFAULT '' COMMENT '所属分类 code，同租户内与分类表 code 对应',
   `name` varchar(128) NOT NULL DEFAULT '' COMMENT '资源名称',
   `file_name` varchar(128) NOT NULL DEFAULT '' COMMENT '原始文件名',
   `uri` varchar(500) NOT NULL DEFAULT '' COMMENT '资源对象路径，不含域名',
@@ -14547,8 +14547,8 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_resource` (
   `update_time` int unsigned NOT NULL DEFAULT 0,
   `delete_time` int unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_id`,`file_name`,`delete_time`),
-  KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_id`,`status`,`sort`,`delete_time`)
+  UNIQUE KEY `uk_tenant_category_file` (`tenant_id`,`category_code`,`file_name`,`delete_time`),
+  KEY `idx_tenant_category_status_sort` (`tenant_id`,`category_code`,`status`,`sort`,`delete_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸资源';
 
 -- ----------------------------
