@@ -10,8 +10,7 @@ use Exception;
 /**
  * 贴纸库读取与归属校验。
  *
- * 分类 / 资源列表不做租户过滤，按 status、delete_time 等业务条件查询。
- * 同 code 分类去重时保留先命中的一条（排序靠前优先）。
+ * 租户隔离由 BaseModel 全局 scope 自动加 tenant_id，这里不再手写。
  *
  * 贴纸文件存 OSS，地址统一走 FileService::getFileUrlByStorage()，
  * 与素材库、画布、短剧模板同一套：本地、OSS、私有签名都由该函数处理。
@@ -34,20 +33,11 @@ class StickerService
             ->select()
             ->toArray();
 
-        // 同 code 去重：按当前排序保留第一条
-        $seen = [];
         $result = [];
         foreach ($rows as $row) {
-            $code = (string)$row['code'];
-            if ($code !== '' && isset($seen[$code])) {
-                continue;
-            }
-            if ($code !== '') {
-                $seen[$code] = true;
-            }
             $result[] = [
                 'id' => (int)$row['id'],
-                'code' => $code,
+                'code' => (string)$row['code'],
                 'name' => (string)$row['name'],
                 'icon' => FileService::getFileUrlByStorage((string)$row['icon']),
                 'sort' => (int)$row['sort'],
@@ -86,7 +76,7 @@ class StickerService
     }
 
     /**
-     * 按 uri 解析贴纸，供智能剪辑提交时校验。
+     * 按 uri 解析贴纸，供智能剪辑提交时校验归属。
      *
      * 找不到返回 null，由调用方回退到素材库校验，
      * 兼容「从素材库选图片当贴纸」的用法。
