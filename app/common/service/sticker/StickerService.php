@@ -10,7 +10,7 @@ use Exception;
 /**
  * 贴纸库读取与归属校验。
  *
- * 贴纸数据按租户隔离，只查当前 tenant_id，不做跨租户并集，不做去重。
+ * 租户隔离由 BaseModel 全局 scope 自动加 tenant_id，这里不再手写。
  *
  * 贴纸文件存 OSS，地址统一走 FileService::getFileUrlByStorage()，
  * 与素材库、画布、短剧模板同一套：本地、OSS、私有签名都由该函数处理。
@@ -21,14 +21,13 @@ class StickerService
     public const MAX_PAGE_SIZE = 200;
 
     /**
-     * 分类列表：仅当前租户。
+     * 分类列表。
      *
      * @return array<int, array<string, mixed>>
      */
-    public static function categories(int $tenantId): array
+    public static function categories(): array
     {
-        $rows = StickerCategory::where('tenant_id', $tenantId)
-            ->where('status', 1)
+        $rows = StickerCategory::where('status', 1)
             ->where('delete_time', 0)
             ->order(['sort' => 'desc', 'id' => 'asc'])
             ->select()
@@ -48,17 +47,16 @@ class StickerService
     }
 
     /**
-     * 资源列表：仅当前租户。category_id 为 0 时不限分类。
+     * 资源列表。category_id 为 0 时不限分类。
      *
      * @return array{lists: array<int, array<string, mixed>>, count: int}
      */
-    public static function resources(int $tenantId, int $categoryId = 0, int $pageNo = 1, int $pageSize = 50): array
+    public static function resources(int $categoryId = 0, int $pageNo = 1, int $pageSize = 50): array
     {
         $pageNo = max(1, $pageNo);
         $pageSize = min(self::MAX_PAGE_SIZE, max(1, $pageSize));
 
-        $query = StickerResource::where('tenant_id', $tenantId)
-            ->where('status', 1)
+        $query = StickerResource::where('status', 1)
             ->where('delete_time', 0);
         if ($categoryId > 0) {
             $query->where('category_id', $categoryId);
@@ -85,15 +83,14 @@ class StickerService
      *
      * @return array{uri: string, mime_type: string, url: string}|null
      */
-    public static function resolveForSmartEdit(int $tenantId, string $uri): ?array
+    public static function resolveForSmartEdit(string $uri): ?array
     {
         $uri = ltrim(trim($uri), '/');
         if ($uri === '' || str_contains($uri, '..')) {
             throw new Exception('贴纸地址非法');
         }
 
-        $row = StickerResource::where('tenant_id', $tenantId)
-            ->where('uri', $uri)
+        $row = StickerResource::where('uri', $uri)
             ->where('status', 1)
             ->where('delete_time', 0)
             ->findOrEmpty();

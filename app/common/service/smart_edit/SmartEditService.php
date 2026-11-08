@@ -155,7 +155,7 @@ class SmartEditService
         $stickers = [];
         foreach ($stickerInputs as $input) {
             $uri = (string)$input['uri'];
-            $sticker = StickerService::resolveForSmartEdit($tenantId, $uri);
+            $sticker = StickerService::resolveForSmartEdit($uri);
             if ($sticker !== null) {
                 $mediaUrl = $sticker['url'] !== ''
                     ? $sticker['url']
@@ -629,7 +629,7 @@ class SmartEditService
             if ($uri === '') {
                 continue;
             }
-            if (StickerService::resolveForSmartEdit($tenantId, $uri) === null) {
+            if (StickerService::resolveForSmartEdit($uri) === null) {
                 SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
             }
         }
