@@ -19,7 +19,7 @@ class TaskController extends BaseApiController
     }
 
     /**
-     * 标题可选字体。读 la_smart_edit_font，只返回元数据；提交时再拼 FontURL。
+     * 标题可选字体。读固定预置清单，只返回元数据；提交时再拼 FontURL。
      */
     public function fonts()
     {

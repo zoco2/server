@@ -14552,33 +14552,6 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_sticker_resource` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑贴纸资源';
 
 -- ----------------------------
--- Table structure for la_smart_edit_font
--- ----------------------------
-CREATE TABLE IF NOT EXISTS `la_smart_edit_font` (
-  `id` int unsigned NOT NULL AUTO_INCREMENT,
-  `tenant_id` int unsigned NOT NULL DEFAULT 0 COMMENT '租户ID，0=平台预置',
-  `code` varchar(64) NOT NULL DEFAULT '' COMMENT '字体标识，同租户内唯一，提交任务用',
-  `name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名称',
-  `file_name` varchar(255) NOT NULL DEFAULT '' COMMENT 'OSS 文件名',
-  `uri` varchar(500) NOT NULL DEFAULT '' COMMENT '对象路径，不含域名，如 fonts/新青年.ttf',
-  `mime_type` varchar(100) NOT NULL DEFAULT '' COMMENT 'MIME 类型',
-  `file_size` bigint unsigned NOT NULL DEFAULT 0 COMMENT '字节，0=未知',
-  `storage_scope` varchar(20) NOT NULL DEFAULT 'platform' COMMENT '存储作用域',
-  `storage_engine` varchar(30) NOT NULL DEFAULT 'aliyun' COMMENT '存储引擎',
-  `storage_domain` varchar(255) NOT NULL DEFAULT '' COMMENT '存储域名',
-  `preview` varchar(255) NOT NULL DEFAULT '' COMMENT '前端预览说明',
-  `sort` int NOT NULL DEFAULT 0 COMMENT '排序，越大越靠前',
-  `status` tinyint unsigned NOT NULL DEFAULT 1 COMMENT '状态:0停用 1启用',
-  `create_time` int unsigned NOT NULL DEFAULT 0,
-  `update_time` int unsigned NOT NULL DEFAULT 0,
-  `delete_time` int unsigned NOT NULL DEFAULT 0,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_tenant_code` (`tenant_id`,`code`,`delete_time`),
-  UNIQUE KEY `uk_tenant_file` (`tenant_id`,`file_name`,`delete_time`),
-  KEY `idx_tenant_status_sort` (`tenant_id`,`status`,`sort`,`delete_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑标题字体';
-
--- ----------------------------
 -- Table structure for la_smart_edit_task
 -- ----------------------------
 CREATE TABLE IF NOT EXISTS `la_smart_edit_task` (

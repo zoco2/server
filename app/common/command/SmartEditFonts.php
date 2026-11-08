@@ -13,8 +13,8 @@ use think\console\Output;
 /**
  * 智能剪辑字体地址校验。
  *
- * 字体文件已预置在 OSS fonts/，本命令只检查 code 能否拼出可访问 URL，
- * 不再下载或上传。
+ * 字体清单写死在 SmartEditFontService，文件预置在 OSS fonts/。
+ * 本命令只检查 key 能否拼出可访问 URL，不再下载或上传。
  *
  * 用法：
  *   php think smart-edit:fonts
@@ -27,7 +27,7 @@ class SmartEditFonts extends Command
     {
         $this->setName('smart-edit:fonts')
             ->addOption('tenant', 't', Option::VALUE_REQUIRED, '租户ID，不传则遍历已配置智能剪辑阿里云的租户')
-            ->addOption('font', null, Option::VALUE_REQUIRED, '字体 code，多个用逗号分隔，不传则全部')
+            ->addOption('font', null, Option::VALUE_REQUIRED, '字体 key，多个用逗号分隔，不传则全部')
             ->setDescription('校验智能剪辑标题字体 URL 是否可解析');
     }
 
@@ -40,7 +40,7 @@ class SmartEditFonts extends Command
         }
         $keys = $this->resolveKeys((string)$input->getOption('font'));
         if ($keys === []) {
-            $output->writeln('<error>没有匹配的字体 code</error>');
+            $output->writeln('<error>没有匹配的字体 key</error>');
             return 1;
         }
 
