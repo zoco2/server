@@ -59,7 +59,9 @@ class SmartEditTimelineBuilder
             if ($url === '') {
                 throw new Exception('素材地址缺失');
             }
-            $clip = ['MediaURL' => $url];
+            // Width/Height=1 + AdaptMode=Cover：素材等比铺满成片画布（按 OutputMediaConfig 宽高），
+            // 多出部分裁切。不设这两项时 IMS 默认 Fill 拉伸，选择 9:16/16:9/1:1 看起来像「比例没生效」。
+            $clip = self::fitClipToCanvas(['MediaURL' => $url]);
             $in = (float)($item['in'] ?? 0);
             $out = (float)($item['out'] ?? 0);
             if ($in > 0) {
@@ -222,6 +224,19 @@ class SmartEditTimelineBuilder
     }
 
     /**
+     * 让素材铺满成片画布：相对宽高均为 1，Cover 等比裁切。
+     *
+     * @param array $clip 已有字段（至少含 MediaURL）
+     */
+    private static function fitClipToCanvas(array $clip): array
+    {
+        $clip['Width'] = 1;
+        $clip['Height'] = 1;
+        $clip['AdaptMode'] = 'Cover';
+        return $clip;
+    }
+
+    /**
      * 封面图片片段。
      *
      * @param string $coverUrl 封面图片公网地址
@@ -229,13 +244,13 @@ class SmartEditTimelineBuilder
     private static function coverClip(string $coverUrl): array
     {
         $seconds = self::COVER_SECONDS;
-        return [
+        return self::fitClipToCanvas([
             'Type' => 'Image',
             'MediaURL' => $coverUrl,
             'Duration' => $seconds,
             'TimelineIn' => 0,
             'TimelineOut' => $seconds,
-        ];
+        ]);
     }
 
     /**
