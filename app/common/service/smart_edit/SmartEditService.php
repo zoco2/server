@@ -1593,7 +1593,13 @@ class SmartEditService
     /**
      * 单条字幕的 IMS 片段。
      *
-     * 字段与标题共用同一套坐标语义；额外支持背景条（BackColour）。
+     * 坐标 / 字体一律照标题那条已验证生效的路径写，不再自己另起一套：
+     * - X 固定 0，横向由 Alignment 决定锚点
+     * - Y 走 titleY()，前端传 0~1 占比时按成片高度换算成像素
+     * - Font / FontURL 与标题同源，都由 resolveTitleFonts 解析好再传进来
+     *
+     * 背景条：只给 BackColour 不会出现底框，官方要求同时设置 BorderStyle=3
+     * （1=边框+阴影，3=不透明底框，默认是 1）。
      */
     private static function subtitleClip(array $item, float $timelineIn, float $timelineOut, int $outputHeight): array
     {
@@ -1606,7 +1612,8 @@ class SmartEditService
             'Y' => SmartEditTimelineBuilder::titleY($item['y'] ?? null, $outputHeight),
             'FontSize' => (int)($item['font_size'] ?? SmartEditTimelineBuilder::SUBTITLE_FONT_SIZE),
             'FontColor' => (string)($item['font_color'] ?? '#FFFFFF'),
-            'Alignment' => (string)($item['alignment'] ?? 'BottomCenter'),
+            // 与标题保持一致：TopCenter 以「上边界中点」为锚点，X=0 时文字整体居中
+            'Alignment' => (string)($item['alignment'] ?? 'TopCenter'),
         ];
         $font = trim((string)($item['font'] ?? ''));
         if ($font !== '') {
@@ -1614,27 +1621,35 @@ class SmartEditService
         }
         $fontUrl = trim((string)($item['font_url'] ?? ''));
         if ($fontUrl !== '') {
+            // 官方文档正文写 FontURL、示例写 FontUrl，两个都带上以兼容不同版本
             $clip['FontURL'] = $fontUrl;
             $clip['FontUrl'] = $fontUrl;
         }
         $backColor = trim((string)($item['back_color'] ?? ''));
         if ($backColor !== '') {
-            $clip['BackColour'] = $backColor;
-            if (isset($item['back_opacity'])) {
-                $clip['BackColour'] = self::applyOpacity($backColor, (float)$item['back_opacity']);
-            }
+            // BackColour 只接受 6 位十六进制；必须配合 BorderStyle=3 才是不透明底框
+            $clip['BackColour'] = self::normalizeHexColor($backColor);
+            $clip['BorderStyle'] = 3;
+            // 底框模式下描边要置 0，否则描边会盖住底框
+            $clip['Outline'] = 0;
         }
         return $clip;
     }
 
     /**
-     * 把不透明度折进 #RRGGBBAA，IMS 的背景色支持 8 位十六进制。
+     * 统一成 #RRGGBB；带 alpha 或非法值时退回黑色。
      */
-    private static function applyOpacity(string $hex, float $opacity): string
+    private static function normalizeHexColor(string $color): string
     {
-        $opacity = max(0.0, min(1.0, $opacity));
-        $alpha = (int)round($opacity * 255);
-        return strtoupper($hex) . strtoupper(str_pad(dechex($alpha), 2, '0', STR_PAD_LEFT));
+        $clean = ltrim(trim($color), '#');
+        if (preg_match('/^[0-9a-fA-F]{6}$/', $clean)) {
+            return '#' . strtoupper($clean);
+        }
+        // 8 位的 #RRGGBBAA 只保留前 6 位
+        if (preg_match('/^[0-9a-fA-F]{8}$/', $clean)) {
+            return '#' . strtoupper(substr($clean, 0, 6));
+        }
+        return '#000000';
     }
 
     private static function markSuccess(SmartEditTask $task, array $job): void
