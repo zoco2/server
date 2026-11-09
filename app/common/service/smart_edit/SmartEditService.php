@@ -49,6 +49,23 @@ class SmartEditService
     /** 最多标题组数；笛卡尔积成片按 combo 序号循环取组 */
     public const MAX_TITLE_GROUPS = 50;
 
+    /** 字幕单条最大字数（受上游单次合成长度约束） */
+    public const MAX_SUBTITLE_TEXT_LENGTH = 200;
+
+    /** 单组最多字幕条数 */
+    public const MAX_SUBTITLES = 30;
+
+    /** 默认句间间隔（秒） */
+    public const DEFAULT_SUBTITLE_GAP = 0.3;
+
+    /** 文字图层可用的对齐方式（标题与字幕共用） */
+    public const SUBTITLE_ALIGNMENTS = [
+        'TopLeft', 'TopCenter', 'TopRight',
+        'Left', 'Center', 'Right',
+        'CenterLeft', 'CenterCenter', 'CenterRight',
+        'BottomLeft', 'BottomCenter', 'BottomRight',
+    ];
+
     /** 默认比例：竖屏 9:16，与短视频场景一致 */
     public const DEFAULT_ASPECT_RATIO = '9:16';
 
@@ -185,15 +202,47 @@ class SmartEditService
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
         $titleConfig = self::resolveTitleFonts($config, $titleConfig);
+        // 字幕的字体走同一条通道：font_key -> FontURL，否则用户选了字体也不会生效
+        $subtitleConfig = self::resolveTitleFonts(
+            $config,
+            (array)($shared['subtitle_groups'][0] ?? [])
+        );
+
+        $mainTrackDuration = self::mainTrackDuration($items, $coverUrl !== '');
 
         // 贴纸是图片，没有自身时长；未指定区间时铺满正片，跨出正片的也裁到正片以内，
         // 否则 IMS 会按贴纸轨的结束点决定成片时长，正片之后留下一段黑屏。
         // 没有贴纸时不推算也不校验，保持正片按素材自身时长出片的旧路径。
         if ($stickers !== []) {
-            $stickers = self::alignStickerTimeline($stickers, self::mainTrackDuration($items, $coverUrl !== ''));
+            if ($mainTrackDuration <= 0) {
+                throw new Exception('视频片段的截取区间无效，无法计算贴纸时长');
+            }
+            $stickers = self::alignStickerTimeline($stickers, $mainTrackDuration);
         }
 
-        $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleConfig, $outputHeight, $stickers, $audios);
+        // 字幕与口播：都从该音色的配音行取逐句时间轴，字幕显示区间 = 这句口播的时长。
+        // 成片时长以视频为准，口播/字幕超出部分按比例压到正片以内。
+        [$subtitles, $dubbingClips] = self::buildSubtitleLayers(
+            $config,
+            $tenantId,
+            $batchNo,
+            $subtitleConfig,
+            (string)($shared['voice_key'] ?? ''),
+            $mainTrackDuration,
+            $outputHeight
+        );
+
+        $timeline = self::buildTimeline(
+            $editType,
+            $items,
+            $coverUrl,
+            $titleConfig,
+            $outputHeight,
+            $stickers,
+            $audios,
+            $subtitles,
+            $dubbingClips
+        );
 
         $task = SmartEditTask::create([
             'tenant_id' => $tenantId,
@@ -315,6 +364,46 @@ class SmartEditService
                 'out_sec' => (float)($audio['Out'] ?? 0),
                 'duration' => max(0, (float)($audio['Out'] ?? 0) - (float)($audio['In'] ?? 0)),
                 'raw_meta' => json_encode($audio, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'create_time' => time(),
+            ];
+        }
+
+        // 字幕与配音也落明细：任务详情要能回显「这句字幕配了多长的口播」
+        $extraSort += count($audios);
+        foreach ($subtitles as $index => $subtitle) {
+            $rows[] = [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'task_id' => (int)$task['id'],
+                'item_type' => SmartEditTaskItem::TYPE_SUBTITLE,
+                'sort' => $extraSort + $index,
+                'source_uri' => '',
+                'storage_scope' => 'tenant',
+                'storage_engine' => 'aliyun',
+                'storage_domain' => $config['domain'],
+                'in_sec' => (float)($subtitle['TimelineIn'] ?? 0),
+                'out_sec' => (float)($subtitle['TimelineOut'] ?? 0),
+                'duration' => max(0, (float)($subtitle['TimelineOut'] ?? 0) - (float)($subtitle['TimelineIn'] ?? 0)),
+                'raw_meta' => json_encode(['text' => (string)($subtitle['Content'] ?? '')], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'create_time' => time(),
+            ];
+        }
+        $extraSort += count($subtitles);
+        foreach ($dubbingClips as $index => $dubbing) {
+            $rows[] = [
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'task_id' => (int)$task['id'],
+                'item_type' => SmartEditTaskItem::TYPE_DUBBING,
+                'sort' => $extraSort + $index,
+                'source_uri' => (string)($shared['voice_key'] ?? ''),
+                'storage_scope' => 'tenant',
+                'storage_engine' => 'aliyun',
+                'storage_domain' => $config['domain'],
+                'in_sec' => (float)($dubbing['timeline_in'] ?? 0),
+                'out_sec' => (float)($dubbing['timeline_out'] ?? 0),
+                'duration' => max(0, (float)($dubbing['timeline_out'] ?? 0) - (float)($dubbing['timeline_in'] ?? 0)),
+                'raw_meta' => json_encode(['media_url' => (string)($dubbing['media_url'] ?? '')], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'create_time' => time(),
             ];
         }
@@ -598,10 +687,11 @@ class SmartEditService
      *
      * 与 validate() 共用同一套子方法，保证组和单任务对同名字段的理解一致。
      *
-     * @param array $params 前端参数
-     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array}
+     * @param array $params   前端参数
+     * @param int   $tenantId 租户 ID，用于校验配音音色是否在当前租户的清单内
+     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array, subtitle_groups: array, subtitle_gap: float, voices: array}
      */
-    public static function normalizeSharedForGroup(array $params): array
+    public static function normalizeSharedForGroup(array $params, int $tenantId = 0): array
     {
         $editType = trim((string)($params['edit_type'] ?? SmartEditTask::TYPE_MERGE));
         if ($editType !== SmartEditTask::TYPE_MERGE) {
@@ -622,6 +712,8 @@ class SmartEditService
         $titleGroups = self::normalizeTitleGroups($params);
         $stickerGroups = self::normalizeStickerGroups($params);
         $audioGroups = self::normalizeAudioGroups($params);
+        $subtitles = self::normalizeSubtitles($params);
+        $voices = SmartEditVoiceService::normalizeKeys($tenantId, $params['voices'] ?? []);
         return [
             'edit_type' => $editType,
             'title' => mb_substr($title, 0, 100),
@@ -634,7 +726,144 @@ class SmartEditService
             'sticker_groups' => $stickerGroups,
             'audios' => $audioGroups[0] ?? [],
             'audio_groups' => $audioGroups,
+            // 全局字幕只有一组；subtitle_groups 保留一层是为了以后支持分镜字幕
+            'subtitle_groups' => $subtitles === [] ? [] : [$subtitles],
+            'subtitle_gap' => self::normalizeSubtitleGap($params),
+            // 配音演员：每个音色一套口播，成片按 combo 轮换
+            'voices' => $voices,
         ];
+    }
+
+    /**
+     * 全局字幕归一化。
+     *
+     * 与标题的区别：字幕不允许自己填时间，显示区间完全由 TTS 口播的逐句时长决定。
+     * 空文案直接跳过；一条都没有时返回空数组，表示这批成片不带字幕/配音。
+     *
+     * @param array $params 前端参数（subtitle_groups[0] 或 subtitle_overlay）
+     * @return array<int, array<string, mixed>>
+     */
+    private static function normalizeSubtitles(array $params): array
+    {
+        $raw = $params['subtitle_groups'][0] ?? $params['subtitle_overlay'] ?? null;
+        if (!is_array($raw) || $raw === []) {
+            return [];
+        }
+        // 单条对象（{"text": "..."}）也接受
+        if (isset($raw['text'])) {
+            $raw = [$raw];
+        }
+
+        $rows = [];
+        foreach (array_values($raw) as $index => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $row = self::normalizeSubtitleItem($item, $index + 1);
+            if ($row !== []) {
+                $rows[] = $row;
+            }
+        }
+        if (count($rows) > self::MAX_SUBTITLES) {
+            throw new Exception('最多添加 ' . self::MAX_SUBTITLES . ' 条字幕');
+        }
+        return $rows;
+    }
+
+    /**
+     * 单条字幕归一化。文案为空则跳过（返回 []）。
+     *
+     * 样式字段与标题共用一套校验，但不接受 timeline_in / timeline_out / duration：
+     * 时间来自口播，前端传了也不采信，避免字幕和声音错位。
+     *
+     * @param array $config 单条字幕配置
+     * @param int   $index  1-based，用于报错定位
+     * @return array<string, mixed>
+     */
+    private static function normalizeSubtitleItem(array $config, int $index = 1): array
+    {
+        $text = trim((string)($config['text'] ?? ''));
+        if ($text === '') {
+            return [];
+        }
+        if (mb_strlen($text) > self::MAX_SUBTITLE_TEXT_LENGTH) {
+            throw new Exception('字幕' . $index . '文案不能超过 ' . self::MAX_SUBTITLE_TEXT_LENGTH . ' 个字');
+        }
+        $result = ['text' => $text];
+
+        $fontSize = self::numberOrNull($config['font_size'] ?? null);
+        if ($fontSize !== null) {
+            if ($fontSize < 8 || $fontSize > 400) {
+                throw new Exception('字幕' . $index . '字号需在 8 ~ 400 之间');
+            }
+            $result['font_size'] = (int)round($fontSize);
+        }
+
+        $color = trim((string)($config['font_color'] ?? $config['color'] ?? ''));
+        if ($color !== '') {
+            if (!preg_match('/^#([0-9a-fA-F]{6})$/', $color)) {
+                throw new Exception('字幕' . $index . '颜色需为 #RRGGBB 格式');
+            }
+            $result['font_color'] = $color;
+        }
+
+        $y = self::numberOrNull($config['y'] ?? null);
+        if ($y !== null) {
+            if ($y < 0) {
+                throw new Exception('字幕' . $index . '纵向位置不能为负数');
+            }
+            $result['y'] = $y;
+        }
+
+        $alignment = trim((string)($config['alignment'] ?? ''));
+        if ($alignment !== '') {
+            if (!in_array($alignment, self::SUBTITLE_ALIGNMENTS, true)) {
+                throw new Exception('字幕' . $index . '不支持的对齐方式：' . $alignment);
+            }
+            $result['alignment'] = $alignment;
+        }
+
+        // 背景色：字幕背景条，空值表示不加背景
+        $backColor = trim((string)($config['back_color'] ?? $config['background'] ?? ''));
+        if ($backColor !== '') {
+            if (!preg_match('/^#([0-9a-fA-F]{6})$/', $backColor)) {
+                throw new Exception('字幕' . $index . '背景需为 #RRGGBB 格式');
+            }
+            $result['back_color'] = $backColor;
+        }
+
+        $backOpacity = self::numberOrNull($config['back_opacity'] ?? null);
+        if ($backOpacity !== null) {
+            $result['back_opacity'] = max(0.0, min(1.0, $backOpacity));
+        }
+
+        // 字体走与标题同一条通道：font_key 由 SmartEditFontService 解析成 FontURL
+        $fontKey = trim((string)($config['font_key'] ?? ''));
+        if ($fontKey !== '') {
+            if (!SmartEditFontService::has($fontKey)) {
+                throw new Exception('字幕' . $index . '字体不存在');
+            }
+            $result['font_key'] = $fontKey;
+        } else {
+            $font = trim((string)($config['font'] ?? ''));
+            if ($font !== '') {
+                $result['font'] = mb_substr($font, 0, 80);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * 句间间隔：0 ~ 5 秒，缺省 0.3 秒。
+     */
+    private static function normalizeSubtitleGap(array $params): float
+    {
+        $value = self::numberOrNull($params['subtitle_gap'] ?? null);
+        if ($value === null) {
+            return self::DEFAULT_SUBTITLE_GAP;
+        }
+        return round(max(0.0, min(5.0, $value)), 3);
     }
 
     /**
@@ -674,6 +903,16 @@ class SmartEditService
             $picked = $audioGroups[$index] ?? [];
             $shared['audios'] = is_array($picked) ? $picked : [];
             $shared['audio_group_index'] = $index;
+        }
+
+        // 配音：每个音色一套整组共用的口播，成片按 combo 轮换。
+        // 字幕是全局一套，不参与轮换；时间轴在展开时从配音行读取。
+        $voices = $shared['voices'] ?? null;
+        if (is_array($voices) && $voices !== []) {
+            $count = count($voices);
+            $index = $comboIndex > 0 ? ($comboIndex - 1) % $count : 0;
+            $shared['voice_key'] = (string)($voices[$index] ?? '');
+            $shared['voice_index'] = $index;
         }
 
         return $shared;
@@ -879,9 +1118,7 @@ class SmartEditService
 
         $alignment = trim((string)($config['alignment'] ?? ''));
         if ($alignment !== '') {
-            $allowed = ['TopLeft', 'TopCenter', 'TopRight', 'Left', 'Center', 'Right',
-                'CenterLeft', 'CenterCenter', 'CenterRight', 'BottomLeft', 'BottomCenter', 'BottomRight'];
-            if (!in_array($alignment, $allowed, true)) {
+            if (!in_array($alignment, self::SUBTITLE_ALIGNMENTS, true)) {
                 throw new Exception('标题' . $index . '不支持的对齐方式：' . $alignment);
             }
             $result['alignment'] = $alignment;
@@ -1128,8 +1365,10 @@ class SmartEditService
         foreach ($items as $item) {
             $in = (float)($item['in'] ?? 0);
             $out = (float)($item['out'] ?? 0);
+            // 推不出来就返回 0 表示未知：贴纸场景会据此报错，字幕场景则降级处理，
+            // 不能因为没配贴纸也把正常任务卡死。
             if ($out <= $in) {
-                throw new Exception('视频片段的截取区间无效，无法计算贴纸时长');
+                return 0.0;
             }
             $total += $out - $in;
         }
@@ -1208,7 +1447,9 @@ class SmartEditService
         array $title = [],
         int $outputHeight = 0,
         array $stickers = [],
-        array $audios = []
+        array $audios = [],
+        array $subtitles = [],
+        array $dubbingClips = []
     ): array {
         return match ($editType) {
             SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge(
@@ -1217,10 +1458,183 @@ class SmartEditService
                 $title,
                 $outputHeight,
                 $stickers,
-                $audios
+                $audios,
+                $subtitles,
+                $dubbingClips
             ),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
+    }
+
+    /**
+     * 组装字幕与口播。
+     *
+     * 字幕的显示区间不来自前端，而是取自该音色配音的逐句时长；
+     * 口播同样按逐句片段排到音频轨上，句间间隔靠 TimelineIn 自然形成。
+     *
+     * 成片时长以视频为准：口播超出正片时按比例压缩时间轴并截断，
+     * 口播短于正片时播完即静音，画面照常走完。
+     *
+     * @param array  $config           IMS 配置
+     * @param int    $tenantId         租户 ID
+     * @param string $batchNo          组号；空串表示单任务，不查配音表
+     * @param array  $subtitleConfig   字幕样式与文案
+     * @param string $voiceKey         本次 combo 轮换到的音色 key
+     * @param float  $mainDuration     正片（含封面）总时长
+     * @param int    $outputHeight     成片高度
+     * @return array{0: array<int, array<string, mixed>>, 1: array<int, array<string, mixed>>}
+     */
+    private static function buildSubtitleLayers(
+        array $config,
+        int $tenantId,
+        string $batchNo,
+        array $subtitleConfig,
+        string $voiceKey,
+        float $mainDuration,
+        int $outputHeight
+    ): array {
+        if ($subtitleConfig === []) {
+            return [[], []];
+        }
+
+        // 口播行：只有组任务才有；单任务没有配音，字幕退化成等分铺满（见下）
+        $dubbing = null;
+        if ($batchNo !== '' && $voiceKey !== '') {
+            foreach (SmartEditDubbingService::successes($tenantId, $batchNo) as $row) {
+                if ((string)$row['voice_key'] === $voiceKey) {
+                    $dubbing = $row;
+                    break;
+                }
+            }
+        }
+
+        $lines = (array)($dubbing['lines'] ?? []);
+        if ($lines === []) {
+            // 没有配音时字幕没有天然时间轴：按正片时长均分，保证仍能出片
+            return [self::fallbackSubtitles($subtitleConfig, $mainDuration, $outputHeight), []];
+        }
+
+        // 口播比正片长时整体压缩到正片以内，字幕跟着一起压，避免超出片尾被截掉
+        $audioTotal = 0.0;
+        foreach ($lines as $line) {
+            $audioTotal = max($audioTotal, (float)($line['timeline_out'] ?? 0));
+        }
+        $ratio = ($mainDuration > 0 && $audioTotal > $mainDuration) ? $mainDuration / $audioTotal : 1.0;
+
+        // 字幕条数与配音行一一对应；多出来的字幕没有配音，直接不显示
+        $subtitles = [];
+        $dubbingClips = [];
+        $count = min(count($lines), count($subtitleConfig));
+
+        for ($i = 0; $i < $count; $i++) {
+            $line = $lines[$i];
+            $style = $subtitleConfig[$i];
+            $audioUri = (string)($line['audio_uri'] ?? '');
+            $in = round((float)($line['timeline_in'] ?? 0) * $ratio, 4);
+            $out = round((float)($line['timeline_out'] ?? 0) * $ratio, 4);
+            if ($out <= $in) {
+                continue;
+            }
+            // 口播超出正片的部分直接截掉，不让音频轨把成片拉长
+            $out = $mainDuration > 0 ? min($out, $mainDuration) : $out;
+            if ($out <= $in) {
+                continue;
+            }
+
+            $subtitles[] = self::subtitleClip($style, $in, $out, $outputHeight);
+            if ($audioUri !== '') {
+                $dubbingClips[] = [
+                    'media_url' => SmartEditImsConfigService::objectUrl($config, $audioUri),
+                    'timeline_in' => $in,
+                    'timeline_out' => $out,
+                ];
+            }
+        }
+
+        return [$subtitles, $dubbingClips];
+    }
+
+    /**
+     * 没有配音时的字幕兜底：把手头字数按比例分到正片时长上。
+     *
+     * 只用于单任务或配音缺失的情况，保证字幕不会整段消失。
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function fallbackSubtitles(array $subtitleConfig, float $mainDuration, int $outputHeight): array
+    {
+        if ($mainDuration <= 0 || $subtitleConfig === []) {
+            return [];
+        }
+        // 按字数加权，长句停留久一点
+        $weights = [];
+        $totalWeight = 0;
+        foreach ($subtitleConfig as $item) {
+            $weight = max(1, mb_strlen((string)($item['text'] ?? '')));
+            $weights[] = $weight;
+            $totalWeight += $weight;
+        }
+
+        $clips = [];
+        $cursor = 0.0;
+        foreach ($subtitleConfig as $index => $item) {
+            $seconds = $mainDuration * $weights[$index] / $totalWeight;
+            $in = round($cursor, 4);
+            $out = round(min($mainDuration, $cursor + $seconds), 4);
+            $cursor += $seconds;
+            if ($out <= $in) {
+                continue;
+            }
+            $clips[] = self::subtitleClip($item, $in, $out, $outputHeight);
+        }
+        return $clips;
+    }
+
+    /**
+     * 单条字幕的 IMS 片段。
+     *
+     * 字段与标题共用同一套坐标语义；额外支持背景条（BackColour）。
+     */
+    private static function subtitleClip(array $item, float $timelineIn, float $timelineOut, int $outputHeight): array
+    {
+        $clip = [
+            'Type' => 'Text',
+            'Content' => (string)($item['text'] ?? ''),
+            'TimelineIn' => $timelineIn,
+            'TimelineOut' => $timelineOut,
+            'X' => 0,
+            'Y' => SmartEditTimelineBuilder::titleY($item['y'] ?? null, $outputHeight),
+            'FontSize' => (int)($item['font_size'] ?? SmartEditTimelineBuilder::SUBTITLE_FONT_SIZE),
+            'FontColor' => (string)($item['font_color'] ?? '#FFFFFF'),
+            'Alignment' => (string)($item['alignment'] ?? 'BottomCenter'),
+        ];
+        $font = trim((string)($item['font'] ?? ''));
+        if ($font !== '') {
+            $clip['Font'] = $font;
+        }
+        $fontUrl = trim((string)($item['font_url'] ?? ''));
+        if ($fontUrl !== '') {
+            $clip['FontURL'] = $fontUrl;
+            $clip['FontUrl'] = $fontUrl;
+        }
+        $backColor = trim((string)($item['back_color'] ?? ''));
+        if ($backColor !== '') {
+            $clip['BackColour'] = $backColor;
+            if (isset($item['back_opacity'])) {
+                $clip['BackColour'] = self::applyOpacity($backColor, (float)$item['back_opacity']);
+            }
+        }
+        return $clip;
+    }
+
+    /**
+     * 把不透明度折进 #RRGGBBAA，IMS 的背景色支持 8 位十六进制。
+     */
+    private static function applyOpacity(string $hex, float $opacity): string
+    {
+        $opacity = max(0.0, min(1.0, $opacity));
+        $alpha = (int)round($opacity * 255);
+        return strtoupper($hex) . strtoupper(str_pad(dechex($alpha), 2, '0', STR_PAD_LEFT));
     }
 
     private static function markSuccess(SmartEditTask $task, array $job): void

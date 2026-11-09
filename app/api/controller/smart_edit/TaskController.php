@@ -6,6 +6,7 @@ use app\api\controller\BaseApiController;
 use app\api\lists\smart_edit\SmartEditTaskLists;
 use app\common\service\smart_edit\SmartEditFontService;
 use app\common\service\smart_edit\SmartEditService;
+use app\common\service\smart_edit\SmartEditVoiceService;
 use Exception;
 
 /**
@@ -24,6 +25,14 @@ class TaskController extends BaseApiController
     public function fonts()
     {
         return $this->success('获取成功', SmartEditFontService::options());
+    }
+
+    /**
+     * 可选配音音色：内置清单 + 租户后台追加的音色。
+     */
+    public function voices()
+    {
+        return $this->success('获取成功', SmartEditVoiceService::options((int)$this->request->tenantId));
     }
 
     public function detail()
