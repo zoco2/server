@@ -2,6 +2,7 @@
 
 namespace app\common\service\smart_edit;
 
+use app\common\job\SmartEditDubbingJob;
 use app\common\job\SmartEditGroupExpandJob;
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\model\smart_edit\SmartEditTask;
@@ -47,12 +48,15 @@ class SmartEditGroupService
         $comboCount = self::countCombos($shots);
 
         // 共用配置走与单任务完全相同的归一化，保证两边语义一致
-        $shared = SmartEditService::normalizeSharedForGroup($params);
+        $shared = SmartEditService::normalizeSharedForGroup($params, $tenantId);
         // 提前解析素材地址，配置缺失或素材不归属当前租户时在请求里就报错，
         // 不把问题留给后台展开任务。
         SmartEditService::assertSharedResolvable($tenantId, $shared);
 
         $batchNo = self::newBatchNo();
+        // 选了配音演员的组先进「配音中」：口播是整组共用的，必须展开成任务前生成完，
+        // 否则每条成片都会各自合成一遍。没选演员的组沿用旧流程直接展开。
+        $hasDubbing = !empty($shared['voices']);
         $group = SmartEditGroup::create([
             'tenant_id' => $tenantId,
             'user_id' => $userId,
@@ -61,18 +65,23 @@ class SmartEditGroupService
             'shots_json' => $shots,
             'config_json' => $shared,
             'combo_count' => $comboCount,
-            'status' => SmartEditGroup::STATUS_EXPANDING,
+            'status' => $hasDubbing ? SmartEditGroup::STATUS_DUBBING : SmartEditGroup::STATUS_EXPANDING,
             'create_time' => time(),
             'update_time' => time(),
         ]);
 
         try {
-            SmartEditGroupExpandJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+            if ($hasDubbing) {
+                SmartEditDubbingJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+            } else {
+                SmartEditGroupExpandJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+            }
             Log::channel('mns')->info(sprintf(
-                '[smart_edit] group dispatched batch=%s tenant=%d combos=%d',
+                '[smart_edit] group dispatched batch=%s tenant=%d combos=%d dubbing=%d',
                 $batchNo,
                 $tenantId,
-                $comboCount
+                $comboCount,
+                $hasDubbing ? 1 : 0
             ));
         } catch (\Throwable $e) {
             // 投递失败必须留痕：常见原因是 MNS 未配置或队列不存在

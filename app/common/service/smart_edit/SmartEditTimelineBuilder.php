@@ -26,6 +26,9 @@ class SmartEditTimelineBuilder
     /** 标题默认字号（像素） */
     public const TITLE_FONT_SIZE = 48;
 
+    /** 字幕默认字号（像素）；底部字幕比标题小一档 */
+    public const SUBTITLE_FONT_SIZE = 42;
+
     /** 标题默认颜色 */
     public const TITLE_FONT_COLOR = '#FFFFFF';
 
@@ -36,7 +39,7 @@ class SmartEditTimelineBuilder
     private const TITLE_TOP_FALLBACK_PX = 86;
 
     /**
-     * 多视频合并，并按需叠加贴纸与背景音乐。
+     * 多视频合并，并按需叠加贴纸、背景音乐、字幕与配音。
      *
      * @param array  $items        [['media_url'=>string,'in'=>float,'out'=>float], ...]
      * @param string $coverUrl     封面图片的公网地址；为空表示不加封面
@@ -44,6 +47,8 @@ class SmartEditTimelineBuilder
      * @param int    $outputHeight 成片高度（像素），用于换算标题的纵向位置
      * @param array  $stickers     贴纸片段，元素见 stickerClip()
      * @param array  $audioClips   背景音乐片段，元素见 audioClip()
+     * @param array  $subtitles    字幕片段，元素见 subtitleClip()（已排好时间轴）
+     * @param array  $dubbingClips 配音片段，元素见 dubbingClip()（已排好时间轴）
      */
     public static function buildMerge(
         array $items,
@@ -51,7 +56,9 @@ class SmartEditTimelineBuilder
         array $titles = [],
         int $outputHeight = 0,
         array $stickers = [],
-        array $audioClips = []
+        array $audioClips = [],
+        array $subtitles = [],
+        array $dubbingClips = []
     ): array {
         $clips = [];
         foreach ($items as $item) {
@@ -107,25 +114,95 @@ class SmartEditTimelineBuilder
             ];
         }
 
-        // 标题组走独立文字轨：多条 clip 叠加，起止/字体/颜色/对齐都由前端决定。
+        // 文字轨：标题一条、字幕一条。
+        // 分开是因为标题是自由定位的叠加文字（可多条同时显示），
+        // 字幕是按口播逐句出现的时间轴，同轨会让 IMS 的排版互相干扰。
+        $subtitleTracks = [];
         $titleClips = self::titleClips($titles, $outputHeight);
         if ($titleClips !== []) {
-            $timeline['SubtitleTracks'] = [
-                ['SubtitleTrackClips' => $titleClips],
+            $subtitleTracks[] = ['SubtitleTrackClips' => $titleClips];
+        }
+        if ($subtitles !== []) {
+            $subtitleTracks[] = [
+                'SubtitleTrackClips' => array_map(
+                    static fn(array $item): array => self::subtitleClip($item),
+                    $subtitles
+                ),
             ];
         }
+        if ($subtitleTracks !== []) {
+            $timeline['SubtitleTracks'] = $subtitleTracks;
+        }
 
-        // 背景音乐独占音频轨；Volume 由前端给出，这里不做业务假设。
+        // 音频：背景音乐一条、配音一条，各自独立轨。
+        // 配音与背景音乐叠在一起，用户配置背景音量时才有意义。
+        $audioTracks = [];
         if ($audioClips !== []) {
-            $timeline['AudioTracks'] = [
-                ['AudioTrackClips' => array_map(
-                    static fn(array $audio): array => self::audioClip($audio),
-                    $audioClips
-                )],
-            ];
+            $audioTracks[] = ['AudioTrackClips' => array_map(
+                static fn(array $audio): array => self::audioClip($audio),
+                $audioClips
+            )];
+        }
+        if ($dubbingClips !== []) {
+            $audioTracks[] = ['AudioTrackClips' => array_map(
+                static fn(array $item): array => self::dubbingClip($item),
+                $dubbingClips
+            )];
+        }
+        if ($audioTracks !== []) {
+            $timeline['AudioTracks'] = $audioTracks;
         }
 
         return $timeline;
+    }
+
+    /**
+     * 字幕片段。
+     *
+     * 与标题的差别：时间轴由调用方按口播排好后传入，这里只做透传，
+     * 不再自己推导区间——字幕必须和声音严格一致。
+     *
+     * @param array $item 已组装好的字幕片段（见 SmartEditService::subtitleClip）
+     */
+    private static function subtitleClip(array $item): array
+    {
+        $timelineIn = round((float)($item['TimelineIn'] ?? 0), 4);
+        $timelineOut = round((float)($item['TimelineOut'] ?? 0), 4);
+        if ($timelineOut <= $timelineIn) {
+            throw new Exception('字幕时间区间无效');
+        }
+
+        $clip = $item;
+        $clip['TimelineIn'] = $timelineIn;
+        $clip['TimelineOut'] = $timelineOut;
+        return $clip;
+    }
+
+    /**
+     * 配音片段。
+     *
+     * 逐句一条，靠 TimelineIn 排开，句间间隔自然形成。
+     * 用 TimelineIn/Out 而不是 In/Out：In/Out 是素材自身的裁取点，
+     * 这里要放的是「这段音频出现在成片的第几秒」。
+     *
+     * @param array $item ['media_url'=>string,'timeline_in'=>float,'timeline_out'=>float]
+     */
+    private static function dubbingClip(array $item): array
+    {
+        $url = (string)($item['media_url'] ?? '');
+        if ($url === '') {
+            throw new Exception('配音素材地址缺失');
+        }
+        $timelineIn = round((float)($item['timeline_in'] ?? 0), 4);
+        $timelineOut = round((float)($item['timeline_out'] ?? 0), 4);
+        if ($timelineOut <= $timelineIn) {
+            throw new Exception('配音时间区间无效');
+        }
+        return [
+            'MediaURL' => $url,
+            'TimelineIn' => $timelineIn,
+            'TimelineOut' => $timelineOut,
+        ];
     }
 
     /**
@@ -205,7 +282,7 @@ class SmartEditTimelineBuilder
      * @param mixed $value        前端传入的 Y
      * @param int   $outputHeight 成片高度（像素）
      */
-    private static function titleY($value, int $outputHeight): int
+    public static function titleY($value, int $outputHeight): int
     {
         if ($value !== null && is_numeric($value)) {
             $value = (float)$value;

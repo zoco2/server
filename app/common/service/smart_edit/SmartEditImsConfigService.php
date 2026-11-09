@@ -125,6 +125,55 @@ class SmartEditImsConfigService
     }
 
     /**
+     * 上传内容到这套配置指向的 Bucket。
+     *
+     * IMS 只能拉 OSS 上的在线资源，所以 TTS 产物、字幕附件这类后端生成的文件
+     * 必须写进这套 Bucket，落到租户通用存储里 IMS 是读不到的。
+     *
+     * @param array  $config SmartEditImsConfigService::require() 的结果
+     * @param string $key    对象 key
+     * @param string $content 文件二进制内容
+     * @param string $mime   Content-Type，如 audio/mpeg
+     */
+    public static function putObject(array $config, string $key, string $content, string $mime = 'application/octet-stream'): void
+    {
+        $key = ltrim($key, '/');
+        if ($key === '' || str_contains($key, '..')) {
+            throw new Exception('对象 key 非法');
+        }
+        if ($content === '') {
+            throw new Exception('上传内容为空');
+        }
+
+        try {
+            $client = new OssClient(
+                (string)$config['access_key'],
+                (string)$config['secret_key'],
+                (string)$config['domain'],
+                true
+            );
+            $client->putObject((string)$config['bucket'], $key, $content, [
+                OssClient::OSS_CONTENT_TYPE => $mime,
+            ]);
+        } catch (\OSS\Core\OssException $e) {
+            throw new Exception('上传到阿里云 OSS 失败：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 生成后端产物的对象 key，按年月分目录，避免单目录文件过多。
+     *
+     * @param array  $config   SmartEditImsConfigService::require() 的结果
+     * @param string $prefix   业务前缀，如 dubbing
+     * @param string $filename 文件名
+     */
+    public static function generatedKey(array $config, string $prefix, string $filename): string
+    {
+        $prefix = trim($prefix, '/') ?: 'smart-edit-generated';
+        return $prefix . '/' . date('Ym') . '/' . ltrim($filename, '/');
+    }
+
+    /**
      * 对象 key -> 可被 IMS 拉取的完整地址。
      */
     public static function objectUrl(array $config, string $uri): string

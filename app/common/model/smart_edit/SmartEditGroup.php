@@ -29,6 +29,8 @@ class SmartEditGroup extends BaseModel
         'combo_count' => 'integer',
     ];
 
+    /** 组行已落库，正在生成 TTS 口播 */
+    public const STATUS_DUBBING = 'dubbing';
     /** 组行已落库，正在展开成任务 */
     public const STATUS_EXPANDING = 'expanding';
     /** 全部组合已生成并投递提交 job */
@@ -37,5 +39,5 @@ class SmartEditGroup extends BaseModel
     public const STATUS_FAILED = 'failed';
 
     /** 展开阶段的非终态集合；成片进度另由子任务聚合 */
-    public const RUNNING_STATUSES = [self::STATUS_EXPANDING];
+    public const RUNNING_STATUSES = [self::STATUS_DUBBING, self::STATUS_EXPANDING];
 }

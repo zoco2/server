@@ -14634,7 +14634,7 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_group` (
   `shots_json` text NULL COMMENT '镜头定义快照',
   `config_json` text NULL COMMENT '整组共用配置快照',
   `combo_count` int unsigned NOT NULL DEFAULT 0 COMMENT '组合总数',
-  `status` varchar(20) NOT NULL DEFAULT 'expanding' COMMENT 'expanding/submitted/failed',
+  `status` varchar(20) NOT NULL DEFAULT 'expanding' COMMENT 'dubbing/expanding/submitted/failed',
   `error_code` varchar(80) NOT NULL DEFAULT '',
   `error_message` varchar(500) NOT NULL DEFAULT '',
   `create_time` int unsigned NOT NULL DEFAULT 0,
@@ -14645,3 +14645,27 @@ CREATE TABLE IF NOT EXISTS `la_smart_edit_group` (
   KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
   KEY `idx_tenant_status` (`tenant_id`,`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑镜头组';
+
+-- ----------------------------
+-- Table structure for la_smart_edit_dubbing
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS `la_smart_edit_dubbing` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL DEFAULT 0,
+  `user_id` int unsigned NOT NULL DEFAULT 0,
+  `batch_no` varchar(40) NOT NULL DEFAULT '' COMMENT '所属组号',
+  `voice_index` int unsigned NOT NULL DEFAULT 0 COMMENT '第几个音色，从 0 起',
+  `voice_key` varchar(80) NOT NULL DEFAULT '' COMMENT '音色 key（见 SmartEditVoiceService）',
+  `voice_name` varchar(80) NOT NULL DEFAULT '' COMMENT '音色显示名',
+  `provider_asset_id` varchar(120) NOT NULL DEFAULT '' COMMENT '火山 speaker ID',
+  `audio_uri` varchar(500) NOT NULL DEFAULT '' COMMENT '拼接后整段口播的 OSS object key',
+  `duration` decimal(10,4) NOT NULL DEFAULT 0.0000 COMMENT '口播总时长秒',
+  `lines_json` text NULL COMMENT '逐句时间轴 [{text,duration,timeline_in,timeline_out}]',
+  `status` varchar(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/processing/success/failed',
+  `error_message` varchar(500) NOT NULL DEFAULT '',
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_batch_voice` (`batch_no`,`voice_index`),
+  KEY `idx_tenant_batch` (`tenant_id`,`batch_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能剪辑 TTS 口播';

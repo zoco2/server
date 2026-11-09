@@ -21,6 +21,12 @@ class SmartEditTaskItem extends BaseModel
     /** 背景音乐：独占音频轨 */
     public const TYPE_AUDIO = 'audio';
 
+    /** 字幕：按口播逐句排布的文字轨 */
+    public const TYPE_SUBTITLE = 'subtitle';
+
+    /** 配音：TTS 逐句合成的口播片段 */
+    public const TYPE_DUBBING = 'dubbing';
+
     public function getInSecAttr($value): float
     {
         return (float)$value;
