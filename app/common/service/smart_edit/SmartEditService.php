@@ -34,8 +34,11 @@ class SmartEditService
     /** @deprecated 兼容旧常量名，等同每组上限 */
     public const MAX_STICKERS = 2;
 
-    /** 背景音乐数量上限 */
-    public const MAX_AUDIOS = 3;
+    /** 每组只有 1 段背景音乐 */
+    public const MAX_AUDIOS = 1;
+
+    /** 最多背景音乐组数；笛卡尔积成片按 combo 序号循环取组 */
+    public const MAX_AUDIO_GROUPS = 50;
 
     /** 标题文案最大字数 */
     public const MAX_TITLE_TEXT_LENGTH = 30;
@@ -210,6 +213,7 @@ class SmartEditService
                 'title_overlay' => $titleConfig,
                 'title_group_index' => (int)($shared['title_group_index'] ?? 0),
                 'sticker_group_index' => (int)($shared['sticker_group_index'] ?? 0),
+                'audio_group_index' => (int)($shared['audio_group_index'] ?? 0),
                 'stickers' => $stickerInputs,
                 'audios' => $audioInputs,
                 'batch_no' => $batchNo,
@@ -595,7 +599,7 @@ class SmartEditService
      * 与 validate() 共用同一套子方法，保证组和单任务对同名字段的理解一致。
      *
      * @param array $params 前端参数
-     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array}
+     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array}
      */
     public static function normalizeSharedForGroup(array $params): array
     {
@@ -617,6 +621,7 @@ class SmartEditService
 
         $titleGroups = self::normalizeTitleGroups($params);
         $stickerGroups = self::normalizeStickerGroups($params);
+        $audioGroups = self::normalizeAudioGroups($params);
         return [
             'edit_type' => $editType,
             'title' => mb_substr($title, 0, 100),
@@ -627,15 +632,16 @@ class SmartEditService
             'title_groups' => $titleGroups,
             'stickers' => $stickerGroups[0] ?? [],
             'sticker_groups' => $stickerGroups,
-            'audios' => self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []),
+            'audios' => $audioGroups[0] ?? [],
+            'audio_groups' => $audioGroups,
         ];
     }
 
     /**
-     * 按组合序号循环取标题组 / 贴纸组，写回供建任务使用。
+     * 按组合序号循环取标题组 / 贴纸组 / 背景音乐组，写回供建任务使用。
      *
      * combo_index 从 1 起：C1→G0，C2→G1，…，用完再从头。
-     * 标题组与贴纸组各自独立循环。
+     * 三类组各自独立循环，互不影响。
      *
      * @param array $shared     normalizeSharedForGroup 的结果
      * @param int   $comboIndex 组合序号（从 1 起）
@@ -658,6 +664,16 @@ class SmartEditService
             $picked = $stickerGroups[$index] ?? [];
             $shared['stickers'] = is_array($picked) ? $picked : [];
             $shared['sticker_group_index'] = $index;
+        }
+
+        // 背景音乐：空组也参与循环，代表这一批成片不带背景音乐
+        $audioGroups = $shared['audio_groups'] ?? null;
+        if (is_array($audioGroups) && $audioGroups !== []) {
+            $count = count($audioGroups);
+            $index = $comboIndex > 0 ? ($comboIndex - 1) % $count : 0;
+            $picked = $audioGroups[$index] ?? [];
+            $shared['audios'] = is_array($picked) ? $picked : [];
+            $shared['audio_group_index'] = $index;
         }
 
         return $shared;
@@ -706,7 +722,24 @@ class SmartEditService
             }
         }
 
-        foreach ((array)($shared['audios'] ?? []) as $audio) {
+        // 背景音乐：多组时把每组里的每一段都校验到，避免轮换到的组到消费端才失败
+        $audioList = [];
+        $audioGroups = $shared['audio_groups'] ?? null;
+        if (is_array($audioGroups) && $audioGroups !== []) {
+            foreach ($audioGroups as $group) {
+                if (is_array($group)) {
+                    foreach ($group as $audio) {
+                        $audioList[] = $audio;
+                    }
+                }
+            }
+        } else {
+            $audioList = (array)($shared['audios'] ?? []);
+        }
+        foreach ($audioList as $audio) {
+            if (!is_array($audio)) {
+                continue;
+            }
             $uri = (string)($audio['uri'] ?? '');
             if ($uri !== '') {
                 SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
@@ -963,6 +996,34 @@ class SmartEditService
     }
 
     /**
+     * 多组背景音乐归一化。
+     *
+     * - audio_groups: [[{uri,...}, ...], ...] 多组，成片按 combo 循环取组
+     * - 空数组：表示该组成片不带背景音乐，循环时同样占一个位置
+     * - 仅 audios：视为单组
+     *
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    private static function normalizeAudioGroups(array $params): array
+    {
+        $raw = $params['audio_groups'] ?? null;
+        if (is_array($raw) && $raw !== [] && array_is_list($raw)) {
+            if (count($raw) > self::MAX_AUDIO_GROUPS) {
+                throw new Exception('一次最多添加 ' . self::MAX_AUDIO_GROUPS . ' 组背景音乐');
+            }
+            $groups = [];
+            foreach ($raw as $group) {
+                // 与标题 / 贴纸不同，空组要保留：它代表这批成片静音
+                $groups[] = self::normalizeAudios(is_array($group) ? $group : []);
+            }
+            return $groups;
+        }
+
+        $single = self::normalizeAudios($params['audios'] ?? $params['audios_tracks'] ?? []);
+        return $single === [] ? [] : [$single];
+    }
+
+    /**
      * 贴纸片段归一化。
      *
      * 只负责「取值是否合法」，不替前端决定位置：
@@ -1087,7 +1148,7 @@ class SmartEditService
             return [];
         }
         if (count($raw) > self::MAX_AUDIOS) {
-            throw new Exception('一次最多添加 ' . self::MAX_AUDIOS . ' 段背景音乐');
+            throw new Exception('每组只能添加 1 段背景音乐');
         }
         $map = [
             'in' => 'In',
