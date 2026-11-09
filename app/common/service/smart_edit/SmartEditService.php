@@ -37,9 +37,6 @@ class SmartEditService
     /** 背景音乐数量上限 */
     public const MAX_AUDIOS = 3;
 
-    /** 贴纸未指定结束时间时的默认展示时长（秒） */
-    public const STICKER_DEFAULT_SECONDS = 60.0;
-
     /** 标题文案最大字数 */
     public const MAX_TITLE_TEXT_LENGTH = 30;
 
@@ -185,6 +182,14 @@ class SmartEditService
 
         $output = SmartEditMaterialService::outputTarget($config, $taskNo);
         $titleConfig = self::resolveTitleFonts($config, $titleConfig);
+
+        // 贴纸是图片，没有自身时长；未指定区间时铺满正片，跨出正片的也裁到正片以内，
+        // 否则 IMS 会按贴纸轨的结束点决定成片时长，正片之后留下一段黑屏。
+        // 没有贴纸时不推算也不校验，保持正片按素材自身时长出片的旧路径。
+        if ($stickers !== []) {
+            $stickers = self::alignStickerTimeline($stickers, self::mainTrackDuration($items, $coverUrl !== ''));
+        }
+
         $timeline = self::buildTimeline($editType, $items, $coverUrl, $titleConfig, $outputHeight, $stickers, $audios);
 
         $task = SmartEditTask::create([
@@ -1005,14 +1010,13 @@ class SmartEditService
                 }
                 $row[$field] = (float)$value;
             }
-            // 贴纸必须有明确时长，否则 IMS 找不到可渲染区间会直接忽略这个片段
+            // 贴纸必须有明确区间，否则 IMS 找不到可渲染区间会直接忽略这个片段。
+            // 但时长不在这里猜：结束时间留空时由 alignStickerTimeline() 铺满正片，
+            // 写死一个固定秒数会把成片按贴纸轨的结束点拉长，正片之后就是黑屏。
             if (!isset($row['TimelineIn'])) {
                 $row['TimelineIn'] = 0;
             }
-            if (!isset($row['TimelineOut'])) {
-                $row['TimelineOut'] = self::defaultStickerSeconds($row['TimelineIn']);
-            }
-            if ($row['TimelineOut'] <= $row['TimelineIn']) {
+            if (isset($row['TimelineOut']) && $row['TimelineOut'] <= $row['TimelineIn']) {
                 throw new Exception('贴纸结束时间必须大于开始时间');
             }
             $rows[] = $row;
@@ -1021,13 +1025,54 @@ class SmartEditService
     }
 
     /**
-     * 贴纸未给结束时间时的默认时长。
+     * 把贴纸区间对齐到正片时长。
      *
-     * 前端只传位置时不至于整段消失，给一个足够长的区间覆盖常见成片。
+     * 贴纸是图片，没有自身时长，IMS 必须拿到明确的 TimelineOut 与 Duration 才会渲染；
+     * 而 IMS 的成片时长取各轨最晚结束点，贴纸一旦越过正片，多出来的部分就是黑屏。
+     * 所以未指定结束时间时铺满正片，指定了也裁到正片以内。
+     *
+     * @param array $stickers     normalizeStickers 的结果
+     * @param float $mainDuration 正片（含封面）总时长，必须 > 0
      */
-    private static function defaultStickerSeconds(float $from): float
+    private static function alignStickerTimeline(array $stickers, float $mainDuration): array
     {
-        return round($from + self::STICKER_DEFAULT_SECONDS, 4);
+        foreach ($stickers as $index => $sticker) {
+            $timelineIn = round((float)($sticker['TimelineIn'] ?? 0), 4);
+            $timelineOut = isset($sticker['TimelineOut'])
+                ? round((float)$sticker['TimelineOut'], 4)
+                : $mainDuration;
+            $timelineOut = min($timelineOut, $mainDuration);
+            if ($timelineOut <= $timelineIn) {
+                throw new Exception('贴纸开始时间超出视频总时长');
+            }
+            $stickers[$index]['TimelineIn'] = $timelineIn;
+            $stickers[$index]['TimelineOut'] = $timelineOut;
+        }
+        return $stickers;
+    }
+
+    /**
+     * 正片（含封面）在成片里占用的总时长。
+     *
+     * 合并是顺序拼接，所以等于各片段截取长度之和再加封面固定长度。
+     * 前端提交的每个片段都带结束时间；拿不到有效区间说明参数不合预期，
+     * 直接报错，不用写死的秒数把成片拉长。
+     *
+     * @param array $items    片段列表（in/out 已归一化）
+     * @param bool  $hasCover 是否加了封面
+     */
+    private static function mainTrackDuration(array $items, bool $hasCover): float
+    {
+        $total = $hasCover ? SmartEditTimelineBuilder::COVER_SECONDS : 0.0;
+        foreach ($items as $item) {
+            $in = (float)($item['in'] ?? 0);
+            $out = (float)($item['out'] ?? 0);
+            if ($out <= $in) {
+                throw new Exception('视频片段的截取区间无效，无法计算贴纸时长');
+            }
+            $total += $out - $in;
+        }
+        return round($total, 4);
     }
 
     /**

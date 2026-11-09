@@ -273,10 +273,12 @@ class SmartEditTimelineBuilder
                 $clip[$key] = $sticker[$key];
             }
         }
-        $timelineIn = isset($sticker['TimelineIn']) ? round((float)$sticker['TimelineIn'], 4) : 0.0;
-        $timelineOut = isset($sticker['TimelineOut']) ? round((float)$sticker['TimelineOut'], 4) : 0.0;
+        $timelineIn = round((float)($sticker['TimelineIn'] ?? 0), 4);
+        $timelineOut = round((float)($sticker['TimelineOut'] ?? 0), 4);
+        // 区间由 SmartEditService::alignStickerTimeline() 按正片时长对齐后传进来，
+        // 这里不再兜底一个固定秒数：兜底会把成片拉到贴纸轨的结束点，正片之后变成黑屏。
         if ($timelineOut <= $timelineIn) {
-            $timelineOut = round($timelineIn + SmartEditService::STICKER_DEFAULT_SECONDS, 4);
+            throw new Exception('贴纸时间区间无效');
         }
         $clip['TimelineIn'] = $timelineIn;
         $clip['TimelineOut'] = $timelineOut;
