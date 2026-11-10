@@ -48,8 +48,8 @@ class WenanEnhanceService
         ],
         'smart_edit_subtitle' => [
             'label' => '智能剪辑字幕/配音文案',
-            'max' => 200,
-            'hint' => '口语顺畅、适合念白，一句一个意思，便于配音断句。',
+            'max' => 20,
+            'hint' => '口语顺畅、适合念白，一句一个意思，便于配音断句；单条不超过20字。',
         ],
         'general' => [
             'label' => '通用文案',
@@ -265,7 +265,7 @@ class WenanEnhanceService
     {
         $byScene = match ($scene) {
             'smart_edit_title' => 64,
-            'smart_edit_subtitle' => 256,
+            'smart_edit_subtitle' => 64,
             'knowledge_title' => 160,
             'knowledge_summary' => 640,
             default => 0,
@@ -381,7 +381,7 @@ PROMPT;
         // 短视频字幕/标题：结果不应远长于原文太多（除非原文极短允许略扩）
         if (in_array($scene, ['smart_edit_title', 'smart_edit_subtitle'], true) && $source !== '') {
             $sourceLen = mb_strlen($source);
-            $softCap = max($sourceLen * 3, $scene === 'smart_edit_title' ? 16 : 24);
+            $softCap = max($sourceLen * 3, $scene === 'smart_edit_title' ? 16 : 12);
             $softCap = min($maxLength, $softCap);
             if (mb_strlen($result) > $softCap && self::looksLikeMetaLeak($result, $source)) {
                 throw new Exception('模型返回了无效内容，请重试，原文已保留');
