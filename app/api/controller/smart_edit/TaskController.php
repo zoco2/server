@@ -4,6 +4,7 @@ namespace app\api\controller\smart_edit;
 
 use app\api\controller\BaseApiController;
 use app\api\lists\smart_edit\SmartEditTaskLists;
+use app\common\service\smart_edit\SmartEditDubbingService;
 use app\common\service\smart_edit\SmartEditFontService;
 use app\common\service\smart_edit\SmartEditService;
 use app\common\service\smart_edit\SmartEditVoiceService;
@@ -28,11 +29,31 @@ class TaskController extends BaseApiController
     }
 
     /**
-     * 可选配音音色：内置清单 + 租户后台追加的音色。
+     * 选配音弹窗目录：tabs（豆包2.0 / 克隆 / scene）+ voices。
      */
     public function voices()
     {
-        return $this->success('获取成功', SmartEditVoiceService::options((int)$this->request->tenantId));
+        return $this->success(
+            '获取成功',
+            SmartEditVoiceService::pickerCatalog((int)$this->request->tenantId)
+        );
+    }
+
+    /**
+     * 试听一个音色，返回可直接播放的地址。
+     */
+    public function voicePreview()
+    {
+        try {
+            $result = SmartEditDubbingService::preview(
+                (int)$this->request->tenantId,
+                (string)$this->request->post('voice_key', ''),
+                (string)$this->request->post('text', '')
+            );
+            return $this->success('合成成功', $result);
+        } catch (Exception $e) {
+            return $this->fail($e->getMessage());
+        }
     }
 
     public function detail()

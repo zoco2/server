@@ -636,10 +636,15 @@ class SmartEditVoiceService
         return array_values($rows);
     }
 
+    /** 产品级 Tab：豆包 2.0 内置 */
+    public const TAB_DB = 'db';
+    /** 产品级 Tab：租户追加/克隆人声 */
+    public const TAB_CLONE = 'clone';
+
     /**
-     * 前端下拉用的音色列表。
+     * 前端下拉用的音色列表（租户后台编辑仍走此结构）。
      *
-     * scene 即分类，供前端分组/筛选；avatar 为官方门户头像 URL。
+     * scene 即分类；avatar 为官方门户头像 URL。
      *
      * @param int  $tenantId      租户 ID；0 表示只看内置清单
      * @param bool $withAssetId   是否返回 provider_asset_id。租户后台的音色管理要编辑它，
@@ -666,6 +671,69 @@ class SmartEditVoiceService
             $result[] = $row;
         }
         return $result;
+    }
+
+    /**
+     * 用户端选配音弹窗用的结构化目录：tabs + voices。
+     *
+     * Tab 规则：
+     * - db：豆包大模型2.0（全部非 custom）
+     * - clone：克隆人声（custom）
+     * - 其余按 scene 去重；音色 tabs 同时挂产品级 + scene
+     *
+     * @return array{tabs: array<int, array{key:string,label:string,badge?:string,badge_color?:string}>, voices: array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool,tabs:array<int,string>}>}
+     */
+    public static function pickerCatalog(int $tenantId = 0): array
+    {
+        $voices = [];
+        $sceneKeys = [];
+        foreach (self::catalog($tenantId) as $item) {
+            $label = (string)$item['label'];
+            $scene = trim((string)$item['scene']);
+            $custom = (bool)$item['custom'];
+            $tabs = [$custom ? self::TAB_CLONE : self::TAB_DB];
+            if ($scene !== '') {
+                $tabs[] = $scene;
+                if (!isset($sceneKeys[$scene])) {
+                    $sceneKeys[$scene] = true;
+                }
+            }
+            $voices[] = [
+                'key' => (string)$item['key'],
+                'label' => $label,
+                'gender' => (string)$item['gender'],
+                'scene' => $scene,
+                'avatar' => self::avatarUrl($label),
+                'custom' => $custom,
+                'tabs' => array_values(array_unique($tabs)),
+            ];
+        }
+
+        $tabs = [
+            [
+                'key' => self::TAB_DB,
+                'label' => '豆包大模型2.0',
+                'badge' => 'NEW',
+                'badge_color' => '#34C759',
+            ],
+            [
+                'key' => self::TAB_CLONE,
+                'label' => '克隆人声',
+                'badge' => '独家',
+                'badge_color' => '#FF2D55',
+            ],
+        ];
+        foreach (array_keys($sceneKeys) as $scene) {
+            $tabs[] = [
+                'key' => $scene,
+                'label' => $scene,
+            ];
+        }
+
+        return [
+            'tabs' => $tabs,
+            'voices' => $voices,
+        ];
     }
 
     /**
