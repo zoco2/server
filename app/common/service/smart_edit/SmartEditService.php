@@ -53,7 +53,7 @@ class SmartEditService
     public const MAX_COVERS = 20;
 
     /** 字幕单条最大字数（受上游单次合成长度约束） */
-    public const MAX_SUBTITLE_TEXT_LENGTH = 200;
+    public const MAX_SUBTITLE_TEXT_LENGTH = 20;
 
     /** 单组最多字幕条数 */
     public const MAX_SUBTITLES = 30;
