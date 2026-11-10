@@ -139,16 +139,15 @@ class WenanEnhanceService
         }
 
         $brandContext = self::resolveBrandContext($params);
+        // 只走 generateText 常规参数，与套图/图片 prompt helper 一致；
+        // 不传 enable_thinking / max_tokens，避免上游 422 污染其它模型调用路径的认知。
+        // 思考链泄漏靠下方 prompt + validateResult 本地拦截，不改共用 Runtime。
         $result = AigcLlmService::generateText($tenantId, $userId, [
             'system_prompt' => self::systemPrompt($mode, $scene, $sceneMeta, $maxLength, $tone),
             'content' => self::userContent($mode, $scene, $sceneMeta['label'], $text, $hint, $brandContext, $maxLength),
             'source_app_code' => self::SOURCE_APP_CODE,
             'source_type' => 'wenan_helper',
             'request_timeout_seconds' => 90,
-            // 文案改写只要最终正文；思考链泄漏会污染字幕/标题输入框
-            'enable_thinking' => false,
-            '_require_final_content' => true,
-            'max_tokens' => self::resolveMaxTokens($scene, $maxLength),
         ]);
 
         $output = self::validateResult(
