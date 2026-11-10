@@ -676,10 +676,8 @@ class SmartEditVoiceService
     /**
      * 用户端选配音弹窗用的结构化目录：tabs + voices。
      *
-     * Tab 规则：
-     * - db：豆包大模型2.0（全部非 custom）
-     * - clone：克隆人声（custom）
-     * - 其余按 scene 去重；音色 tabs 同时挂产品级 + scene
+     * 当前只暴露内置音色；克隆人声 / 自定义先不做，后续再迭代。
+     * Tab：db（豆包大模型2.0）+ 按 scene 去重。
      *
      * @return array{tabs: array<int, array{key:string,label:string,badge?:string,badge_color?:string}>, voices: array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool,tabs:array<int,string>}>}
      */
@@ -688,11 +686,14 @@ class SmartEditVoiceService
         $voices = [];
         $sceneKeys = [];
         foreach (self::catalog($tenantId) as $item) {
+            // 暂时只展示内置，跳过租户自定义 / 克隆
+            if (!empty($item['custom'])) {
+                continue;
+            }
             $label = (string)$item['label'];
             $scene = trim((string)$item['scene']);
-            $custom = (bool)$item['custom'];
-            $tabs = [$custom ? self::TAB_CLONE : self::TAB_DB];
-            if ($scene !== '') {
+            $tabs = [self::TAB_DB];
+            if ($scene !== '' && $scene !== '自定义') {
                 $tabs[] = $scene;
                 if (!isset($sceneKeys[$scene])) {
                     $sceneKeys[$scene] = true;
@@ -704,7 +705,7 @@ class SmartEditVoiceService
                 'gender' => (string)$item['gender'],
                 'scene' => $scene,
                 'avatar' => self::avatarUrl($label),
-                'custom' => $custom,
+                'custom' => false,
                 'tabs' => array_values(array_unique($tabs)),
             ];
         }
@@ -715,12 +716,6 @@ class SmartEditVoiceService
                 'label' => '豆包大模型2.0',
                 'badge' => 'NEW',
                 'badge_color' => '#34C759',
-            ],
-            [
-                'key' => self::TAB_CLONE,
-                'label' => '克隆人声',
-                'badge' => '独家',
-                'badge_color' => '#FF2D55',
             ],
         ];
         foreach (array_keys($sceneKeys) as $scene) {
