@@ -692,7 +692,7 @@ class SmartEditService
      *
      * @param array $params   前端参数
      * @param int   $tenantId 租户 ID，用于校验配音音色是否在当前租户的清单内
-     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array, subtitle_groups: array, subtitle_gap: float, voices: array}
+     * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array, subtitle_groups: array, subtitle_gap: float, voice_speed: float|null, voice_volume: float|null, voices: array}
      */
     public static function normalizeSharedForGroup(array $params, int $tenantId = 0): array
     {
@@ -734,6 +734,9 @@ class SmartEditService
             // 全局字幕只有一组；subtitle_groups 保留一层是为了以后支持分镜字幕
             'subtitle_groups' => $subtitles === [] ? [] : [$subtitles],
             'subtitle_gap' => self::normalizeSubtitleGap($params),
+            // 配音音频参数：语速缺省时用租户配置的默认语速，音量缺省按原声
+            'voice_speed' => self::normalizeVoiceSpeed($params),
+            'voice_volume' => self::normalizeVoiceVolume($params),
             // 配音演员：每个音色一套口播，成片按 combo 轮换
             'voices' => $voices,
         ];
@@ -899,6 +902,35 @@ class SmartEditService
             return self::DEFAULT_SUBTITLE_GAP;
         }
         return round(max(0.0, min(5.0, $value)), 3);
+    }
+
+    /**
+     * 配音语速倍数：0.5 ~ 2，缺省 null。
+     *
+     * null 表示前端没传，合成时回落到租户配置的默认语速，
+     * 避免改版前的调用方行为发生变化。
+     */
+    private static function normalizeVoiceSpeed(array $params): ?float
+    {
+        $value = self::numberOrNull($params['voice_speed'] ?? null);
+        if ($value === null) {
+            return null;
+        }
+        return round(max(0.5, min(2.0, $value)), 2);
+    }
+
+    /**
+     * 配音音量倍数：0 ~ 3，缺省 null（按 1 倍原声）。
+     *
+     * 上游 loudness_rate 最低只能压到 0.5 倍，具体折算在 VolcTtsClient 里处理。
+     */
+    private static function normalizeVoiceVolume(array $params): ?float
+    {
+        $value = self::numberOrNull($params['voice_volume'] ?? null);
+        if ($value === null) {
+            return null;
+        }
+        return round(max(0.0, min(3.0, $value)), 2);
     }
 
     /**

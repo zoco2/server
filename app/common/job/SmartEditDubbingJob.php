@@ -58,6 +58,13 @@ class SmartEditDubbingJob extends Job
         $gap = isset($shared['subtitle_gap']) && is_numeric($shared['subtitle_gap'])
             ? (float)$shared['subtitle_gap']
             : SmartEditDubbingService::DEFAULT_GAP;
+        // 音量 / 语速按用户提交值合成；语速没传时由服务层回落租户默认值
+        $speed = isset($shared['voice_speed']) && is_numeric($shared['voice_speed'])
+            ? (float)$shared['voice_speed']
+            : null;
+        $volume = isset($shared['voice_volume']) && is_numeric($shared['voice_volume'])
+            ? (float)$shared['voice_volume']
+            : null;
 
         Log::channel('mns')->info(sprintf(
             '[smart_edit] dubbing start batch=%s voices=%d subtitles=%d attempt=%d',
@@ -74,7 +81,9 @@ class SmartEditDubbingJob extends Job
                 $batchNo,
                 $subtitles,
                 $voiceKeys,
-                $gap
+                $gap,
+                $speed,
+                $volume
             );
         } catch (\Throwable $e) {
             Log::channel('mns')->error(sprintf(

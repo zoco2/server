@@ -38,10 +38,17 @@ class SmartEditDubbingService
      * @param int    $tenantId 租户 ID
      * @param string $voiceKey 音色 key
      * @param string $text     试听文本，为空时用默认短句
+     * @param float|null $speed  语速倍数，null 用租户默认值
+     * @param float|null $volume 音量倍数，null 按原声
      * @return array{url:string,duration:float}
      */
-    public static function preview(int $tenantId, string $voiceKey, string $text = ''): array
-    {
+    public static function preview(
+        int $tenantId,
+        string $voiceKey,
+        string $text = '',
+        ?float $speed = null,
+        ?float $volume = null
+    ): array {
         $voice = SmartEditVoiceService::get($tenantId, $voiceKey);
         $text = trim($text);
         if ($text === '') {
@@ -58,17 +65,21 @@ class SmartEditDubbingService
             $voiceConfig['resource_id']
         );
 
+        $speed = self::clampSpeed($speed ?? (float)$voiceConfig['default_speed']);
+        $volume = self::clampVolume($volume ?? 1.0);
         $audio = $client->synthesize($text, (string)$voice['provider_asset_id'], [
-            'speed' => (float)$voiceConfig['default_speed'],
+            'speed' => $speed,
+            'volume' => $volume,
             'uid' => 'smart_edit_preview',
         ]);
         $duration = self::detectAudioDuration($audio);
 
-        // 按音色 key 固定文件名，同一音色反复试听只覆盖同一个对象，不堆垃圾文件
+        // 按「音色 + 参数」固定文件名：同参数反复试听只覆盖同一个对象，
+        // 参数不同则换 key，避免浏览器命中上一组音量/语速的缓存音频。
         $key = SmartEditImsConfigService::generatedKey(
             $config,
             self::OUTPUT_PREFIX,
-            'preview/' . preg_replace('/[^a-zA-Z0-9_-]/', '', $voiceKey) . '.mp3'
+            'preview/' . self::previewFileStem($voiceKey, $speed, $volume) . '.mp3'
         );
         SmartEditImsConfigService::putObject($config, $key, $audio, 'audio/mpeg');
 
@@ -87,6 +98,8 @@ class SmartEditDubbingService
      * @param array $subtitles 字幕列表 [['text'=>...], ...]
      * @param array $voiceKeys 音色 key 列表
      * @param float $gap       句间间隔（秒）
+     * @param float|null $speed  语速倍数，null 用租户默认值
+     * @param float|null $volume 音量倍数，null 按原声
      * @return int 成功生成的口播套数
      * @throws Exception 任一音色失败时抛出，由调用方决定整组失败还是跳过
      */
@@ -96,7 +109,9 @@ class SmartEditDubbingService
         string $batchNo,
         array $subtitles,
         array $voiceKeys,
-        float $gap = self::DEFAULT_GAP
+        float $gap = self::DEFAULT_GAP,
+        ?float $speed = null,
+        ?float $volume = null
     ): int {
         if ($batchNo === '') {
             throw new Exception('缺少组号，无法生成口播');
@@ -129,6 +144,10 @@ class SmartEditDubbingService
             $voiceConfig['resource_id']
         );
 
+        // 语速优先用本次提交的值，缺省回落租户配置；音量缺省按原声
+        $effectiveSpeed = self::clampSpeed($speed ?? (float)$voiceConfig['default_speed']);
+        $effectiveVolume = self::clampVolume($volume ?? 1.0);
+
         $done = 0;
         foreach (array_values($voiceKeys) as $voiceIndex => $voiceKey) {
             $voice = SmartEditVoiceService::get($tenantId, $voiceKey);
@@ -154,7 +173,8 @@ class SmartEditDubbingService
                     (string)$voice['provider_asset_id'],
                     $lines,
                     $gap,
-                    (float)$voiceConfig['default_speed']
+                    $effectiveSpeed,
+                    $effectiveVolume
                 );
                 $row->save([
                     'audio_uri' => $result['audio_uri'],
@@ -201,13 +221,14 @@ class SmartEditDubbingService
         string $speaker,
         array $lines,
         float $gap,
-        float $speed
+        float $speed,
+        float $volume
     ): array {
         $timeline = [];
         $cursor = 0.0;
 
         foreach ($lines as $lineIndex => $text) {
-            $audio = self::synthesizeWithRetry($client, $text, $speaker, $speed);
+            $audio = self::synthesizeWithRetry($client, $text, $speaker, $speed, $volume);
             $seconds = self::detectAudioDuration($audio);
             if ($seconds <= 0) {
                 throw new Exception('无法识别合成音频时长：' . mb_substr($text, 0, 20));
@@ -251,17 +272,55 @@ class SmartEditDubbingService
     /**
      * 合成单句，失败重试一次。
      */
-    private static function synthesizeWithRetry(VolcTtsClient $client, string $text, string $speaker, float $speed): string
-    {
+    private static function synthesizeWithRetry(
+        VolcTtsClient $client,
+        string $text,
+        string $speaker,
+        float $speed,
+        float $volume
+    ): string {
         $lastError = null;
         for ($attempt = 0; $attempt < self::MAX_SYNTHESIS_ATTEMPTS; $attempt++) {
             try {
-                return $client->synthesize($text, $speaker, ['speed' => $speed]);
+                return $client->synthesize($text, $speaker, [
+                    'speed' => $speed,
+                    'volume' => $volume,
+                ]);
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
         }
         throw new Exception('配音合成失败：' . ($lastError ? $lastError->getMessage() : '未知错误'));
+    }
+
+    /**
+     * 语速倍数收口到 0.5 ~ 2，和上游 speech_rate 的 [-50, 100] 对齐。
+     */
+    private static function clampSpeed(float $speed): float
+    {
+        return max(0.5, min(2.0, $speed));
+    }
+
+    /**
+     * 音量倍数收口到 0.5 ~ 3：上游 loudness_rate 最低 -50（0.5 倍），无法真正静音。
+     */
+    private static function clampVolume(float $volume): float
+    {
+        return max(0.5, min(3.0, $volume));
+    }
+
+    /**
+     * 试听对象文件名：音色 + 语速 + 音量，参数参与命名以区分浏览器缓存。
+     */
+    private static function previewFileStem(string $voiceKey, float $speed, float $volume): string
+    {
+        $stem = preg_replace('/[^a-zA-Z0-9_-]/', '', $voiceKey);
+        return sprintf(
+            '%s-%s-%s',
+            $stem,
+            str_replace('.', '_', (string)$speed),
+            str_replace('.', '_', (string)$volume)
+        );
     }
 
     /**
