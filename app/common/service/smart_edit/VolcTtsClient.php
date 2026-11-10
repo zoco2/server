@@ -64,7 +64,7 @@ class VolcTtsClient
                 ? self::speedToRate((float)$options['speed'])
                 : null,
             'loudness_rate' => isset($options['volume']) && is_numeric($options['volume'])
-                ? self::speedToRate((float)$options['volume'])
+                ? self::volumeToRate((float)$options['volume'])
                 : null,
         ], static fn($value) => $value !== null);
 
@@ -95,6 +95,17 @@ class VolcTtsClient
         }
         $rate = (int)round(($multiplier - 1.0) * 100);
         return max(-50, min(100, $rate));
+    }
+
+    /**
+     * 音量倍率转火山原生百分比。
+     *
+     * 与语速共用同一套换算，但上游 loudness_rate 最低只到 -50（0.5 倍），
+     * 无法真正静音，所以先把倍率收口到 0.5 以上。
+     */
+    public static function volumeToRate(float $multiplier): int
+    {
+        return self::speedToRate(max(0.5, $multiplier));
     }
 
     /**

@@ -45,10 +45,14 @@ class TaskController extends BaseApiController
     public function voicePreview()
     {
         try {
+            $speed = $this->request->post('voice_speed', null);
+            $volume = $this->request->post('voice_volume', null);
             $result = SmartEditDubbingService::preview(
                 (int)$this->request->tenantId,
                 (string)$this->request->post('voice_key', ''),
-                (string)$this->request->post('text', '')
+                (string)$this->request->post('text', ''),
+                is_numeric($speed) ? (float)$speed : null,
+                is_numeric($volume) ? (float)$volume : null
             );
             return $this->success('合成成功', $result);
         } catch (Exception $e) {
