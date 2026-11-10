@@ -4,6 +4,7 @@ namespace app\common\service\wenan;
 
 use app\common\service\app\AppAccessService;
 use app\common\service\app\aigc_llm\AigcLlmService;
+use app\common\service\wenan\WenanConfigService;
 use Exception;
 
 /**
@@ -139,16 +140,21 @@ class WenanEnhanceService
         }
 
         $brandContext = self::resolveBrandContext($params);
-        // 只走 generateText 常规参数，与套图/图片 prompt helper 一致；
-        // 不传 enable_thinking / max_tokens，避免上游 422 污染其它模型调用路径的认知。
-        // 思考链泄漏靠下方 prompt + validateResult 本地拦截，不改共用 Runtime。
-        $result = AigcLlmService::generateText($tenantId, $userId, [
+        // 模型来自租户「文案模型」配置（知识库/智能剪辑共用）；未配置时走市场默认。
+        // 不传 enable_thinking / max_tokens，避免上游 422。
+        $request = [
             'system_prompt' => self::systemPrompt($mode, $scene, $sceneMeta, $maxLength, $tone),
             'content' => self::userContent($mode, $scene, $sceneMeta['label'], $text, $hint, $brandContext, $maxLength),
             'source_app_code' => self::SOURCE_APP_CODE,
             'source_type' => 'wenan_helper',
             'request_timeout_seconds' => 90,
-        ]);
+        ];
+        $textModelId = WenanConfigService::resolveTextModelId($tenantId);
+        if ($textModelId !== '') {
+            $request['model_code'] = $textModelId;
+            $request['_disable_model_fallback'] = true;
+        }
+        $result = AigcLlmService::generateText($tenantId, $userId, $request);
 
         $output = self::validateResult(
             (string)($result['content'] ?? ''),
@@ -255,24 +261,6 @@ class WenanEnhanceService
             return '';
         }
         return '品牌：' . mb_substr($brandName, 0, 64);
-    }
-
-    /**
-     * 按场景限制生成长度，避免模型把思考过程写很长。
-     */
-    private static function resolveMaxTokens(string $scene, int $maxLength): int
-    {
-        $byScene = match ($scene) {
-            'smart_edit_title' => 64,
-            'smart_edit_subtitle' => 64,
-            'knowledge_title' => 160,
-            'knowledge_summary' => 640,
-            default => 0,
-        };
-        if ($byScene > 0) {
-            return $byScene;
-        }
-        return max(128, min(2048, (int)ceil($maxLength * 1.6) + 32));
     }
 
     /**
