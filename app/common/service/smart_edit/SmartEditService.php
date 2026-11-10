@@ -49,6 +49,9 @@ class SmartEditService
     /** 最多标题组数；笛卡尔积成片按 combo 序号循环取组 */
     public const MAX_TITLE_GROUPS = 50;
 
+    /** 最多封面张数；笛卡尔积成片按 combo 序号循环取用 */
+    public const MAX_COVERS = 20;
+
     /** 字幕单条最大字数（受上游单次合成长度约束） */
     public const MAX_SUBTITLE_TEXT_LENGTH = 200;
 
@@ -701,7 +704,7 @@ class SmartEditService
         if ($title === '') {
             $title = '镜头组';
         }
-        $coverUri = trim((string)($params['cover_uri'] ?? ''));
+        $coverUris = self::normalizeCoverUris($params);
         $aspectRatio = trim((string)($params['aspect_ratio'] ?? ''));
         if ($aspectRatio === '') {
             $aspectRatio = self::DEFAULT_ASPECT_RATIO;
@@ -717,7 +720,9 @@ class SmartEditService
         return [
             'edit_type' => $editType,
             'title' => mb_substr($title, 0, 100),
-            'cover_uri' => $coverUri,
+            // 默认落第一张，展开时再按 combo 循环替换
+            'cover_uri' => $coverUris[0] ?? '',
+            'cover_uris' => $coverUris,
             'aspect_ratio' => $aspectRatio,
             // 默认落第一组，展开时再按 combo 循环替换
             'title_overlay' => $titleGroups[0] ?? [],
@@ -732,6 +737,36 @@ class SmartEditService
             // 配音演员：每个音色一套口播，成片按 combo 轮换
             'voices' => $voices,
         ];
+    }
+
+    /**
+     * 封面归一化：支持多张，成片按 combo 序号循环取用。
+     *
+     * 兼容旧参数 cover_uri（单张）；新前端传 cover_uris（数组）。
+     * 空串与重复项直接跳过，顺序即轮换顺序。
+     *
+     * @param array $params 前端参数
+     * @return array<int, string>
+     */
+    public static function normalizeCoverUris(array $params): array
+    {
+        $raw = $params['cover_uris'] ?? null;
+        if (!is_array($raw) || $raw === []) {
+            $single = trim((string)($params['cover_uri'] ?? ''));
+            return $single === '' ? [] : [$single];
+        }
+        $uris = [];
+        foreach ($raw as $item) {
+            $uri = trim((string)$item);
+            if ($uri === '' || in_array($uri, $uris, true)) {
+                continue;
+            }
+            $uris[] = $uri;
+        }
+        if (count($uris) > self::MAX_COVERS) {
+            throw new Exception('一次最多添加 ' . self::MAX_COVERS . ' 张封面');
+        }
+        return $uris;
     }
 
     /**
@@ -877,6 +912,15 @@ class SmartEditService
      */
     public static function sharedForCombo(array $shared, int $comboIndex): array
     {
+        // 封面：多张时按 combo 序号循环取用，与标题组各自独立
+        $coverUris = $shared['cover_uris'] ?? null;
+        if (is_array($coverUris) && $coverUris !== []) {
+            $count = count($coverUris);
+            $index = $comboIndex > 0 ? ($comboIndex - 1) % $count : 0;
+            $shared['cover_uri'] = (string)($coverUris[$index] ?? '');
+            $shared['cover_index'] = $index;
+        }
+
         $titleGroups = $shared['title_groups'] ?? null;
         if (is_array($titleGroups) && $titleGroups !== []) {
             $count = count($titleGroups);
@@ -930,9 +974,20 @@ class SmartEditService
     {
         $config = SmartEditImsConfigService::require($tenantId);
 
-        $coverUri = (string)($shared['cover_uri'] ?? '');
-        if ($coverUri !== '') {
-            SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
+        // 多封面：每一张都要能被 IMS 拉到，避免部分组合在展开后才失败
+        $coverUris = $shared['cover_uris'] ?? null;
+        if (is_array($coverUris) && $coverUris !== []) {
+            foreach ($coverUris as $cover) {
+                $uri = (string)$cover;
+                if ($uri !== '') {
+                    SmartEditMaterialService::mediaUrl($config, $tenantId, $uri);
+                }
+            }
+        } else {
+            $coverUri = (string)($shared['cover_uri'] ?? '');
+            if ($coverUri !== '') {
+                SmartEditMaterialService::mediaUrl($config, $tenantId, $coverUri);
+            }
         }
 
         $stickerList = [];
