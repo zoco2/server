@@ -26,12 +26,42 @@ class SmartEditVoiceService
     private const PREVIEW_TEXT = '这是一段配音试听，用来确认音色效果。';
 
     /**
+     * 火山门户头像 CDN 前缀。
+     * 官方 ListSpeakers 的 Avatar 字段同域；多数音色可用「展示名.png」直接拼出。
+     */
+    private const AVATAR_CDN = 'https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/';
+
+    /**
+     * 展示名与 CDN 文件名不一致时的别名。
+     * scene 字段本身就是分类（如「视频配音」「角色扮演」），不另建 Categories。
+     *
+     * @var array<string, string>
+     */
+    private const AVATAR_ALIASES = [
+        '知性灿灿' => '灿灿',
+    ];
+
+    /**
+     * 按展示名拼官方头像 URL；无可靠文件时返回空串，前端用首字兜底。
+     */
+    public static function avatarUrl(string $label): string
+    {
+        $name = trim($label);
+        if ($name === '') {
+            return '';
+        }
+        $file = self::AVATAR_ALIASES[$name] ?? $name;
+        return self::AVATAR_CDN . rawurlencode($file) . '.png';
+    }
+
+    /**
      * 内置音色清单。
      *
      * 豆包语音合成 2.0 的音色 ID 统一形如 zh_xxx_xxx_uranus_bigtts，
      * 必须配 X-Api-Resource-Id: seed-tts-2.0，配 1.0 的 *_moon_bigtts 会报资源不匹配。
      * 这里放入官方文档中的中文 uranus 全量清单；已有 key（如 vv / cancan）保持不变，避免旧任务失效。
      * 若个别音色在当前账号未开通，合成时会由火山返回错误，可在租户后台删掉或改掉。
+     * scene 即分类（视频配音 / 角色扮演 / 通用场景等）。
      *
      * @return array<string, array{label:string,provider_asset_id:string,gender:string,scene:string}>
      */
@@ -609,19 +639,25 @@ class SmartEditVoiceService
     /**
      * 前端下拉用的音色列表。
      *
+     * scene 即分类，供前端分组/筛选；avatar 为官方门户头像 URL。
+     *
      * @param int  $tenantId      租户 ID；0 表示只看内置清单
      * @param bool $withAssetId   是否返回 provider_asset_id。租户后台的音色管理要编辑它，
      *                            用户端下拉只需要显示名，不必暴露底层 ID。
+     * @return array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool}>
      */
     public static function options(int $tenantId = 0, bool $withAssetId = false): array
     {
         $result = [];
         foreach (self::catalog($tenantId) as $item) {
+            $label = (string)$item['label'];
             $row = [
                 'key' => (string)$item['key'],
-                'label' => (string)$item['label'],
+                'label' => $label,
                 'gender' => (string)$item['gender'],
+                // scene 就是分类（视频配音 / 角色扮演 / 通用场景 …）
                 'scene' => (string)$item['scene'],
+                'avatar' => self::avatarUrl($label),
                 'custom' => (bool)$item['custom'],
             ];
             if ($withAssetId) {
