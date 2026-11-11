@@ -18,6 +18,7 @@ use app\common\enum\user\UserTerminalEnum;
 use app\common\enum\YesNoEnum;
 use app\common\logic\AccountLogLogic;
 use app\common\logic\BaseLogic;
+use app\common\model\merchant\MerchantBrand;
 use app\common\model\user\User;
 use app\common\model\user\UserAccountLog;
 use app\common\service\ConfigService;
@@ -102,6 +103,10 @@ class UserLogic extends BaseLogic
         $detail['user_money'] = self::formatPoints($detail['user_money'] ?? 0);
         $detail['total_recharge_amount'] = self::formatPoints($detail['total_recharge_amount'] ?? 0);
         $detail['total_used_amount'] = self::formatPoints(self::getUsedAmount($userId, $tenantId));
+        $detail['brands'] = $tenantId ? MerchantBrand::where([
+            'tenant_id' => $tenantId,
+            'user_id' => $userId,
+        ])->field(['id', 'name', 'industry'])->order('id', 'asc')->select()->toArray() : [];
         return $detail;
     }
 
