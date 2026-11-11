@@ -71,12 +71,7 @@ PROMPT;
             throw new InvalidArgumentException('生成任务不存在');
         }
 
-        $now = time();
-        if ($task['status'] === 'queued' && (int)$task['create_time'] <= $now - self::QUEUE_TTL) {
-            self::finish($tenantId, $requestId, 'queued', 'failed', '', '任务排队超时，请重新提交');
-            $task = (clone $query)->find();
-        } elseif ($task['status'] === 'running' && (int)$task['start_time'] <= $now - self::RUN_TTL) {
-            self::finish($tenantId, $requestId, 'running', 'failed', '', '生成超时，请稍后重试');
+        if (self::expireIfNeeded($tenantId, $requestId, $task, time())) {
             $task = (clone $query)->find();
         }
 
@@ -86,6 +81,49 @@ PROMPT;
             'articleIds' => json_decode((string)$task['article_ids'], true) ?? [],
             'message' => (string)$task['message'],
             'error' => (string)$task['error'],
+        ];
+    }
+
+    public static function lists(int $tenantId, int $userId, int $pageNo = 1, int $pageSize = 15): array
+    {
+        if ($tenantId <= 0 || $userId <= 0) {
+            throw new InvalidArgumentException('请先登录后再查询写稿任务');
+        }
+        $pageNo = max(1, $pageNo);
+        $pageSize = max(1, min(50, $pageSize));
+        $query = Db::name(self::TABLE)->where(['tenant_id' => $tenantId, 'user_id' => $userId]);
+        $count = (int)(clone $query)->count();
+        if ($count === 0 || $pageNo > (int)ceil($count / $pageSize)) {
+            return ['count' => $count, 'lists' => []];
+        }
+
+        $page = $query->field('request_id,brand_id,status,article_ids,error,create_time,start_time,finish_time')
+            ->fieldRaw('SUBSTRING(prompt, 1, 240) AS prompt_excerpt')
+            ->order('id', 'desc')->page($pageNo, $pageSize);
+        $tasks = (clone $page)->select()->toArray();
+        $now = time();
+        $expired = false;
+        foreach ($tasks as $task) {
+            if (self::expireIfNeeded($tenantId, (string)$task['request_id'], $task, $now)) {
+                $expired = true;
+            }
+        }
+        if ($expired) {
+            $tasks = (clone $page)->select()->toArray();
+        }
+
+        return [
+            'count' => $count,
+            'lists' => array_map(static fn(array $task): array => [
+                'requestId' => (string)$task['request_id'],
+                'brand_id' => (int)$task['brand_id'],
+                'prompt' => (string)$task['prompt_excerpt'],
+                'status' => (string)$task['status'],
+                'articleIds' => json_decode((string)$task['article_ids'], true) ?? [],
+                'error' => (string)$task['error'],
+                'create_time' => (int)$task['create_time'],
+                'finish_time' => (int)$task['finish_time'],
+            ], $tasks),
         ];
     }
 
@@ -283,6 +321,19 @@ PROMPT;
                 ],
             ],
         ];
+    }
+
+    private static function expireIfNeeded(int $tenantId, string $requestId, array $task, int $now): bool
+    {
+        if ($task['status'] === 'queued' && (int)$task['create_time'] <= $now - self::QUEUE_TTL) {
+            self::finish($tenantId, $requestId, 'queued', 'failed', '', '任务排队超时，请重新提交');
+            return true;
+        }
+        if ($task['status'] === 'running' && (int)$task['start_time'] <= $now - self::RUN_TTL) {
+            self::finish($tenantId, $requestId, 'running', 'failed', '', '生成超时，请稍后重试');
+            return true;
+        }
+        return false;
     }
 
     private static function finish(int $tenantId, string $requestId, string $from, string $status, string $message, string $error = ''): void

@@ -52,6 +52,22 @@ class ArticleController extends BaseApiController
         }
     }
 
+    /** 当前用户的写稿任务。 */
+    public function generationLists()
+    {
+        try {
+            $data = GeoArticleGenerationService::lists(
+                (int)$this->request->tenantId,
+                $this->userId,
+                (int)$this->request->get('page_no/d', 1),
+                (int)$this->request->get('page_size/d', 15)
+            );
+            return $this->success('获取成功', $data);
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
     /** 我的稿件列表 */
     public function lists()
     {
