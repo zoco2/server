@@ -5,7 +5,7 @@ namespace app\api\controller\merchant;
 use app\api\controller\BaseApiController;
 use app\api\lists\merchant\BrandLists;
 use app\api\logic\merchant\BrandLogic;
-use app\api\validate\merchant\BrandValidate;
+use app\common\validate\merchant\BrandValidate;
 
 /**
  * 商家品牌。
@@ -45,16 +45,12 @@ class BrandController extends BaseApiController
     }
 
     /**
-     * @notes 创建品牌
+     * @notes 前台品牌创建已迁移至租户后台
      * @return \think\response\Json
      */
     public function add()
     {
-        $params = (new BrandValidate())->post()->goCheck('add');
-        if (!BrandLogic::add($params)) {
-            return $this->fail(BrandLogic::getError());
-        }
-        return $this->success('创建成功', [], 1, 1);
+        return $this->fail('请联系租户管理员创建品牌');
     }
 
     /**

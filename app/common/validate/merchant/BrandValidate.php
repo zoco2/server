@@ -1,7 +1,8 @@
 <?php
 
-namespace app\api\validate\merchant;
+namespace app\common\validate\merchant;
 
+use app\common\model\merchant\MerchantBrand;
 use app\common\validate\BaseValidate;
 
 /**
@@ -11,6 +12,7 @@ class BrandValidate extends BaseValidate
 {
     protected $rule = [
         'id' => 'require|integer|gt:0',
+        'user_id' => 'require|integer|gt:0',
         'name' => 'require|length:1,100',
         'industry' => 'max:120',
         'contact_name' => 'max:60',
@@ -26,6 +28,9 @@ class BrandValidate extends BaseValidate
 
     protected $message = [
         'id.require' => '请选择品牌',
+        'user_id.require' => '请选择所属用户',
+        'user_id.integer' => '所属用户无效',
+        'user_id.gt' => '所属用户无效',
         'name.require' => '请填写品牌名称',
         'name.length' => '品牌名称不能超过100个字',
         'contact_email.email' => '联系邮箱格式不正确',
@@ -41,7 +46,7 @@ class BrandValidate extends BaseValidate
      */
     public function sceneAdd()
     {
-        return $this->only(['name', 'industry', 'contact_name', 'contact_phone', 'contact_email', 'website', 'address', 'logo_url', 'cover_url']);
+        return $this->only(['user_id', ...MerchantBrand::PROFILE_FIELDS]);
     }
 
     /**
@@ -49,7 +54,7 @@ class BrandValidate extends BaseValidate
      */
     public function sceneEdit()
     {
-        return $this->only(['id', 'name', 'industry', 'contact_name', 'contact_phone', 'contact_email', 'website', 'address', 'logo_url', 'cover_url']);
+        return $this->only(['id', ...MerchantBrand::PROFILE_FIELDS]);
     }
 
     /**

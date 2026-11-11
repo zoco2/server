@@ -56,6 +56,10 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
+        $createBrandAction = $accessUri === 'merchant.brand/add';
+        if ($createBrandAction) {
+            $accessUri = 'user.user/edit';
+        }
         $marketPricingAction = in_array($accessUri, ['power.market/pricingrules', 'power.market/previewpricing', 'power.market/applypricing'], true);
         if ($marketPricingAction) $accessUri = 'power.market/saveprices';
         // Vault generation changes the same tenant payment configuration and uses its save permission.
@@ -64,7 +68,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if (!$createBrandAction && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 

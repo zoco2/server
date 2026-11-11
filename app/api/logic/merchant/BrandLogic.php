@@ -4,9 +4,7 @@ namespace app\api\logic\merchant;
 
 use app\common\logic\BaseLogic;
 use app\common\model\merchant\MerchantBrand;
-use app\common\model\merchant\MerchantBrandKnowledgeFolder;
 use app\common\model\merchant\MerchantStore;
-use think\facade\Db;
 use Throwable;
 
 /**
@@ -14,23 +12,6 @@ use Throwable;
  */
 class BrandLogic extends BaseLogic
 {
-    private const DEFAULT_KNOWLEDGE_FOLDERS = [
-        '企业事实',
-        '品牌介绍',
-        '产品与服务',
-        '客户与市场',
-        '竞品与差异事实',
-        '门店信息',
-    ];
-
-    /** @var array<string, string> 创建后按段单独保存的正文 */
-    private const SECTIONS = [
-        'company_intro' => '企业介绍',
-        'products_services' => '产品与服务',
-        'target_customers' => '目标客户与地区',
-        'competitor_facts' => '竞品与差异事实',
-    ];
-
     /**
      * @return array
      */
@@ -55,41 +36,10 @@ class BrandLogic extends BaseLogic
             return [];
         }
         $data = $row->toArray();
-        foreach (array_keys(self::SECTIONS) as $field) {
+        foreach (array_keys(MerchantBrand::SECTION_LABELS) as $field) {
             $data[$field] = (string)($data[$field] ?? '');
         }
         return $data;
-    }
-
-    /**
-     * @param array $params
-     * @return bool
-     */
-    public static function add(array $params): bool
-    {
-        if (self::nameTaken($params['name'])) {
-            self::setError('品牌名称已存在');
-            return false;
-        }
-        try {
-            Db::transaction(static function () use ($params): void {
-                $brand = MerchantBrand::create(self::fields($params) + array_fill_keys(array_keys(self::SECTIONS), ''));
-                $sort = count(self::DEFAULT_KNOWLEDGE_FOLDERS);
-                foreach (self::DEFAULT_KNOWLEDGE_FOLDERS as $name) {
-                    MerchantBrandKnowledgeFolder::create([
-                        'user_id' => (int)$brand->user_id,
-                        'brand_id' => (int)$brand->id,
-                        'name' => $name,
-                        'sort' => $sort--,
-                        'metadata_json' => '{}',
-                    ]);
-                }
-            });
-            return true;
-        } catch (Throwable $e) {
-            self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
-            return false;
-        }
     }
 
     /**
@@ -109,7 +59,7 @@ class BrandLogic extends BaseLogic
             return false;
         }
         try {
-            $row->save(self::fields($params));
+            $row->save(MerchantBrand::profileFields($params));
             return true;
         } catch (Throwable $e) {
             self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
@@ -125,7 +75,7 @@ class BrandLogic extends BaseLogic
     public static function saveSection(array $params): bool
     {
         $section = (string)$params['section'];
-        if (!isset(self::SECTIONS[$section])) {
+        if (!isset(MerchantBrand::SECTION_LABELS[$section])) {
             self::setError('资料段落无效');
             return false;
         }
@@ -140,7 +90,7 @@ class BrandLogic extends BaseLogic
         }
         $content = trim((string)$params['content']);
         if (mb_strlen($content) > 5000) {
-            self::setError(self::SECTIONS[$section] . '不能超过5000个字');
+            self::setError(MerchantBrand::SECTION_LABELS[$section] . '不能超过5000个字');
             return false;
         }
         try {
@@ -170,26 +120,6 @@ class BrandLogic extends BaseLogic
         }
         $row->delete();
         return true;
-    }
-
-    /**
-     * @param array $params
-     * @return array
-     */
-    private static function fields(array $params): array
-    {
-        return [
-            'user_id' => (int)request()->userId,
-            'name' => trim((string)$params['name']),
-            'industry' => trim((string)($params['industry'] ?? '')),
-            'contact_name' => trim((string)($params['contact_name'] ?? '')),
-            'contact_phone' => trim((string)($params['contact_phone'] ?? '')),
-            'contact_email' => trim((string)($params['contact_email'] ?? '')),
-            'website' => trim((string)($params['website'] ?? '')),
-            'address' => trim((string)($params['address'] ?? '')),
-            'logo_url' => trim((string)($params['logo_url'] ?? '')),
-            'cover_url' => trim((string)($params['cover_url'] ?? '')),
-        ];
     }
 
     /**
