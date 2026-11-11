@@ -9,12 +9,18 @@ use InvalidArgumentException;
 
 final class UserTaskController extends BaseApiController
 {
-    /** 创建计划。start_at 是 Unix 秒，interval_seconds 为 0 时只执行一次。 */
+    /** 创建计划。日期字段以计划时区解释，兼容 Unix 秒格式。 */
     public function add()
     {
         return $this->write(fn () => UserTaskPlanService::create(
             (int)$this->request->tenantId, $this->userId, $this->request->post()
         ));
+    }
+
+    /** 预览有效期内最近三个未来执行时间。 */
+    public function preview()
+    {
+        return $this->write(fn () => UserTaskPlanService::preview($this->request->post()));
     }
 
     public function lists()

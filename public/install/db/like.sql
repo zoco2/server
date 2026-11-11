@@ -14678,12 +14678,17 @@ CREATE TABLE IF NOT EXISTS `la_user_task_plan` (
   `job_type` varchar(32) NOT NULL,
   `start_at` bigint unsigned NOT NULL,
   `interval_seconds` int unsigned NOT NULL DEFAULT 0,
+  `schedule_type` varchar(16) DEFAULT NULL,
+  `schedule_config` text NULL,
+  `timezone` varchar(64) NOT NULL DEFAULT 'Asia/Shanghai',
+  `end_at` bigint unsigned DEFAULT NULL COMMENT '第一个不可执行的 Unix 秒',
   `next_run_at` bigint unsigned DEFAULT NULL,
   `status` varchar(16) NOT NULL DEFAULT 'enabled',
   `create_time` bigint unsigned NOT NULL,
   `update_time` bigint unsigned NOT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_due` (`status`,`next_run_at`,`id`),
+  KEY `idx_end` (`status`,`end_at`),
   KEY `idx_owner` (`tenant_id`,`user_id`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务';
 
@@ -14694,6 +14699,7 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   `user_id` int unsigned NOT NULL,
   `job_type` varchar(32) NOT NULL,
   `scheduled_at` bigint unsigned NOT NULL,
+  `expires_at` bigint unsigned DEFAULT NULL COMMENT '排队记录领取截止时间',
   `status` varchar(16) NOT NULL DEFAULT 'queued',
   `started_at` bigint unsigned DEFAULT NULL,
   `finished_at` bigint unsigned DEFAULT NULL,

@@ -26,7 +26,7 @@ final class UserTaskRunService
     public static function drain(): void
     {
         $runs = Db::name(self::TABLE)->where('status', self::QUEUED)
-            ->field('id,job_type')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
+            ->field('id,job_type,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
         foreach ($runs as $run) {
             self::execute($run);
         }
@@ -34,10 +34,24 @@ final class UserTaskRunService
 
     private static function execute(array $run): void
     {
+        $queued = ['id' => $run['id'], 'status' => self::QUEUED];
+        $now = time();
+        $expiresAt = isset($run['expires_at']) ? (int)$run['expires_at'] : null;
+        if ($expiresAt !== null && $now >= $expiresAt) {
+            Db::name(self::TABLE)->where($queued)->update(self::result('expired', null, '计划有效期已结束'));
+            return;
+        }
+
         // 多个 Worker 可能看到同一候选记录，只有将 queued 改为 running 的进程可以执行。
-        $claimed = Db::name(self::TABLE)->where(['id' => $run['id'], 'status' => self::QUEUED])
-            ->update(['status' => self::RUNNING, 'started_at' => time()]);
+        $claimed = Db::name(self::TABLE)->where($queued)->update(['status' => self::RUNNING, 'started_at' => $now]);
         if ($claimed !== 1) {
+            return;
+        }
+
+        // 领取可能等待数据库锁，执行前再判断一次是否跨过有效期。
+        if ($expiresAt !== null && time() >= $expiresAt) {
+            Db::name(self::TABLE)->where(['id' => $run['id'], 'status' => self::RUNNING])
+                ->update(self::result('expired', null, '计划有效期已结束') + ['started_at' => null]);
             return;
         }
 

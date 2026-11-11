@@ -11,7 +11,6 @@ final class UserTaskPlanService
 {
     private const TABLE = 'user_task_plan';
     private const BATCH_SIZE = 100;
-    private const MAX_TIMESTAMP = 4294967295;
 
     public static function create(int $tenantId, int $userId, array $params): array
     {
@@ -25,26 +24,48 @@ final class UserTaskPlanService
         if (!is_string($jobType) || !UserTaskRunService::supports($jobType)) {
             throw new InvalidArgumentException('任务类型暂不支持');
         }
-        $startAt = self::integer($params['start_at'] ?? null, $now + 1, '开始时间须晚于当前时间');
-        $interval = self::integer($params['interval_seconds'] ?? 0, 0, '执行间隔必须是非负整数秒');
+        $schedule = UserTaskSchedule::fromInput($params);
+        $next = $schedule->next($now + 1);
+        if ($next === null) {
+            throw new InvalidArgumentException('有效期内没有可执行的时间');
+        }
 
-        $id = Db::name(self::TABLE)->insertGetId($owner + [
+        $id = Db::name(self::TABLE)->insertGetId($owner + $schedule->toRow() + [
             'name' => trim($name),
             'job_type' => $jobType,
-            'start_at' => $startAt,
-            'interval_seconds' => $interval,
-            'next_run_at' => $startAt,
+            'next_run_at' => $next,
             'status' => 'enabled',
             'create_time' => $now,
             'update_time' => $now,
         ]);
-        return ['id' => (int)$id, 'next_run_at' => $startAt];
+        return ['id' => (int)$id, 'next_run_at' => $next];
+    }
+
+    public static function preview(array $params): array
+    {
+        $schedule = UserTaskSchedule::fromInput($params);
+        $from = time() + 1;
+        $runs = [];
+        for ($i = 0; $i < 3; $i++) {
+            $next = $schedule->next($from);
+            if ($next === null) {
+                break;
+            }
+            $runs[] = $next;
+            $from = $next + 1;
+        }
+        return ['next_runs' => $runs, 'timezone' => $schedule->timezone->getName()];
     }
 
     public static function lists(int $tenantId, int $userId, int $page, int $pageSize): array
     {
         $query = Db::name(self::TABLE)->where(self::owner($tenantId, $userId))->where('status', '<>', 'deleted');
-        return self::paginate($query, $page, $pageSize);
+        $result = self::paginate($query, $page, $pageSize);
+        foreach ($result['lists'] as &$plan) {
+            $plan['schedule_type'] ??= (int)$plan['interval_seconds'] > 0 ? 'interval' : 'once';
+            $plan['schedule_config'] = json_decode((string)$plan['schedule_config'], true) ?: [];
+        }
+        return $result;
     }
 
     public static function runs(int $tenantId, int $userId, int $id, int $page, int $pageSize): array
@@ -81,14 +102,14 @@ final class UserTaskPlanService
             }
 
             $now = time();
-            $nextAt = (int)$plan['next_run_at'];
-            $interval = (int)$plan['interval_seconds'];
-            // 恢复周期计划时延续原时间序列，暂停期间错过的轮次不补跑。
-            if ($nextAt <= $now) {
-                $nextAt = $interval > 0 ? self::latestDue($nextAt, $interval, $now) + $interval : $now + 1;
+            $schedule = UserTaskSchedule::fromRow($plan);
+            // 周期计划按下一次有效时间恢复。单次计划允许在有效期内恢复原来暂停的执行。
+            $nextAt = $schedule->type === 'once' ? max($now + 1, (int)$plan['next_run_at']) : $schedule->next($now + 1);
+            if ($nextAt !== null && $schedule->hasEnded($nextAt)) {
+                $nextAt = null;
             }
             Db::name(self::TABLE)->where($scope)->update([
-                'status' => 'enabled',
+                'status' => $nextAt === null ? 'finished' : 'enabled',
                 'next_run_at' => $nextAt,
                 'update_time' => $now,
             ]);
@@ -98,6 +119,9 @@ final class UserTaskPlanService
     public static function scheduleDue(?int $now = null): void
     {
         $now ??= time();
+        // 停机后恢复时先关闭过期计划，避免补跑已经离开有效期的轮次。
+        Db::name(self::TABLE)->whereIn('status', ['enabled', 'paused'])->where('end_at', '<=', $now)
+            ->update(['status' => 'finished', 'next_run_at' => null, 'update_time' => $now]);
         $due = ['status' => 'enabled'];
         // 扫描阶段只取候选 ID，每条计划在独立事务中加锁并重新确认到期状态。
         $ids = Db::name(self::TABLE)->where($due)->where('next_run_at', '<=', $now)
@@ -111,8 +135,9 @@ final class UserTaskPlanService
                     return;
                 }
 
-                $interval = (int)$plan['interval_seconds'];
-                $scheduledAt = self::latestDue((int)$plan['next_run_at'], $interval, $now);
+                $schedule = UserTaskSchedule::fromRow($plan);
+                $scheduledAt = $schedule->latestDue((int)$plan['next_run_at'], $now);
+                $nextAt = $schedule->type === 'once' ? null : $schedule->next($scheduledAt + 1);
                 // 同一计划只允许一条待执行或执行中的记录，其余到期轮次记为跳过。
                 $active = Db::name(UserTaskRunService::TABLE)->where('plan_id', $id)
                     ->whereIn('status', [UserTaskRunService::QUEUED, UserTaskRunService::RUNNING])->value('id');
@@ -122,24 +147,19 @@ final class UserTaskPlanService
                     'user_id' => $plan['user_id'],
                     'job_type' => $plan['job_type'],
                     'scheduled_at' => $scheduledAt,
+                    'expires_at' => $schedule->endAt,
                     'status' => $active ? 'skipped' : UserTaskRunService::QUEUED,
                     'reason' => $active ? '上一轮尚未结束' : '',
                     'finished_at' => $active ? $now : null,
                 ]);
                 // 执行记录和下次时间一起提交。单次计划的 finished 表示调度结束，执行结果单独记录。
                 Db::name(self::TABLE)->where('id', $id)->update([
-                    'status' => $interval > 0 ? 'enabled' : 'finished',
-                    'next_run_at' => $interval > 0 ? $scheduledAt + $interval : null,
+                    'status' => $nextAt === null ? 'finished' : 'enabled',
+                    'next_run_at' => $nextAt,
                     'update_time' => $now,
                 ]);
             });
         }
-    }
-
-    /** 停机或扫描落后时定位最近一轮，按原计划时间推进下一轮。 */
-    private static function latestDue(int $nextAt, int $interval, int $now): int
-    {
-        return $interval > 0 ? $nextAt + intdiv($now - $nextAt, $interval) * $interval : $nextAt;
     }
 
     private static function stop(int $tenantId, int $userId, int $id, bool $delete): void
@@ -182,20 +202,6 @@ final class UserTaskPlanService
             throw new InvalidArgumentException('当前用户无法管理计划任务');
         }
         return ['tenant_id' => $tenantId, 'user_id' => $userId];
-    }
-
-    private static function integer(mixed $value, int $min, string $error): int
-    {
-        $number = is_int($value) || is_string($value)
-            ? filter_var($value, FILTER_VALIDATE_INT, ['options' => [
-                'min_range' => $min,
-                'max_range' => self::MAX_TIMESTAMP,
-            ]])
-            : false;
-        if ($number === false) {
-            throw new InvalidArgumentException($error);
-        }
-        return $number;
     }
 
     private static function paginate(\think\db\BaseQuery $query, int $page, int $pageSize): array
