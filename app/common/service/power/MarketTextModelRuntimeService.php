@@ -1141,6 +1141,7 @@ class MarketTextModelRuntimeService
         $appName = match ($appCode) {
             'aigc_canvas' => 'infinite_canvas',
             'aigc_llm' => 'aigc_chat',
+            'geo' => 'geo',
             default => 'short_drama',
         };
         return $appName . '_text_model_' . ($status === 'failed' ? 'refund' : 'settle');

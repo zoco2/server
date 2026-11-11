@@ -44,6 +44,9 @@ class GeoOrderService
         if (trim((string)$article['content']) === '') {
             throw new Exception('稿件正文为空，不能投稿');
         }
+        if (trim((string)$article['preview_url']) === '') {
+            throw new Exception('请先保存稿件再投稿');
+        }
         $media = GeoMedia::where('id', $mediaId)->findOrEmpty();
         if ($media->isEmpty()) {
             throw new Exception('媒体资源不存在');
