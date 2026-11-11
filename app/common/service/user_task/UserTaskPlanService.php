@@ -54,7 +54,7 @@ final class UserTaskPlanService
             throw new InvalidArgumentException('计划不存在或无权限');
         }
         $query = Db::name(UserTaskRunService::TABLE)->where($owner + ['plan_id' => $id])
-            ->field('id,plan_id,job_type,scheduled_at,status,attempts,output,reason,started_at,finished_at');
+            ->field('id,plan_id,job_type,scheduled_at,status,output,reason,started_at,finished_at');
         return self::paginate($query, $page, $pageSize);
     }
 
@@ -123,7 +123,6 @@ final class UserTaskPlanService
                     'job_type' => $plan['job_type'],
                     'scheduled_at' => $scheduledAt,
                     'status' => $active ? 'skipped' : UserTaskRunService::QUEUED,
-                    'available_at' => $now,
                     'reason' => $active ? '上一轮尚未结束' : '',
                     'finished_at' => $active ? $now : null,
                 ]);

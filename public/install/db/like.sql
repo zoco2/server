@@ -14695,15 +14695,12 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   `job_type` varchar(32) NOT NULL,
   `scheduled_at` bigint unsigned NOT NULL,
   `status` varchar(16) NOT NULL DEFAULT 'queued',
-  `attempts` tinyint unsigned NOT NULL DEFAULT 0,
-  `lease_token` char(32) NOT NULL DEFAULT '',
-  `available_at` bigint unsigned NOT NULL,
   `started_at` bigint unsigned DEFAULT NULL,
   `finished_at` bigint unsigned DEFAULT NULL,
   `output` text,
   `reason` varchar(255) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_plan_slot` (`plan_id`,`scheduled_at`),
-  KEY `idx_claim` (`status`,`available_at`,`id`),
+  KEY `idx_claim` (`status`,`id`),
   KEY `idx_plan_status` (`plan_id`,`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务执行记录';
