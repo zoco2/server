@@ -15,11 +15,15 @@ namespace app\tenantapi\logic\user;
 
 use app\common\enum\user\AccountLogEnum;
 use app\common\enum\user\UserTerminalEnum;
+use app\common\enum\YesNoEnum;
 use app\common\logic\AccountLogLogic;
 use app\common\logic\BaseLogic;
 use app\common\model\user\User;
 use app\common\model\user\UserAccountLog;
+use app\common\service\ConfigService;
 use app\common\service\JsonService;
+use app\common\service\membership\MembershipService;
+use think\db\exception\PDOException;
 use think\facade\Config;
 use think\facade\Db;
 
@@ -30,6 +34,40 @@ use think\facade\Db;
  */
 class UserLogic extends BaseLogic
 {
+    public static function add(array $params, int $tenantId): int
+    {
+        $account = $params['account'];
+        if (User::withTrashed()->where('tenant_id', $tenantId)->where('account', $account)->value('id')) {
+            JsonService::throw('账号已被使用');
+        }
+
+        return Db::transaction(function () use ($params, $tenantId, $account) {
+            $sn = User::createUserSn();
+            $nickname = trim($params['nickname'] ?? '');
+            try {
+                $user = User::create([
+                    'tenant_id' => $tenantId,
+                    'sn' => $sn,
+                    'account' => $account,
+                    'nickname' => $nickname === '' ? '用户' . $sn : $nickname,
+                    'avatar' => ConfigService::get('default_image', 'user_avatar'),
+                    'password' => create_password($params['password'], Config::get('project.unique_identification')),
+                    'channel' => UserTerminalEnum::TENANT_ADMIN,
+                    'is_new_user' => YesNoEnum::YES,
+                ]);
+            } catch (PDOException $e) {
+                $errorInfo = $e->getData()['PDO Error Info'] ?? [];
+                if ((int)($errorInfo['Driver Error Code'] ?? 0) === 1062) {
+                    JsonService::throw('账号或用户编号已被使用，请核对账号后重试');
+                }
+                throw $e;
+            }
+
+            $userId = (int)$user->id;
+            MembershipService::grantDefaultFreeMembership($tenantId, $userId);
+            return $userId;
+        });
+    }
 
     /**
      * @notes 用户详情

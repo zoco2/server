@@ -50,8 +50,10 @@ class OperationLog
         if ($isRedeemCard) $params = \app\common\service\redeem\RedeemCardPolicy::redact($params);
 
         //过滤密码参数
-        if (isset($params['password'])) {
-            $params['password'] = "******";
+        foreach (['password', 'password_confirm'] as $field) {
+            if (array_key_exists($field, $params)) {
+                $params[$field] = '******';
+            }
         }
         //过滤密钥参数
         if(isset($params['app_secret'])){
@@ -69,7 +71,8 @@ class OperationLog
         $systemLog->admin_name = $request->adminInfo['name'] ?? '';
         $systemLog->action = $notes;
         $systemLog->account = $request->adminInfo['account'] ?? '';
-        $systemLog->url = $isRedeemCard ? strtok($request->url(true), '?') : $request->url(true);
+        $hasSensitiveQuery = $isRedeemCard || $request->get('password') !== null || $request->get('password_confirm') !== null;
+        $systemLog->url = $hasSensitiveQuery ? strtok($request->url(true), '?') : $request->url(true);
         $systemLog->type = $request->isGet() ? 'GET' : 'POST';
         $systemLog->params = json_encode($params, true);
         $systemLog->ip = $request->ip();
