@@ -83,8 +83,13 @@ class MarketTextModelRuntimeService
     public static function resolveAgentModel(int $tenantId, string $selection, bool $requiresVision = false): array
     {
         $model=self::resolveModel($tenantId,$selection,$requiresVision);
-        if(!in_array(self::protocolForModel($model), ['openai_chat', 'anthropic_messages', 'openai_responses'], true))throw new \InvalidArgumentException('当前 Agent 尚未接入此模型的工具协议，请选择兼容对话工具调用的模型');
+        if(!self::supportsToolProtocol($model))throw new \InvalidArgumentException('当前 Agent 尚未接入此模型的工具协议，请选择兼容对话工具调用的模型');
         return $model;
+    }
+
+    public static function supportsToolProtocol(array $model): bool
+    {
+        return in_array(self::protocolForModel($model), ['openai_chat', 'anthropic_messages', 'openai_responses'], true);
     }
 
     /**
@@ -411,7 +416,7 @@ class MarketTextModelRuntimeService
         return null;
     }
 
-    private static function isExplicitModelUnavailable(string $message): bool
+    public static function isExplicitModelUnavailable(string $message): bool
     {
         $message=strtolower(trim($message));
         foreach (['model_not_found','model not found','invalid_model','invalid model','unsupported_model','unsupported model','model unavailable','模型不存在','模型不可用','模型已下架'] as $needle) {

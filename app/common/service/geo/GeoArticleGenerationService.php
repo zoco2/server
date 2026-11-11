@@ -3,8 +3,6 @@
 namespace app\common\service\geo;
 
 use app\common\job\GeoArticleGenerationJob;
-use app\common\service\power\MarketTextModelRuntimeService;
-use app\common\service\power\TextModelCapacity;
 use app\common\service\power\TextSettlementPending;
 use InvalidArgumentException;
 use RuntimeException;
@@ -135,42 +133,30 @@ PROMPT;
             . "\n\n【用户原始需求】\n" . $task['prompt'];
         $messages = [['role' => 'user', 'content' => $prompt]];
         $tools = $catalog === [] ? [] : [self::articleDetailTool()];
-        $model = MarketTextModelRuntimeService::resolveAgentModel($tenantId, '');
-        $capacity = TextModelCapacity::metadata($model);
-        $inputBudget = $capacity['max_input_tokens'] ?: PHP_INT_MAX;
-        if ($capacity['context_window'] > 0) {
-            $output = TextModelCapacity::output($model, self::MAX_OUTPUT_TOKENS);
-            $inputBudget = min($inputBudget, max(1, $capacity['context_window'] - $output));
-        }
-        if ($inputBudget === PHP_INT_MAX) {
-            $inputBudget = 24000;
-        }
+        $candidates = GeoTextModelService::candidates($tenantId, $tools !== []);
 
         $toolCallsUsed = 0;
         for ($round = 0; $round <= self::MAX_TOOL_ROUNDS; $round++) {
-            if (MarketTextModelRuntimeService::estimateTokens(self::encode([$messages, self::INSTRUCTIONS, $tools])) > $inputBudget) {
-                throw new InvalidArgumentException('企业资料或知识库目录超出当前模型的上下文容量');
-            }
             $canRead = $tools !== [] && $round < self::MAX_TOOL_ROUNDS && $toolCallsUsed < self::MAX_TOOL_CALLS;
             $params = [
                 'content' => $prompt,
                 'messages' => $messages,
                 'system_prompt' => self::INSTRUCTIONS,
-                'model_selection' => (string)$model['id'],
                 'source_app_code' => 'geo',
                 'action_code' => 'geo_article_generate',
                 'business_table' => self::TABLE,
                 'business_id' => (int)$task['id'],
                 'max_tokens' => self::MAX_OUTPUT_TOKENS,
                 'request_timeout_seconds' => 60,
-                '_agent_tool_history' => true,
-                '_disable_model_fallback' => true,
+                '_agent_tool_history' => $tools !== [],
             ];
             if ($tools !== []) {
                 $params['tools'] = $tools;
                 $params['tool_choice'] = $canRead ? 'auto' : 'none';
             }
-            $result = MarketTextModelRuntimeService::generate($tenantId, $userId, $params);
+            [$result, $model] = GeoTextModelService::generate($tenantId, $userId, $params, $candidates);
+            // 工具结果必须交回发出调用的模型，续写时只保留已实际使用的模型。
+            $candidates = [$model];
             $calls = (array)($result['tool_calls'] ?? []);
             if ($calls === []) {
                 $content = trim((string)($result['content'] ?? ''));
