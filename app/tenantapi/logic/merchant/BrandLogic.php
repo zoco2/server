@@ -14,10 +14,10 @@ class BrandLogic extends BaseLogic
     private const DEFAULT_KNOWLEDGE_FOLDERS = [
         '企业事实',
         '品牌介绍',
+        '门店信息',
         '产品与服务',
         '客户与市场',
         '竞品与差异事实',
-        '门店信息',
     ];
 
     public static function add(array $params, int $tenantId): bool
