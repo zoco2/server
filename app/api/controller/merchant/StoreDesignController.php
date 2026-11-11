@@ -11,6 +11,19 @@ use app\api\validate\merchant\StoreDesignValidate;
  */
 class StoreDesignController extends BaseApiController
 {
+    public array $notNeedLogin = ['storefront'];
+
+    /** @return \think\response\Json */
+    public function storefront()
+    {
+        $params = (new StoreDesignValidate())->get()->goCheck('detail');
+        $result = StoreDesignLogic::storefront((int)$params['store_id']);
+        if ($result === []) {
+            return $this->fail(StoreDesignLogic::getError());
+        }
+        return $this->data($result);
+    }
+
     /**
      * @notes 读取门店装修
      * @return \think\response\Json
@@ -31,7 +44,10 @@ class StoreDesignController extends BaseApiController
      */
     public function save()
     {
-        $params = (new StoreDesignValidate())->post()->goCheck('save');
+        // 全局 trim 会把 JSON 布尔值 false 转成空字符串。
+        $params = (new StoreDesignValidate())->post()->goCheck('save', [
+            'config' => $this->request->post('config', null, null),
+        ]);
         $result = StoreDesignLogic::save($params);
         if ($result === [] && StoreDesignLogic::hasError()) {
             return $this->fail(StoreDesignLogic::getError());
