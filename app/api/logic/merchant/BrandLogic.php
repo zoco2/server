@@ -4,7 +4,9 @@ namespace app\api\logic\merchant;
 
 use app\common\logic\BaseLogic;
 use app\common\model\merchant\MerchantBrand;
+use app\common\model\merchant\MerchantBrandKnowledgeFolder;
 use app\common\model\merchant\MerchantStore;
+use think\facade\Db;
 use Throwable;
 
 /**
@@ -12,6 +14,15 @@ use Throwable;
  */
 class BrandLogic extends BaseLogic
 {
+    private const DEFAULT_KNOWLEDGE_FOLDERS = [
+        '企业事实',
+        '品牌介绍',
+        '产品与服务',
+        '客户与市场',
+        '竞品与差异事实',
+        '门店信息',
+    ];
+
     /** @var array<string, string> 创建后按段单独保存的正文 */
     private const SECTIONS = [
         'company_intro' => '企业介绍',
@@ -61,7 +72,19 @@ class BrandLogic extends BaseLogic
             return false;
         }
         try {
-            MerchantBrand::create(self::fields($params) + array_fill_keys(array_keys(self::SECTIONS), ''));
+            Db::transaction(static function () use ($params): void {
+                $brand = MerchantBrand::create(self::fields($params) + array_fill_keys(array_keys(self::SECTIONS), ''));
+                $sort = count(self::DEFAULT_KNOWLEDGE_FOLDERS);
+                foreach (self::DEFAULT_KNOWLEDGE_FOLDERS as $name) {
+                    MerchantBrandKnowledgeFolder::create([
+                        'user_id' => (int)$brand->user_id,
+                        'brand_id' => (int)$brand->id,
+                        'name' => $name,
+                        'sort' => $sort--,
+                        'metadata_json' => '{}',
+                    ]);
+                }
+            });
             return true;
         } catch (Throwable $e) {
             self::setError(self::duplicate($e, '品牌名称已存在') ? '品牌名称已存在' : '品牌保存失败');
