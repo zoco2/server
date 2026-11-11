@@ -6,6 +6,8 @@ use app\common\model\FailedJob;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\mq\LightMqService;
 use app\common\service\smart_edit\SmartEditService;
+use app\common\service\user_task\UserTaskPlanService;
+use app\common\service\user_task\UserTaskRunService;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Argument;
@@ -87,8 +89,34 @@ class Workerman extends Command
             self::pollSmartEdit($worker);
         };
 
+        self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
+        self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
+
         Worker::runAll();
         return 0;
+    }
+
+    private static function registerTaskWorker(string $name, callable $tick): void
+    {
+        $worker = new Worker();
+        $worker->name = $name;
+        $worker->count = 1;
+        $worker->onWorkerStart = static function (Worker $worker) use ($name, $tick): void {
+            $retryAt = 0;
+            Timer::add(1, static function () use ($worker, $name, $tick, &$retryAt): void {
+                if ($worker->stopping || time() < $retryAt
+                    || (function_exists('aigc_runtime_generation_changed') && \aigc_runtime_generation_changed())) {
+                    return;
+                }
+                try {
+                    $tick();
+                } catch (\Throwable $e) {
+                    Log::error(sprintf('[%s] %s', $name, $e->getMessage()));
+                    self::closeDatabase();
+                    $retryAt = time() + 5;
+                }
+            });
+        };
     }
 
     /**
