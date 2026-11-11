@@ -11,9 +11,10 @@ class BrandController extends BaseAdminController
     public function add()
     {
         $params = (new BrandValidate())->post()->goCheck('add');
-        if (!BrandLogic::add($params, $this->tenantId)) {
+        $brand = BrandLogic::add($params, $this->tenantId);
+        if ($brand === null) {
             return $this->fail(BrandLogic::getError());
         }
-        return $this->success('品牌创建成功', [], 1, 1);
+        return $this->success('品牌创建成功', $brand, 1, 1);
     }
 }
