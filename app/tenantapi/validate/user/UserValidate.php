@@ -24,23 +24,35 @@ use app\common\validate\BaseValidate;
  */
 class UserValidate extends BaseValidate
 {
+    protected $regex = [
+        'account' => '/\A(?=.*[a-zA-Z])(?=.*[0-9])[a-zA-Z0-9]+\z/',
+    ];
 
     protected $rule = [
+        'account' => 'require|string|length:3,30|regex:account',
+        'nickname' => 'string|max:32',
         'id' => 'require|checkUser',
         'field' => 'require|checkField',
         'value' => 'require',
         'tenant_id' => 'require',
-        'password' => 'require|length:6,32',
+        'password' => 'require|string|length:6,32',
         'password_confirm' => 'require|confirm',
         'plan_id' => 'require|integer|gt:0',
     ];
 
     protected $message = [
+        'account.require' => '请输入账号',
+        'account.string' => '账号必须是字符串',
+        'account.length' => '账号长度须在3-30位字符',
+        'account.regex' => '账号须为字母和数字组合',
+        'nickname.string' => '昵称必须是字符串',
+        'nickname.max' => '昵称最多32位字符',
         'id.require' => '请选择用户',
         'field.require' => '请选择操作',
         'value.require' => '请输入内容',
         'tenant_id.require' => '请选择租户标识',
         'password.require' => '请输入新密码',
+        'password.string' => '密码必须是字符串',
         'password.length' => '密码长度须在6-32位字符',
         'password_confirm.require' => '请输入确认密码',
         'password_confirm.confirm' => '两次输入的密码不一致',
@@ -49,6 +61,10 @@ class UserValidate extends BaseValidate
         'plan_id.gt' => '请选择有效的会员套餐',
     ];
 
+    public function sceneAdd()
+    {
+        return $this->only(['account', 'nickname', 'password', 'password_confirm']);
+    }
 
     /**
      * @notes 详情场景

@@ -28,6 +28,7 @@ class UserTerminalEnum
     const PC         = 4;//电脑PC
     const IOS        = 5;//苹果app
     const ANDROID    = 6;//安卓app
+    const TENANT_ADMIN = 7; //后台创建
 
 
     const ALL_TERMINAL = [
@@ -55,6 +56,7 @@ class UserTerminalEnum
             self::PC            => '电脑PC',
             self::IOS           => '苹果APP',
             self::ANDROID       => '安卓APP',
+            self::TENANT_ADMIN  => '后台创建',
         ];
         if(true === $from){
             return $desc;
