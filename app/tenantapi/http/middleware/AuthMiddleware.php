@@ -56,7 +56,7 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
-        $requiresUserEditPermission = in_array($accessUri, ['user.user/add', 'merchant.brand/add'], true);
+        $requiresUserEditPermission = in_array($accessUri, ['user.user/add', 'merchant.brand/add', 'merchant.brand/delete'], true);
         if ($requiresUserEditPermission) {
             $accessUri = 'user.user/edit';
         }

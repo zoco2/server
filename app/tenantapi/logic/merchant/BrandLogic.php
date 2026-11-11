@@ -6,6 +6,7 @@ use app\common\logic\BaseLogic;
 use app\common\model\merchant\MerchantBrand;
 use app\common\model\merchant\MerchantBrandKnowledgeFolder;
 use app\common\model\user\User;
+use DomainException;
 use think\facade\Db;
 use Throwable;
 
@@ -65,5 +66,18 @@ class BrandLogic extends BaseLogic
                 : '品牌保存失败');
             return null;
         }
+    }
+
+    public static function delete(int $tenantId, int $userId, int $brandId): bool
+    {
+        try {
+            MerchantBrand::deleteForOwner($tenantId, $userId, $brandId);
+            return true;
+        } catch (DomainException $e) {
+            self::setError($e->getMessage());
+        } catch (Throwable $e) {
+            self::setError('品牌删除失败');
+        }
+        return false;
     }
 }

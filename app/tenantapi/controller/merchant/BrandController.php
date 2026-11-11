@@ -17,4 +17,16 @@ class BrandController extends BaseAdminController
         }
         return $this->success('品牌创建成功', $brand, 1, 1);
     }
+
+    /**
+     * 删除用户品牌
+     */
+    public function delete()
+    {
+        $params = (new BrandValidate())->post()->goCheck('tenantDelete');
+        if (!BrandLogic::delete($this->tenantId, (int)$params['user_id'], (int)$params['id'])) {
+            return $this->fail(BrandLogic::getError());
+        }
+        return $this->success('品牌删除成功', [], 1, 1);
+    }
 }

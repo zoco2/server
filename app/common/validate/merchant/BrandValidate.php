@@ -73,6 +73,11 @@ class BrandValidate extends BaseValidate
         return $this->only(['id']);
     }
 
+    public function sceneTenantDelete()
+    {
+        return $this->only(['id', 'user_id']);
+    }
+
     /**
      * @return BrandValidate
      */
