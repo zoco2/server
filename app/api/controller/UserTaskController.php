@@ -9,7 +9,7 @@ use InvalidArgumentException;
 
 final class UserTaskController extends BaseApiController
 {
-    /** 创建计划。日期字段以计划时区解释，兼容 Unix 秒格式。 */
+    /** 创建计划。执行频率必填，日期字段按计划时区解释。 */
     public function add()
     {
         return $this->write(fn () => UserTaskPlanService::create(

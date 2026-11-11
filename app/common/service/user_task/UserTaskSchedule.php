@@ -32,32 +32,19 @@ final class UserTaskSchedule
         }
         $timezone = new DateTimeZone($zone);
         $type = $input['schedule_type'] ?? null;
+        if (!in_array($type, self::TYPES, true)) {
+            throw new InvalidArgumentException('请选择有效的执行频率');
+        }
         $config = $input['schedule_config'] ?? [];
         if (!is_array($config)) {
             throw new InvalidArgumentException('计划规则无效');
         }
 
-        // 兼容只提交 interval_seconds 的原有调用。
-        $interval = 0;
-        if ($type === null) {
-            $interval = self::integer($input['interval_seconds'] ?? 0, 0, self::MAX_TIMESTAMP, '执行间隔必须是非负整数秒');
-            $type = $interval > 0 ? 'interval' : 'once';
-        } elseif ($type === 'interval') {
-            $interval = self::integer(
-                $config['interval_seconds'] ?? $input['interval_seconds'] ?? null,
-                1,
-                self::MAX_TIMESTAMP,
-                '执行间隔必须是正整数秒'
-            );
-        }
-        if (!in_array($type, self::TYPES, true)) {
-            throw new InvalidArgumentException('请选择有效的执行频率');
-        }
-
-        $startAt = isset($input['start_at'])
-            ? self::integer($input['start_at'], 1, self::MAX_TIMESTAMP, '开始时间无效')
-            : self::startFromDate($input, $timezone, $type);
-        $endAt = self::endFromInput($input, $timezone);
+        $interval = $type === 'interval'
+            ? self::integer($config['interval_seconds'] ?? null, 1, self::MAX_TIMESTAMP, '执行间隔必须是正整数秒')
+            : 0;
+        $startAt = self::startFromDate($input, $timezone, $type);
+        $endAt = self::endFromDate($input['end_date'] ?? '', $timezone);
         if ($endAt !== null && $endAt <= $startAt) {
             throw new InvalidArgumentException('结束时间必须晚于开始时间');
         }
@@ -66,14 +53,13 @@ final class UserTaskSchedule
 
     public static function fromRow(array $row): self
     {
-        $interval = (int)$row['interval_seconds'];
         return new self(
-            $row['schedule_type'] ?? ($interval > 0 ? 'interval' : 'once'),
+            $row['schedule_type'],
             (int)$row['start_at'],
             isset($row['end_at']) ? (int)$row['end_at'] : null,
-            new DateTimeZone($row['timezone'] ?? self::DEFAULT_TIMEZONE),
-            $interval,
-            json_decode((string)($row['schedule_config'] ?? ''), true) ?: [],
+            new DateTimeZone($row['timezone']),
+            (int)$row['interval_seconds'],
+            json_decode($row['schedule_config'], true, flags: JSON_THROW_ON_ERROR),
         );
     }
 
@@ -81,7 +67,7 @@ final class UserTaskSchedule
     {
         return [
             'schedule_type' => $this->type,
-            'schedule_config' => json_encode($this->config, JSON_THROW_ON_ERROR),
+            'schedule_config' => json_encode((object)$this->config, JSON_THROW_ON_ERROR),
             'timezone' => $this->timezone->getName(),
             'start_at' => $this->startAt,
             'end_at' => $this->endAt,
@@ -192,12 +178,8 @@ final class UserTaskSchedule
         return self::integer($start->getTimestamp(), 1, self::MAX_TIMESTAMP, '开始日期超出范围');
     }
 
-    private static function endFromInput(array $input, DateTimeZone $timezone): ?int
+    private static function endFromDate(mixed $endDate, DateTimeZone $timezone): ?int
     {
-        if (isset($input['end_at'])) {
-            return self::integer($input['end_at'], 1, self::MAX_TIMESTAMP, '结束时间无效');
-        }
-        $endDate = $input['end_date'] ?? '';
         if ($endDate === '') {
             return null;
         }

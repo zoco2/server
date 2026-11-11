@@ -62,8 +62,7 @@ final class UserTaskPlanService
         $query = Db::name(self::TABLE)->where(self::owner($tenantId, $userId))->where('status', '<>', 'deleted');
         $result = self::paginate($query, $page, $pageSize);
         foreach ($result['lists'] as &$plan) {
-            $plan['schedule_type'] ??= (int)$plan['interval_seconds'] > 0 ? 'interval' : 'once';
-            $plan['schedule_config'] = json_decode((string)$plan['schedule_config'], true) ?: [];
+            $plan['schedule_config'] = json_decode($plan['schedule_config'], flags: JSON_THROW_ON_ERROR);
         }
         return $result;
     }
