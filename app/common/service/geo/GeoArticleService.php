@@ -216,7 +216,7 @@ class GeoArticleService
             'title' => (string)$row['title'],
             'digest' => (string)$row['digest'],
             'content' => self::renderContent((string)$row['content']),
-            'update_time' => (int)$row['update_time'],
+            'update_time' => (int)$row->getData('update_time'),
         ];
     }
 
