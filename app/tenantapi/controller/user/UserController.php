@@ -40,6 +40,17 @@ class UserController extends BaseAdminController
         return $this->dataLists(new UserLists());
     }
 
+    /**
+     * @notes 创建用户
+     * @return \think\response\Json
+     */
+    public function add()
+    {
+        $params = (new UserValidate())->post()->goCheck('add');
+        $userId = UserLogic::add($params, $this->tenantId);
+        return $this->success('用户创建成功', ['id' => $userId], 1, 1);
+    }
+
 
     /**
      * @notes 获取用户详情
