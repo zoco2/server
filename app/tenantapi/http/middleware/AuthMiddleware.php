@@ -56,8 +56,8 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
-        $createUserAction = $accessUri === 'user.user/add';
-        if ($createUserAction) {
+        $requiresUserEditPermission = in_array($accessUri, ['user.user/add', 'merchant.brand/add'], true);
+        if ($requiresUserEditPermission) {
             $accessUri = 'user.user/edit';
         }
         $marketPricingAction = in_array($accessUri, ['power.market/pricingrules', 'power.market/previewpricing', 'power.market/applypricing'], true);
@@ -68,7 +68,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$createUserAction && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if (!$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
