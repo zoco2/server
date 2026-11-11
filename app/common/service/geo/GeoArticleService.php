@@ -123,6 +123,17 @@ class GeoArticleService
             if ($row->isEmpty() || ($userId > 0 && (int)$row['user_id'] !== $userId)) {
                 throw new Exception('稿件不存在');
             }
+            if ($row['source'] === 'ai') {
+                $data['source'] = 'ai';
+                if (!isset($params['source_question'])) {
+                    $data['source_question'] = $row['source_question'];
+                }
+                if ($row['status'] === GeoArticle::STATUS_DRAFT && (string)$row['preview_url'] === '') {
+                    $data['status'] = GeoArticle::STATUS_READY;
+                    $data['preview_token'] = $row['preview_token'] ?: self::newToken();
+                    $data['preview_url'] = self::buildPreviewUrl($data['preview_token']);
+                }
+            }
             // 已投稿/已发布的稿件允许改正文，但预览 token 保持不变，避免旧订单的链接失效。
             $row->save($data);
             return self::detail($id, $userId);
@@ -135,6 +146,33 @@ class GeoArticleService
         $data['create_time'] = time();
         $row = GeoArticle::create($data);
         return self::detail((int)$row['id'], $userId);
+    }
+
+    /** 将模型返回的纯文本存为稿件草稿，用户保存后才启用公开预览。 */
+    public static function createGeneratedDraft(int $tenantId, int $userId, string $prompt, array $article): int
+    {
+        $paragraphs = preg_split('/\R{2,}/u', $article['content']) ?: [$article['content']];
+        $content = implode("\n", array_map(
+            static fn(string $text): string => '<p>' . nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p>',
+            $paragraphs
+        ));
+        $row = GeoArticle::create([
+            'tenant_id' => $tenantId,
+            'user_id' => $userId,
+            'title' => $article['title'],
+            'digest' => $article['digest'],
+            'content' => $content,
+            'source_question' => mb_substr($prompt, 0, 2000, 'UTF-8'),
+            'source' => 'ai',
+            'status' => GeoArticle::STATUS_DRAFT,
+            'preview_token' => self::newToken(),
+            'preview_url' => '',
+        ]);
+        $id = (int)$row['id'];
+        if ($id <= 0) {
+            throw new Exception('稿件保存失败');
+        }
+        return $id;
     }
 
     /**
@@ -171,7 +209,7 @@ class GeoArticleService
             throw new Exception('预览地址无效');
         }
         $row = GeoArticle::where('preview_token', $token)->findOrEmpty();
-        if ($row->isEmpty()) {
+        if ($row->isEmpty() || ($row['status'] === GeoArticle::STATUS_DRAFT && (string)$row['preview_url'] === '')) {
             throw new Exception('预览地址已失效');
         }
         return [

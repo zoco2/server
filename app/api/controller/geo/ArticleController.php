@@ -3,8 +3,10 @@
 namespace app\api\controller\geo;
 
 use app\api\controller\BaseApiController;
+use app\common\service\geo\GeoArticleGenerationService;
 use app\common\service\geo\GeoArticleService;
 use Exception;
+use InvalidArgumentException;
 
 /**
  * GEO 稿件（PC 前台用户）。
@@ -15,6 +17,40 @@ class ArticleController extends BaseApiController
 {
     /** 免登录接口 */
     public array $notNeedLogin = ['preview'];
+
+    /** 提交企业知识库写稿任务。 */
+    public function generate()
+    {
+        $value = $this->request->post('brand_id');
+        $brandId = is_int($value) || is_string($value)
+            ? filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+            : false;
+        $prompt = $this->request->post('prompt', '');
+        if ($brandId === false || !is_string($prompt)) {
+            return $this->fail('请提供品牌和写稿要求');
+        }
+        try {
+            $data = GeoArticleGenerationService::submit((int)$this->request->tenantId, $this->userId, $brandId, $prompt);
+            return $this->success('任务已提交', $data);
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    /** 轮询写稿任务结果。 */
+    public function generationDetail()
+    {
+        $requestId = $this->request->get('requestId', '');
+        if (!is_string($requestId)) {
+            return $this->fail('生成任务不存在');
+        }
+        try {
+            $data = GeoArticleGenerationService::detail((int)$this->request->tenantId, $this->userId, $requestId);
+            return $this->success('获取成功', $data);
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
 
     /** 我的稿件列表 */
     public function lists()
