@@ -89,6 +89,7 @@ class Workerman extends Command
             self::pollSmartEdit($worker);
         };
 
+        // 两个子进程各自运行事件循环，MNS 长轮询和 Job 耗时都不会阻塞调度。
         self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
         self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
 
@@ -113,6 +114,7 @@ class Workerman extends Command
                 } catch (\Throwable $e) {
                     Log::error(sprintf('[%s] %s', $name, $e->getMessage()));
                     self::closeDatabase();
+                    // 数据库不可用时退避，避免每秒重连并重复写日志。
                     $retryAt = time() + 5;
                 }
             });

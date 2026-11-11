@@ -83,6 +83,7 @@ final class UserTaskPlanService
             $now = time();
             $nextAt = (int)$plan['next_run_at'];
             $interval = (int)$plan['interval_seconds'];
+            // 恢复周期计划时延续原时间序列，暂停期间错过的轮次不补跑。
             if ($nextAt <= $now) {
                 $nextAt = $interval > 0 ? self::latestDue($nextAt, $interval, $now) + $interval : $now + 1;
             }
@@ -98,6 +99,7 @@ final class UserTaskPlanService
     {
         $now ??= time();
         $due = ['status' => 'enabled'];
+        // 扫描阶段只取候选 ID，每条计划在独立事务中加锁并重新确认到期状态。
         $ids = Db::name(self::TABLE)->where($due)->where('next_run_at', '<=', $now)
             ->order(['next_run_at' => 'asc', 'id' => 'asc'])->limit(self::BATCH_SIZE)->column('id');
 
@@ -111,6 +113,7 @@ final class UserTaskPlanService
 
                 $interval = (int)$plan['interval_seconds'];
                 $scheduledAt = self::latestDue((int)$plan['next_run_at'], $interval, $now);
+                // 同一计划只允许一条待执行或执行中的记录，其余到期轮次记为跳过。
                 $active = Db::name(UserTaskRunService::TABLE)->where('plan_id', $id)
                     ->whereIn('status', [UserTaskRunService::QUEUED, UserTaskRunService::RUNNING])->value('id');
                 Db::name(UserTaskRunService::TABLE)->insert([
@@ -124,6 +127,7 @@ final class UserTaskPlanService
                     'reason' => $active ? '上一轮尚未结束' : '',
                     'finished_at' => $active ? $now : null,
                 ]);
+                // 执行记录和下次时间一起提交。单次计划的 finished 表示调度结束，执行结果单独记录。
                 Db::name(self::TABLE)->where('id', $id)->update([
                     'status' => $interval > 0 ? 'enabled' : 'finished',
                     'next_run_at' => $interval > 0 ? $scheduledAt + $interval : null,
@@ -133,6 +137,7 @@ final class UserTaskPlanService
         }
     }
 
+    /** 停机或扫描落后时定位最近一轮，按原计划时间推进下一轮。 */
     private static function latestDue(int $nextAt, int $interval, int $now): int
     {
         return $interval > 0 ? $nextAt + intdiv($now - $nextAt, $interval) * $interval : $nextAt;
@@ -153,6 +158,7 @@ final class UserTaskPlanService
                 'next_run_at' => $delete ? null : $plan['next_run_at'],
                 'update_time' => $now,
             ]);
+            // 条件更新只取消尚未领取的记录，已经开始的执行继续结束。
             Db::name(UserTaskRunService::TABLE)->where(['plan_id' => $id, 'status' => UserTaskRunService::QUEUED])
                 ->update([
                     'status' => 'cancelled',

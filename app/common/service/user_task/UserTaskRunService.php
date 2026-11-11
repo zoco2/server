@@ -27,6 +27,7 @@ final class UserTaskRunService
 
     public static function drain(): void
     {
+        // available_at 在排队时是可领取时间，在运行时是租约到期时间。
         $runs = Db::name(self::TABLE)->whereIn('status', [self::QUEUED, self::RUNNING])
             ->where('available_at', '<=', time())
             ->order(['available_at' => 'asc', 'id' => 'asc'])->limit(self::BATCH_SIZE)->select()->toArray();
@@ -38,8 +39,10 @@ final class UserTaskRunService
     private static function execute(array $run): void
     {
         $now = time();
+        // 候选列表可能已过时，领取时必须仍匹配扫描到的状态和租约令牌。
         $scope = ['id' => $run['id'], 'status' => $run['status'], 'lease_token' => $run['lease_token']];
         $claim = Db::name(self::TABLE)->where($scope)->where('available_at', '<=', $now);
+        // 进程反复崩溃时结束这条记录，让该计划可以继续调度后续轮次。
         if ((int)$run['attempts'] >= self::MAX_ATTEMPTS) {
             $claim->update(self::result('failed', null, '执行租约超时，已达到接管次数上限'));
             return;
@@ -56,6 +59,7 @@ final class UserTaskRunService
             return;
         }
 
+        // 租约超时可能触发重跑，有外部副作用的 Job 需要按执行记录 ID 做幂等。
         $handler = self::HANDLERS[$run['job_type']] ?? null;
         if ($handler === null) {
             $result = self::result('failed', null, '任务类型暂不支持');
