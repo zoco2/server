@@ -4,7 +4,7 @@ namespace app\api\logic\merchant;
 
 use app\common\logic\BaseLogic;
 use app\common\model\merchant\MerchantBrand;
-use app\common\model\merchant\MerchantStore;
+use DomainException;
 use Throwable;
 
 /**
@@ -108,18 +108,15 @@ class BrandLogic extends BaseLogic
      */
     public static function delete(int $id): bool
     {
-        $row = MerchantScope::query(MerchantBrand::class)->where('id', $id)->findOrEmpty();
-        if ($row->isEmpty()) {
-            self::setError('品牌不存在或无权限');
-            return false;
+        try {
+            MerchantBrand::deleteForOwner((int)request()->tenantId, (int)request()->userId, $id);
+            return true;
+        } catch (DomainException $e) {
+            self::setError($e->getMessage());
+        } catch (Throwable $e) {
+            self::setError('品牌删除失败');
         }
-        $storeCount = MerchantScope::query(MerchantStore::class)->where('brand_id', $id)->count();
-        if ($storeCount > 0) {
-            self::setError('请先删除该品牌下的门店');
-            return false;
-        }
-        $row->delete();
-        return true;
+        return false;
     }
 
     /**

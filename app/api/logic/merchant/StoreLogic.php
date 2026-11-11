@@ -5,6 +5,7 @@ namespace app\api\logic\merchant;
 use app\common\logic\BaseLogic;
 use app\common\model\merchant\MerchantBrand;
 use app\common\model\merchant\MerchantStore;
+use think\facade\Db;
 use Throwable;
 
 /**
@@ -47,12 +48,11 @@ class StoreLogic extends BaseLogic
      */
     public static function add(array $params): bool
     {
-        if (!self::brandOwned((int)$params['brand_id'])) {
-            self::setError('所属品牌不存在或无权限');
-            return false;
-        }
         try {
-            MerchantStore::create(self::fields($params));
+            Db::transaction(static function () use ($params): void {
+                self::lockOwnedBrand((int)$params['brand_id']);
+                MerchantStore::create(self::fields($params));
+            });
             return true;
         } catch (Throwable $e) {
             self::setError($e instanceof \InvalidArgumentException ? $e->getMessage() : '门店保存失败');
@@ -71,12 +71,11 @@ class StoreLogic extends BaseLogic
             self::setError('门店不存在或无权限');
             return false;
         }
-        if (!self::brandOwned((int)$params['brand_id'])) {
-            self::setError('所属品牌不存在或无权限');
-            return false;
-        }
         try {
-            $row->save(self::fields($params));
+            Db::transaction(static function () use ($row, $params): void {
+                self::lockOwnedBrand((int)$params['brand_id']);
+                $row->save(self::fields($params));
+            });
             return true;
         } catch (Throwable $e) {
             self::setError($e instanceof \InvalidArgumentException ? $e->getMessage() : '门店保存失败');
@@ -99,13 +98,13 @@ class StoreLogic extends BaseLogic
         return true;
     }
 
-    /**
-     * @param int $brandId
-     * @return bool
-     */
-    private static function brandOwned(int $brandId): bool
+    private static function lockOwnedBrand(int $brandId): void
     {
-        return MerchantScope::query(MerchantBrand::class)->where('id', $brandId)->count() > 0;
+        $brand = MerchantScope::query(MerchantBrand::class)->where('id', $brandId)
+            ->field('id')->lock(true)->findOrEmpty();
+        if ($brand->isEmpty()) {
+            throw new \InvalidArgumentException('所属品牌不存在或无权限');
+        }
     }
 
     /**
