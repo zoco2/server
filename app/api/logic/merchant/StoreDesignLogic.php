@@ -9,7 +9,7 @@ use InvalidArgumentException as Invalid;
 use Throwable;
 
 /**
- * 门店装修草稿。只保存配置，不发布、不授权平台能力。
+ * 门店装修配置及顾客端展示。
  * 图片用上传接口返回的 id + URL，存在 files JSON 里，不查独立文件表。
  */
 class StoreDesignLogic extends BaseLogic
@@ -161,6 +161,7 @@ class StoreDesignLogic extends BaseLogic
             self::attachStoreLogo($store, $files);
             return [
                 'store' => self::storePayload($store),
+                'tenant_id' => (int)$store['tenant_id'],
                 'config' => $config,
                 'revision' => $saved->isEmpty() ? 0 : (int)$saved['revision'],
                 'update_time' => $saved->isEmpty() ? 0 : (int)$saved['update_time'],
@@ -177,6 +178,56 @@ class StoreDesignLogic extends BaseLogic
         }
     }
 
+    /** 读取当前租户营业门店已保存的装修，只返回顾客端使用的字段。 */
+    public static function storefront(int $id): array
+    {
+        try {
+            $tenantId = (int)(request()->tenantId ?? 0);
+            if ($tenantId <= 0) {
+                throw new Invalid('门店页面暂不可用');
+            }
+            $store = MerchantStore::where('tenant_id', $tenantId)->where('id', $id)->where('status', 1)
+                ->field('user_id,name,logo_url')->findOrEmpty();
+            if ($store->isEmpty()) {
+                throw new Invalid('门店页面暂不可用');
+            }
+            $saved = MerchantStoreDesign::where('tenant_id', $tenantId)
+                ->where('user_id', (int)$store['user_id'])->where('store_id', $id)->where('revision', '>', 0)
+                ->field('config,files')->findOrEmpty();
+            if ($saved->isEmpty()) {
+                throw new Invalid('门店页面暂不可用');
+            }
+
+            $files = self::incomingFiles(json_decode((string)$saved['files'], true));
+            $config = self::normalize(json_decode((string)$saved['config'], true), $files, false);
+            $front = $config['storefront'];
+            if (!$front['enabled']) {
+                throw new Invalid('门店页面暂不可用');
+            }
+
+            $catalog = array_column(array_merge(...array_column(self::catalog(), 'items')), null, 'code');
+            $visible = [];
+            foreach ($front['order'] as $code) {
+                if ($config['features'][$code]) {
+                    $visible[] = $catalog[$code];
+                }
+            }
+            return [
+                'store' => ['name' => (string)$store['name'], 'logo_url' => (string)$store['logo_url']],
+                'storefront' => $front,
+                'accent' => $config['page']['accent'],
+                'hero_url' => $files[$config['header']['background_file_id']]['url'] ?? '',
+                'visible_features' => $visible,
+            ];
+        } catch (Invalid $e) {
+            self::setError('门店页面暂不可用');
+            return [];
+        } catch (Throwable $e) {
+            self::setError('门店页面读取失败');
+            return [];
+        }
+    }
+
     /**
      * 保存装修草稿。后写覆盖先写，不校验版本。
      *
@@ -189,7 +240,7 @@ class StoreDesignLogic extends BaseLogic
             $files = self::incomingFiles($params['files'] ?? []);
             $config = self::normalize($params['config'] ?? null, $files, true);
             $id = self::num($params['store_id'] ?? 0, 1, PHP_INT_MAX);
-            self::store($id);
+            $store = self::store($id);
             $old = MerchantScope::query(MerchantStoreDesign::class)->where('store_id', $id)->findOrEmpty();
             $now = time();
             $revision = ($old->isEmpty() ? 0 : (int)$old['revision']) + 1;
@@ -200,7 +251,9 @@ class StoreDesignLogic extends BaseLogic
                 'update_time' => $now,
             ];
             if (!$old->isEmpty()) {
-                $old->save($data);
+                // 装修表按租户、商家、门店联合标识，模型主键只包含 store_id。
+                MerchantScope::query(MerchantStoreDesign::class)
+                    ->where('tenant_id', (int)$store['tenant_id'])->where('store_id', $id)->update($data);
             } else {
                 MerchantStoreDesign::create($data + [
                     'user_id' => (int)request()->userId,
