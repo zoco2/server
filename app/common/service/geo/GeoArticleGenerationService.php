@@ -4,6 +4,7 @@ namespace app\common\service\geo;
 
 use app\common\job\GeoArticleGenerationJob;
 use app\common\service\power\TextSettlementPending;
+use app\common\service\user_task\UserTaskRunProgress;
 use InvalidArgumentException;
 use RuntimeException;
 use think\facade\Db;
@@ -29,7 +30,7 @@ class GeoArticleGenerationService
 每篇稿件各占 articles 数组的一项，正文不重复标题。JSON 外不添加解释或标记。
 PROMPT;
 
-    public static function submit(int $tenantId, int $userId, int $brandId, string $prompt): array
+    public static function submit(int $tenantId, int $userId, int $brandId, string $prompt, ?int $taskRunId = null): array
     {
         if (trim($prompt) === '' || mb_strlen($prompt, 'UTF-8') > 8000) {
             throw new InvalidArgumentException('请输入 1 到 8000 字的写稿要求');
@@ -47,11 +48,21 @@ PROMPT;
             'create_time' => time(),
         ]);
 
+        $payload = ['request_id' => $requestId];
+        if ($taskRunId !== null) {
+            $payload += ['task_run_id' => $taskRunId, 'user_id' => $userId];
+            UserTaskRunProgress::record($taskRunId, 'generation', 'waiting', '写稿任务已创建，等待队列执行', [
+                'generation_id' => $requestId,
+            ]);
+        }
         try {
-            GeoArticleGenerationJob::dispatch(['request_id' => $requestId], 0, '', $tenantId);
+            GeoArticleGenerationJob::dispatch($payload, 0, '', $tenantId);
         } catch (Throwable $e) {
             Log::error('GEO 任务投递失败 ' . $requestId . ' ' . get_class($e));
             self::finish($tenantId, $requestId, 'queued', 'failed', '', '任务投递失败，请重新提交');
+            if ($taskRunId !== null) {
+                throw new InvalidArgumentException('写稿任务投递失败', 0, $e);
+            }
         }
         return ['requestId' => $requestId];
     }

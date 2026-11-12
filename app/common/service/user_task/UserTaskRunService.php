@@ -21,13 +21,13 @@ final class UserTaskRunService
 
     public static function supports(string $type): bool
     {
-        return isset(self::HANDLERS[$type]);
+        return $type === GeoRankingTaskJob::TYPE || isset(self::HANDLERS[$type]);
     }
 
     public static function drain(): void
     {
         $runs = Db::name(self::TABLE)->where('status', self::QUEUED)
-            ->field('id,plan_id,job_type,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
+            ->field('id,plan_id,tenant_id,user_id,job_type,job_config,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
         foreach ($runs as $run) {
             self::execute($run);
         }
@@ -40,6 +40,11 @@ final class UserTaskRunService
         $expiresAt = isset($run['expires_at']) ? (int)$run['expires_at'] : null;
         if ($expiresAt !== null && $now >= $expiresAt) {
             Db::name(self::TABLE)->where($queued)->update(self::result('expired', null, '计划有效期已结束'));
+            return;
+        }
+
+        if ($run['job_type'] === GeoRankingTaskJob::TYPE) {
+            GeoRankingTaskJob::start($run, $expiresAt);
             return;
         }
 
