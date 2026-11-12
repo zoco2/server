@@ -7,18 +7,18 @@ namespace app\common\service\publish_task;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
+use app\common\model\merchant\PublishTask;
 use app\common\model\user\UserAuth;
 use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
 use RuntimeException;
-use think\facade\Db;
+use think\db\ConnectionInterface;
 use think\facade\Log;
 use Throwable;
 
 /** 管理当前租户用户的发布任务，由 MNS 消息逐轮触发执行。 */
 final class PublishTaskService
 {
-    private const TABLE = 'publish_task';
     private const PLATFORMS = ['douyin', 'xiaohongshu', 'kuaishou'];
     private const MAX_STAFF = 50;
 
@@ -43,7 +43,7 @@ final class PublishTaskService
         $rule = PublishTaskSchedule::normalize($input);
         $staffIds = array_key_exists('staff_ids', $input) ? self::staffIds($input['staff_ids']) : null;
 
-        return self::withOwnerLock($tenantId, $userId, static function () use (
+        return self::withOwnerLock($tenantId, $userId, static function (ConnectionInterface $connection) use (
             $tenantId, $userId, $content, $platforms, $rule, $staffIds
         ): array {
             if ($staffIds !== null) {
@@ -79,10 +79,11 @@ final class PublishTaskService
             ];
             // 投递失败时回滚任务记录。零延迟消息可能立即被取到，消费者会等待同一把锁，
             // 在创建事务提交或回滚后才读取任务。
-            $ids = Db::transaction(static function () use ($tenantId, $userId, $row, $wakeAt, $staffIds): array {
+            $ids = $connection->transaction(static function () use ($tenantId, $userId, $row, $wakeAt, $staffIds): array {
                 $ids = [];
                 foreach ($staffIds ?? [null] as $staffId) {
-                    $id = (int)Db::name(self::TABLE)->insertGetId($row + ['staff_id' => $staffId]);
+                    // 严格校验表字段，缺少迁移时整批回滚，防止员工任务丢失接收人。
+                    $id = (int)PublishTask::query()->strict(true)->insertGetId($row + ['staff_id' => $staffId]);
                     if ($wakeAt !== null) {
                         self::enqueue($id, $tenantId, $userId, $wakeAt);
                     }
@@ -104,8 +105,8 @@ final class PublishTaskService
         $page = max(1, $page);
         $size = max(1, min(100, $size));
         $owner = ['tenant_id' => $tenantId, 'user_id' => $userId];
-        $count = Db::name(self::TABLE)->where($owner)->count();
-        $tasks = Db::name(self::TABLE)->where($owner)
+        $count = PublishTask::where($owner)->count();
+        $tasks = PublishTask::where($owner)
             ->order('id desc')->page($page, $size)->select()->toArray();
         return [
             'count' => $count,
@@ -127,10 +128,11 @@ final class PublishTaskService
                 'status' => 'scheduled',
                 'next_wake_at' => $wakeAt,
             ];
-            $task = Db::name(self::TABLE)->where($where)->find();
-            if (!$task) {
+            $record = PublishTask::where($where)->findOrEmpty();
+            if ($record->isEmpty()) {
                 return;
             }
+            $task = $record->getData();
 
             $now = time();
             // 从本条消息的计划触发时间还原本轮，避免迟到的消息跳过应执行的轮次。
@@ -138,7 +140,7 @@ final class PublishTaskService
             $alreadyAttempted = $scheduledAt !== null && (int)$task['last_run_at'] === $scheduledAt;
             if ($alreadyAttempted && $task['last_run_status'] === 'sending') {
                 // 上次在发送阶段中断，结果记为未知，避免重复通知。
-                Db::name(self::TABLE)->where($where)->update([
+                PublishTask::where($where)->update([
                     'last_run_status' => 'unknown',
                     'last_error' => '发送进程中断，无法确认微信是否接收',
                     'update_time' => $now,
@@ -160,7 +162,7 @@ final class PublishTaskService
                         $openid = trim((string)($staff['openid'] ?? ''));
                         $appId = trim((string)($staff['appid'] ?? ''));
                     } else {
-                        $openid = trim((string)UserAuth::withoutGlobalScope()->where([
+                        $openid = trim((string)UserAuth::where([
                             'tenant_id' => $tenantId,
                             'user_id' => $userId,
                             'terminal' => UserTerminalEnum::WECHAT_OA,
@@ -168,14 +170,14 @@ final class PublishTaskService
                     }
 
                     // 发送前记录本轮已经开始，MNS 重投时可以跳过这次发送。
-                    Db::name(self::TABLE)->where($where)->update([
+                    PublishTask::where($where)->update([
                         'last_run_at' => $scheduledAt,
                         'last_run_status' => 'sending',
                         'last_error' => '',
                         'update_time' => $now,
                     ]);
                     $result = self::notify($id, $tenantId, $userId, $openid, $appId);
-                    Db::name(self::TABLE)->where($where)->update($result + ['update_time' => time()]);
+                    PublishTask::where($where)->update($result + ['update_time' => time()]);
                 }
                 // 已错过的轮次不补发，只安排下一次未来的执行。
                 $nextRunAt = PublishTaskSchedule::next($task, max($scheduledAt + 1, time()));
@@ -187,7 +189,7 @@ final class PublishTaskService
                 $nextWakeAt = PublishTaskSchedule::wakeAt($nextRunAt, time());
                 self::enqueue($id, $tenantId, $userId, $nextWakeAt);
             }
-            Db::name(self::TABLE)->where($where)->update([
+            PublishTask::where($where)->update([
                 'status' => $nextWakeAt === null ? 'ended' : 'scheduled',
                 'next_wake_at' => $nextWakeAt,
                 'update_time' => time(),
@@ -199,7 +201,7 @@ final class PublishTaskService
     public static function abandon(int $id, int $tenantId, int $userId, int $wakeAt): void
     {
         self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $wakeAt): void {
-            Db::name(self::TABLE)->where([
+            PublishTask::where([
                 'id' => $id,
                 'tenant_id' => $tenantId,
                 'user_id' => $userId,
@@ -249,24 +251,24 @@ final class PublishTaskService
         );
     }
 
-    /** 在默认数据库连接上持有锁，让同一租户下同一用户的创建和消费串行执行。 */
+    /** 在任务模型的连接上持有锁，让同一租户下同一用户的创建和消费串行执行。 */
     private static function withOwnerLock(int $tenantId, int $userId, callable $action): mixed
     {
         self::requireOwner($tenantId, $userId);
-        $db = Db::connect();
+        $connection = PublishTask::query()->getConnection();
         // MySQL 命名锁在同一实例内共享，锁名加入库名和表前缀以区分不同部署。
-        $lock = 'publish_task:' . sha1($db->getConfig('database') . ':' . $db->getConfig('prefix') . ':' . $tenantId . ':' . $userId);
-        if ((int)($db->query('SELECT GET_LOCK(?, 10) AS acquired', [$lock], true)[0]['acquired'] ?? 0) !== 1) {
+        $lock = 'publish_task:' . sha1($connection->getConfig('database') . ':' . $connection->getConfig('prefix') . ':' . $tenantId . ':' . $userId);
+        if ((int)($connection->query('SELECT GET_LOCK(?, 10) AS acquired', [$lock], true)[0]['acquired'] ?? 0) !== 1) {
             throw new RuntimeException('该用户的发布任务正在处理，请稍后重试');
         }
         try {
-            return $action();
+            return $action($connection);
         } finally {
             try {
-                $db->query('SELECT RELEASE_LOCK(?)', [$lock], true);
+                $connection->query('SELECT RELEASE_LOCK(?)', [$lock], true);
             } catch (Throwable $e) {
                 // 显式释放失败时关闭连接，避免常驻消费者继续占用这把锁。
-                $db->close();
+                $connection->close();
                 Log::channel('mns')->warning('[publish_task] owner lock release failed: ' . get_class($e));
             }
         }
@@ -283,9 +285,7 @@ final class PublishTaskService
     /** 员工档案只允许当前租户下的创建用户查询，后台消费也使用相同范围。 */
     private static function staffQuery(int $tenantId, int $userId): \think\db\Query
     {
-        return MerchantStaff::withoutGlobalScope()
-            ->where(['tenant_id' => $tenantId, 'user_id' => $userId])
-            ->whereNull('delete_time');
+        return MerchantStaff::where(['tenant_id' => $tenantId, 'user_id' => $userId]);
     }
 
     /** 校验批量请求并去重，避免重复给同一员工创建任务。 */

@@ -6,6 +6,7 @@ namespace app\api\controller;
 
 use app\common\service\publish_task\PublishTaskService;
 use InvalidArgumentException;
+use think\db\exception\DbException;
 use think\facade\Log;
 use Throwable;
 
@@ -32,8 +33,11 @@ final class PublishTaskController extends BaseApiController
             return $this->fail($e->getMessage());
         } catch (Throwable $e) {
             // 投递或存储故障记录到服务端，接口只返回通用提示。
-            Log::channel('mns')->error(sprintf('[publish_task] create failed tenant=%d user=%d type=%s',
-                (int)$this->request->tenantId, $this->userId, get_class($e)));
+            $field = $e instanceof DbException
+                && preg_match('/^fields not exists:\[([a-zA-Z0-9_]+)\]$/D', $e->getMessage(), $match)
+                ? $match[1] : '-';
+            Log::channel('mns')->error(sprintf('[publish_task] create failed tenant=%d user=%d type=%s code=%d missing_field=%s',
+                (int)$this->request->tenantId, $this->userId, get_class($e), (int)$e->getCode(), $field));
             return $this->fail('任务发布失败，请稍后重试');
         }
     }
