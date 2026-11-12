@@ -6,7 +6,9 @@ use app\common\model\geo\GeoDiagBatch;
 use app\common\model\geo\GeoDiagRun;
 use app\common\model\geo\GeoDiagSample;
 use app\common\model\merchant\MerchantBrand;
+use app\common\service\user_task\GeoRankingTaskJob;
 use Exception;
+use think\facade\Log;
 use think\facade\Db;
 
 /**
@@ -172,7 +174,7 @@ class GeoDiagnosisService
                 'charged_cents' => (int)$accepted['charged_cents'],
                 'balance_cents' => (int)$accepted['balance_cents'],
                 'response_json' => self::json($payload),
-                'next_poll_time' => $now + self::DEFAULT_POLL_AFTER,
+                'next_poll_time' => time() + self::DEFAULT_POLL_AFTER,
                 'update_time' => $now,
             ]);
             foreach ($itemsResult as $row) {
@@ -269,7 +271,14 @@ class GeoDiagnosisService
     {
         $stat = ['checked' => 0, 'completed' => 0, 'failed' => 0];
         $now = time();
-        $batches = GeoDiagBatch::whereNull('task_run_id')->whereNotIn('status', GeoDiagBatch::TERMINAL_STATUS)
+        $batches = GeoDiagBatch::where(static function ($query): void {
+            $query->where(static function ($active): void {
+                $active->where('terminal', 0)->whereNotIn('status', GeoDiagBatch::TERMINAL_STATUS);
+            })->whereOr(static function ($pending): void {
+                // 自动批次结果已落库但尚未通知时，下次只补交本地结果。
+                $pending->whereNotNull('task_run_id')->where('next_poll_time', '>', 0);
+            });
+        })
             ->where('next_poll_time', '<=', $now)
             ->order('next_poll_time', 'asc')
             ->limit(max(1, $limit))
@@ -277,21 +286,33 @@ class GeoDiagnosisService
         foreach ($batches as $batch) {
             $stat['checked']++;
             try {
-                $before = (string)$batch['status'];
-                self::syncBatch($batch);
-                $after = (string)GeoDiagBatch::where('id', (int)$batch['id'])->value('status');
-                if ($after !== $before || in_array($after, GeoDiagBatch::TERMINAL_STATUS, true)) {
+                $before = [$batch['status'], $batch['completed_count'], $batch['failed_count']];
+                if (empty($batch['terminal'])) {
+                    self::syncBatch($batch);
+                }
+                $terminal = !empty($batch['terminal']);
+                $changed = $before !== [$batch['status'], $batch['completed_count'], $batch['failed_count']];
+                if ($batch['task_run_id'] && ($changed || $terminal)) {
+                    GeoRankingTaskJob::onDiagnosisUpdated($batch->toArray(), $terminal);
+                    if ($terminal) {
+                        $batch->save(['next_poll_time' => 0]);
+                    }
+                }
+                if ($before[0] !== $batch['status'] || $terminal) {
                     $stat['completed']++;
                 }
-            } catch (Exception) {
+            } catch (Exception $e) {
                 $stat['failed']++;
+                if ($batch['task_run_id']) {
+                    Log::warning(sprintf('[geo-diag] batch=%d error=%s', $batch['id'], $e->getMessage()));
+                }
             }
         }
         return $stat;
     }
 
     /** @return array<string, mixed> */
-    public static function syncOne(int $id, int $userId = 0, ?int $taskRunId = null): array
+    public static function syncOne(int $id, int $userId = 0): array
     {
         $query = GeoDiagBatch::where('id', $id);
         if ($userId > 0) {
@@ -301,12 +322,8 @@ class GeoDiagnosisService
         if ($batch->isEmpty()) {
             throw new \InvalidArgumentException('诊断记录不存在');
         }
-        $linkedRunId = isset($batch['task_run_id']) ? (int)$batch['task_run_id'] : null;
-        if ($taskRunId !== null && $linkedRunId !== $taskRunId) {
-            throw new \InvalidArgumentException('诊断批次与执行记录不匹配');
-        }
-        // 用户查看自动诊断时只读。关联批次由计划任务 Worker 独占轮询。
-        if ($linkedRunId === $taskRunId && !in_array((string)$batch['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
+        // 自动批次交由现有后台轮询同步和接续。手动批次可以从页面立即刷新。
+        if (!$batch['task_run_id'] && !in_array((string)$batch['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
             self::syncBatch($batch);
         }
         return self::detail($id, $userId);
@@ -338,11 +355,10 @@ class GeoDiagnosisService
         self::syncRunsFromStatus((int)$batch['id'], $status);
         if ($data['terminal'] || in_array($data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
             // 先持久化样本与汇总，拉取失败时保留原状态供下一次轮询。
-            self::syncBatchResults($batch);
+            $data = array_replace($data, self::syncBatchResults($batch));
             $data['terminal'] = 1;
             $data['finish_time'] = $now;
-            $data['next_poll_time'] = 0;
-            unset($data['completed_count'], $data['failed_count']);
+            $data['next_poll_time'] = $batch['task_run_id'] ? $now : 0;
         }
         $batch->save($data);
     }
@@ -366,7 +382,7 @@ class GeoDiagnosisService
         }
     }
 
-    private static function syncBatchResults(GeoDiagBatch $batch): void
+    private static function syncBatchResults(GeoDiagBatch $batch): array
     {
         $upstreamBatchId = (string)$batch['upstream_batch_id'];
         $page = 1;
@@ -383,7 +399,7 @@ class GeoDiagnosisService
             $page++;
         } while ($page <= $pages);
         self::syncReports((int)$batch['id']);
-        self::recalculateBatch((int)$batch['id']);
+        return self::summarizeBatch((int)$batch['id']);
     }
 
     /** @param array<string, mixed> $runData */
@@ -473,7 +489,7 @@ class GeoDiagnosisService
         }
     }
 
-    private static function recalculateBatch(int $batchId): void
+    private static function summarizeBatch(int $batchId): array
     {
         $samples = GeoDiagSample::where('batch_id', $batchId)->select()->toArray();
         $total = count($samples);
@@ -498,15 +514,14 @@ class GeoDiagnosisService
             }
         }
         $valid = max(1, $completed);
-        GeoDiagBatch::where('id', $batchId)->update([
+        return [
             'completed_count' => $completed,
             'failed_count' => $failed,
             'mention_rate' => $completed > 0 ? round($mentioned / $valid, 4) : 0,
             'coverage_rate' => $total > 0 ? round($completed / $total, 4) : 0,
             'citation_rate' => $completed > 0 ? round($cited / $valid, 4) : 0,
             'summary_json' => self::json(['planned' => $total, 'completed' => $completed, 'failed' => $failed, 'mentioned' => $mentioned, 'cited' => $cited]),
-            'update_time' => time(),
-        ]);
+        ];
     }
 
     /** @param mixed $value */

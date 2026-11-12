@@ -6,7 +6,6 @@ use app\common\model\FailedJob;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\mq\LightMqService;
 use app\common\service\smart_edit\SmartEditService;
-use app\common\service\user_task\GeoRankingTaskJob;
 use app\common\service\user_task\UserTaskPlanService;
 use app\common\service\user_task\UserTaskRunService;
 use think\console\Command;
@@ -93,7 +92,6 @@ class Workerman extends Command
         // 两个子进程各自运行事件循环，MNS 长轮询和 Job 耗时都不会阻塞调度。
         self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
         self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
-        self::registerTaskWorker('user-task-geo', [GeoRankingTaskJob::class, 'tick']);
 
         Worker::runAll();
         return 0;

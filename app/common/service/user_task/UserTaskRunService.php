@@ -27,7 +27,7 @@ final class UserTaskRunService
     public static function drain(): void
     {
         $runs = Db::name(self::TABLE)->where('status', self::QUEUED)
-            ->field('id,plan_id,job_type,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
+            ->field('id,plan_id,tenant_id,user_id,job_type,job_config,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
         foreach ($runs as $run) {
             self::execute($run);
         }
@@ -44,7 +44,7 @@ final class UserTaskRunService
         }
 
         if ($run['job_type'] === GeoRankingTaskJob::TYPE) {
-            GeoRankingTaskJob::start((int)$run['id'], $expiresAt);
+            GeoRankingTaskJob::start($run, $expiresAt);
             return;
         }
 

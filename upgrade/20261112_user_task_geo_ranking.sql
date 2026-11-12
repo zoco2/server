@@ -13,21 +13,6 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
-SET @sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_user_task_run' AND COLUMN_NAME = 'workflow_data') = 0, 'ALTER TABLE `la_user_task_run` ADD COLUMN `workflow_data` text NULL', 'SELECT 1');
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_user_task_run' AND COLUMN_NAME = 'next_step_at') = 0, 'ALTER TABLE `la_user_task_run` ADD COLUMN `next_step_at` bigint unsigned DEFAULT NULL', 'SELECT 1');
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-SET @sql = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_user_task_run' AND INDEX_NAME = 'idx_geo_step_due') = 0, 'ALTER TABLE `la_user_task_run` ADD KEY `idx_geo_step_due` (`status`,`job_type`,`next_step_at`,`id`)', 'SELECT 1');
-PREPARE stmt FROM @sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
 SET @sql = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_geo_diag_batch' AND COLUMN_NAME = 'task_run_id') = 0, 'ALTER TABLE `la_geo_diag_batch` ADD COLUMN `task_run_id` bigint unsigned DEFAULT NULL COMMENT ''计划执行记录 ID，手动检测为空''', 'SELECT 1');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;

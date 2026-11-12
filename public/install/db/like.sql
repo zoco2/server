@@ -14703,8 +14703,6 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   `job_type` varchar(32) NOT NULL,
   `job_config` text NULL,
   `workflow_step` varchar(24) DEFAULT NULL,
-  `workflow_data` text NULL,
-  `next_step_at` bigint unsigned DEFAULT NULL,
   `scheduled_at` bigint unsigned NOT NULL,
   `expires_at` bigint unsigned DEFAULT NULL COMMENT '排队记录领取截止时间',
   `status` varchar(16) NOT NULL DEFAULT 'queued',
@@ -14715,8 +14713,7 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_plan_slot` (`plan_id`,`scheduled_at`),
   KEY `idx_claim` (`status`,`id`),
-  KEY `idx_plan_status` (`plan_id`,`status`),
-  KEY `idx_geo_step_due` (`status`,`job_type`,`next_step_at`,`id`)
+  KEY `idx_plan_status` (`plan_id`,`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务执行记录';
 
 CREATE TABLE IF NOT EXISTS `la_user_task_run_event` (
