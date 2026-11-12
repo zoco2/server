@@ -158,6 +158,26 @@ class PackageProvisionService
             self::upsertMenu($table,$tenantId,['pid'=>$redeemId,'type'=>'A','name'=>$label,'perms'=>'finance.redeem_card/'.$action,'source_menu_key'=>'core_tenant_redeem_card_'.$action,'is_show'=>0]);
         }
 
+        $nfcCodeId = self::upsertMenu($table, $tenantId, [
+            'pid' => $financeId,
+            'type' => 'C',
+            'name' => 'NFC 码牌',
+            'icon' => 'el-icon-Tickets',
+            'sort' => 89,
+            'paths' => 'nfc-code',
+            'component' => 'finance/nfc-code',
+            'perms' => 'merchant.nfc_code/lists',
+            'source_menu_key' => 'core_tenant_merchant_nfc_code',
+        ]);
+        self::upsertMenu($table, $tenantId, [
+            'pid' => $nfcCodeId,
+            'type' => 'A',
+            'name' => '分配给用户',
+            'perms' => 'merchant.nfc_code/assignUser',
+            'source_menu_key' => 'core_tenant_merchant_nfc_code_assign_user',
+            'is_show' => 0,
+        ]);
+
         $packageId = self::upsertMenu($table, $tenantId, [
             'pid' => $financeId,
             'type' => 'M',

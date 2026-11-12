@@ -57,13 +57,17 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
+        $nfcCodeAction = str_starts_with($accessUri, 'merchant.nfccode/');
+        if ($accessUri === 'merchant.nfccode/tenantchoices') {
+            $accessUri = 'merchant.nfccode/assigntenant';
+        }
         $marketPricingAction = in_array($accessUri, ['power.market/pricingrules', 'power.market/previewpricing', 'power.market/applypricing'], true);
         if ($marketPricingAction) $accessUri = 'power.market/saveprices';
         // 全部路由
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$marketPricingAction && !in_array($accessUri, $allUri)) {
+        if (!$nfcCodeAction && !$marketPricingAction && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
