@@ -99,6 +99,7 @@ class MnsConsume extends Command
             return;
         }
 
+        // 消息还原失败时没有 Job 实例，仍需按原始消息记录失败。
         $job = null;
         try {
             $job = LightMqService::restoreJob($payload);
@@ -159,6 +160,7 @@ class MnsConsume extends Command
         }
 
         try {
+            // 与 Workerman 消费入口一致，确认消息前先更新任务的最终状态。
             $job?->failed();
             FailedJob::record($queue, $jobClass, $jobId, $payload, $e, $dequeueCount);
             $this->safeDelete($service, $queue, $receiptHandle);

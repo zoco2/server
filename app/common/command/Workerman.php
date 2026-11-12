@@ -253,6 +253,7 @@ class Workerman extends Command
             return;
         }
 
+        // 消息还原失败时没有 Job 实例，仍需按原始消息记录失败。
         $job = null;
         try {
             $job = LightMqService::restoreJob($payload);
@@ -310,6 +311,7 @@ class Workerman extends Command
 
         try {
             self::reconnectDatabase();
+            // 耗尽重试后先让任务更新业务状态，再记录失败并确认消息。
             $job?->failed();
             FailedJob::record($queue, $jobClass, $jobId, $payload, $e, $dequeueCount);
             self::safeDelete($service, $queue, $receiptHandle);

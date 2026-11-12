@@ -193,10 +193,18 @@ class WeChatOaService
     }
 
 
+    /**
+     * 通过当前租户服务号的客服消息接口发送文本。
+     *
+     * @param string $openid 接收用户在该服务号下的 OpenID。
+     * @param string $content 要发送的文本内容。
+     * @throws \RuntimeException 微信返回错误码或响应缺少错误码时抛出。
+     */
     public function sendCustomText(string $openid, string $content): void
     {
         $path = 'cgi-bin/message/custom/send';
         $payload = ['touser' => $openid, 'msgtype' => 'text', 'text' => ['content' => $content]];
+        // 授权模式使用开放平台的授权方凭据，其余情况使用租户直连服务号。
         $result = $this->openPlatformMode
             ? OpenPlatformService::authorizerRequest((int)request()->tenantId, 'official', $path, $payload, 'official.custom_text.send')
             : $this->app->getClient()->postJson($path, $payload)->toArray(false);
