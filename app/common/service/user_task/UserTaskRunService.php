@@ -8,6 +8,7 @@ use app\common\job\HelloWorldJob;
 use think\facade\Db;
 use think\facade\Log;
 use Throwable;
+use Workerman\Worker;
 
 final class UserTaskRunService
 {
@@ -26,7 +27,7 @@ final class UserTaskRunService
     public static function drain(): void
     {
         $runs = Db::name(self::TABLE)->where('status', self::QUEUED)
-            ->field('id,job_type,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
+            ->field('id,plan_id,job_type,expires_at')->order('id', 'asc')->limit(self::BATCH_SIZE)->select()->toArray();
         foreach ($runs as $run) {
             self::execute($run);
         }
@@ -68,7 +69,25 @@ final class UserTaskRunService
             }
         }
 
-        Db::name(self::TABLE)->where(['id' => $run['id'], 'status' => self::RUNNING])->update($result);
+        $updated = Db::name(self::TABLE)->where(['id' => $run['id'], 'status' => self::RUNNING])->update($result);
+        if ($updated !== 1) {
+            return;
+        }
+
+        // 结果落库后再记日志。演示任务的固定输出可直接用来确认执行成功。
+        $message = sprintf(
+            '[user-task-runner] plan_id=%d run_id=%d job=%s status=%s',
+            $run['plan_id'],
+            $run['id'],
+            $run['job_type'],
+            $result['status']
+        );
+        if ($handler === HelloWorldJob::class && $result['status'] === 'success') {
+            $message .= ' output=' . $result['output'];
+        } elseif ($result['reason'] !== '') {
+            $message .= ' reason=' . $result['reason'];
+        }
+        Worker::log($message);
     }
 
     private static function result(string $status, ?string $output, string $reason): array

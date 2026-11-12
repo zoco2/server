@@ -103,6 +103,7 @@ class Workerman extends Command
         $worker->name = $name;
         $worker->count = 1;
         $worker->onWorkerStart = static function (Worker $worker) use ($name, $tick): void {
+            Worker::log(sprintf('[%s] started', $name));
             $retryAt = 0;
             Timer::add(1, static function () use ($worker, $name, $tick, &$retryAt): void {
                 if ($worker->stopping || time() < $retryAt
@@ -112,7 +113,7 @@ class Workerman extends Command
                 try {
                     $tick();
                 } catch (\Throwable $e) {
-                    Log::error(sprintf('[%s] %s', $name, $e->getMessage()));
+                    Worker::log(sprintf('[%s] tick failed: %s', $name, $e->getMessage()));
                     self::closeDatabase();
                     // 数据库不可用时退避，避免每秒重连并重复写日志。
                     $retryAt = time() + 5;
