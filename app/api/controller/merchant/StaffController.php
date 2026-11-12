@@ -101,6 +101,19 @@ class StaffController extends BaseApiController
         }
     }
 
+    /** 解除员工档案的公众号绑定。 */
+    public function unbindWechat()
+    {
+        if (!$this->request->isPost()) {
+            return $this->fail('请使用 POST 请求');
+        }
+        $params = (new StaffValidate())->post()->goCheck('unbindWechat');
+        if (!StaffLogic::unbindWechat((int)$params['id'])) {
+            return $this->fail(StaffLogic::getError());
+        }
+        return $this->success('解绑成功');
+    }
+
     /**
      * @notes 同步员工绑定成功模板
      */
