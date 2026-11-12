@@ -249,7 +249,7 @@ class GeoArticleService
         return $domain . '/api/geo.article/preview?token=' . $token;
     }
 
-    /** 为本轮生成的稿件启用供海讯社拉取的公开预览。 */
+    /** 为本轮生成的稿件启用投稿所需的公开预览。 */
     public static function prepareForAutomaticSubmission(int $tenantId, int $userId, int $articleId, string $origin): void
     {
         $article = GeoArticle::where([

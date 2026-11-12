@@ -69,7 +69,7 @@ final class GeoRankingTaskConfig
     private static function mediaTargets(mixed $input): array
     {
         if (!is_array($input) || !$input) {
-            throw new InvalidArgumentException('请至少选择一个海讯社投稿媒体');
+            throw new InvalidArgumentException('请至少选择一个投稿媒体');
         }
         $targets = [];
         foreach ($input as $target) {

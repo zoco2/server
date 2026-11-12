@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\common\service\user_task;
 
+use app\common\service\geo\AigcGeoManuscriptService;
 use InvalidArgumentException;
 use think\facade\Db;
 
@@ -43,6 +44,9 @@ final class UserTaskRunProgress
         }
         foreach ($events as &$event) {
             $event['details'] = json_decode($event['details'], true, flags: JSON_THROW_ON_ERROR);
+            if ($event['step'] === 'submission' && isset($event['details']['failure_reason'])) {
+                $event['details']['failure_reason'] = AigcGeoManuscriptService::publicMessage($event['details']['failure_reason']);
+            }
         }
         unset($event);
         return ['run' => $run, 'events' => $events, 'has_more' => $hasMore];
