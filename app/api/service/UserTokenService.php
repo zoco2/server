@@ -44,6 +44,14 @@ class UserTokenService
         $expireTime = $time + Config::get('project.user_token.expire_duration');
         $userTokenCache = new UserTokenCache();
 
+        // 临时允许同类终端多处登录，复用仍有效的会话。
+        if ($userSession && $userSession->expire_time > $time) {
+            $userInfo = $userTokenCache->setUserInfo($userSession->token);
+            if ($userInfo) {
+                return $userInfo;
+            }
+        }
+
         //token处理
         if ($userSession) {
             //清空缓存
