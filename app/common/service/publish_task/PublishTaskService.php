@@ -294,12 +294,19 @@ final class PublishTaskService
         if (!is_array($staffIds) || !array_is_list($staffIds) || $staffIds === [] || count($staffIds) > self::MAX_STAFF) {
             throw new InvalidArgumentException('请选择 1 至 50 名员工');
         }
+        $clean = [];
         foreach ($staffIds as $staffId) {
-            if (!is_int($staffId) || $staffId <= 0) {
+            // 表单使用字符串传输员工 ID，仅接受不带前导零的十进制正整数。
+            $value = $staffId;
+            if (is_string($staffId) && preg_match('/^[1-9][0-9]*$/D', $staffId)) {
+                $value = filter_var($staffId, FILTER_VALIDATE_INT);
+            }
+            if (!is_int($value) || $value <= 0) {
                 throw new InvalidArgumentException('员工 ID 无效');
             }
+            $clean[] = $value;
         }
-        return array_values(array_unique($staffIds));
+        return array_values(array_unique($clean));
     }
 
     /** 将数据库记录转换成接口数据，隐藏内部标识并统一数值字段类型。 */

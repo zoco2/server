@@ -19,9 +19,14 @@ final class PublishTaskController extends BaseApiController
             return $this->fail('请使用 POST 请求');
         }
         try {
+            $input = $this->request->post();
+            // 全局 trim 会把 JSON 数字和布尔值转成字符串，员工 ID 需要按原始类型校验。
+            if (array_key_exists('staff_ids', $input)) {
+                $input['staff_ids'] = $this->request->post('staff_ids', null, null);
+            }
             // 任务归属取自登录上下文，请求体只提供任务配置。
             return $this->success('', PublishTaskService::create(
-                (int)$this->request->tenantId, $this->userId, $this->request->post()
+                (int)$this->request->tenantId, $this->userId, $input
             ));
         } catch (InvalidArgumentException $e) {
             return $this->fail($e->getMessage());
