@@ -248,6 +248,76 @@ final class WorkspaceAssetService
         }
     }
 
+    /**
+     * 解析单个资产的可读媒体地址，供素材分析等只读能力使用。
+     *
+     * 已删除、已从资产库移除的资产不再可读，避免分析能力绕过删除语义。
+     *
+     * @param int $tenant
+     * @param int $user
+     * @param string $ref 资产标识，如 upload:result:12
+     * @return array{kind:string,url:string,cover_url:string,title:string}
+     */
+    public static function media(int $tenant, int $user, string $ref): array
+    {
+        self::identity($tenant, $user);
+        $asset = self::owned($tenant, $user, $ref);
+        if ($asset === null) {
+            throw new InvalidArgumentException('资产不存在或无权操作');
+        }
+        $state = Db::name(self::TABLE)->where(['tenant_id' => $tenant, 'user_id' => $user, 'asset_ref' => $ref])->find();
+        if ((int)($state['trashed_at'] ?? 0) > 0 || (int)($state['hidden_at'] ?? 0) > 0) {
+            throw new InvalidArgumentException('资产已删除或已从资产库移除');
+        }
+        $raw = $asset['raw'];
+        $kind = 'file';
+        $url = '';
+        // 生成结果自带明确的媒体字段，优先按字段判定，避免从扩展名猜测。
+        foreach (['video' => 'video_url', 'image' => 'image_url', 'audio' => 'audio_url'] as $name => $field) {
+            $value = trim((string)($raw[$field] ?? ''));
+            if ($value !== '') {
+                $kind = $name;
+                $url = $value;
+                break;
+            }
+        }
+        if ($url === '') {
+            $url = trim((string)($raw['url'] ?? ''));
+            $kind = self::kindOfMedia((int)($raw['type'] ?? 0), $url, (string)($raw['mime_type'] ?? ''));
+        }
+        if ($url === '') {
+            throw new InvalidArgumentException('资产缺少可读取的媒体地址');
+        }
+        return [
+            'kind' => $kind,
+            'url' => $url,
+            'cover_url' => trim((string)($raw['cover_url'] ?? '')),
+            'title' => trim((string)($raw['title'] ?? '')),
+        ];
+    }
+
+    /** 上传记录的 type 优先；历史记录缺少 type 时退回 MIME 与扩展名。 */
+    private static function kindOfMedia(int $type, string $url, string $mime): string
+    {
+        if ($type === FileEnum::IMAGE_TYPE) return 'image';
+        if ($type === FileEnum::VIDEO_TYPE) return 'video';
+        if ($type === FileEnum::AUDIO_TYPE) return 'audio';
+        $mime = strtolower(trim($mime));
+        if (str_starts_with($mime, 'image/')) return 'image';
+        if (str_starts_with($mime, 'video/')) return 'video';
+        if (str_starts_with($mime, 'audio/')) return 'audio';
+        $path = strtolower((string)parse_url($url, PHP_URL_PATH));
+        foreach (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp'] as $ext) {
+            if (str_ends_with($path, $ext)) return 'image';
+        }
+        foreach (['.mp4', '.mov', '.webm', '.m4v', '.avi', '.mkv'] as $ext) {
+            if (str_ends_with($path, $ext)) return 'video';
+        }
+        foreach (['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'] as $ext) {
+            if (str_ends_with($path, $ext)) return 'audio';
+        }
+        return 'file';
+    }
     private static function owned(int $tenant, int $user, string $ref, bool $includeDeleted = false): ?array
     {
         [$source, $kind, $id] = explode(':', $ref);
