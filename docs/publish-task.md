@@ -21,6 +21,6 @@
 
 `GET /api/publish_task/lists?page_no=1&page_size=20` 查询当前用户的任务。创建和列表均返回 `status`（`scheduled`、`ended`、`failed`）、`next_run_at`、`last_run_at`（最近尝试的计划时刻）、`last_run_status` 和 `last_error`。时间戳单位为秒。任务状态 `failed` 表示 MNS 消费重试耗尽；一轮微信发送失败记在 `last_run_status` 和 `last_error`，后续轮次仍会继续。若进程在发送阶段中断且无法确认结果，记录为 `unknown`，不会补发同一轮。
 
-部署时先执行 `upgrade/20261112_publish_task.sql`，然后重启现有 `php think workerman` 消费进程。使用 `mns.default_queue`，队列默认延时须为 0，消息保留时间设为 7 天；单次最长延时为 6 天，超出时消费到的消息只接续投递，直到真正到期。无需额外的定时扫描任务。
+部署时先执行 `upgrade/20261112_publish_task.sql`，然后重启现有 `php think workerman` 消费进程。使用 `mns.default_queue`，队列默认延时须为 0，消息保留时间设为 7 天。单次最长延时为 6 天，超出时分段投递。任务保存下一条 MNS 消息的唤醒时间，消费时用它识别旧消息。接口按推送规则计算实际执行时间 `next_run_at`。
 
 `hello` 通过微信公众号客服消息接口发送。实际送达需要租户配置或授权服务号、用户绑定服务号，且满足微信的客服消息发送窗口、权限与额度。

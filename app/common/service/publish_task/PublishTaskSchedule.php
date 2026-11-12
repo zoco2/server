@@ -101,10 +101,10 @@ final class PublishTaskSchedule
         return $rule['end_date'] !== null && self::local($now)->format('Y-m-d') > $rule['end_date'];
     }
 
-    /** 计算本次 MNS 延时秒数，已到期时为 0，超出上限时由后续消息接力。 */
-    public static function delay(int $scheduledAt, int $now): int
+    /** 返回本次 MNS 触发时间，超出延时上限时先安排一次中途触发。 */
+    public static function wakeAt(int $scheduledAt, int $now): int
     {
-        return min(self::MAX_DELAY_SECONDS, max(0, $scheduledAt - $now));
+        return min($scheduledAt, $now + self::MAX_DELAY_SECONDS);
     }
 
     /** 按北京时间解释时间戳，避免受 PHP 默认时区影响。 */

@@ -45,17 +45,16 @@ final class PublishTaskService
         ): array {
             // 取得锁后再按当前时间计算首轮，范围内没有可用时间时直接结束。
             $now = time();
-            $next = PublishTaskSchedule::first($rule, $now);
-            $token = $next === null ? '' : self::token();
+            $nextRunAt = PublishTaskSchedule::first($rule, $now);
+            $wakeAt = $nextRunAt === null ? null : PublishTaskSchedule::wakeAt($nextRunAt, $now);
             $row = $rule + [
                 'tenant_id' => $tenantId,
                 'user_id' => $userId,
                 'content' => trim($content),
                 'platforms' => json_encode(array_values(array_unique($platforms)), JSON_THROW_ON_ERROR),
                 'notice_type' => 'official_account',
-                'status' => $next === null ? 'ended' : 'scheduled',
-                'next_run_at' => $next,
-                'wake_token' => $token,
+                'status' => $wakeAt === null ? 'ended' : 'scheduled',
+                'next_wake_at' => $wakeAt,
                 'last_run_at' => null,
                 'last_run_status' => '',
                 'last_error' => '',
@@ -64,10 +63,10 @@ final class PublishTaskService
             ];
             // 投递失败时回滚任务记录。零延迟消息可能立即被取到，消费者会等待同一把锁，
             // 在创建事务提交或回滚后才读取任务。
-            $row['id'] = Db::transaction(static function () use ($tenantId, $userId, $row, $next, $token): int {
+            $row['id'] = Db::transaction(static function () use ($tenantId, $userId, $row, $wakeAt): int {
                 $id = (int)Db::name(self::TABLE)->insertGetId($row);
-                if ($next !== null) {
-                    self::enqueue($id, $tenantId, $userId, $next, $token);
+                if ($wakeAt !== null) {
+                    self::enqueue($id, $tenantId, $userId, $wakeAt);
                 }
                 return $id;
             });
@@ -94,16 +93,16 @@ final class PublishTaskService
     }
 
     /** 核对消息是否仍对应当前调度，到期则执行本轮，并投递下一轮。 */
-    public static function consume(int $id, int $tenantId, int $userId, string $token): void
+    public static function consume(int $id, int $tenantId, int $userId, int $wakeAt): void
     {
-        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $token): void {
-            // 只有匹配当前令牌的消息才能执行任务，旧消息直接忽略。
+        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $wakeAt): void {
+            // 消息的计划触发时间必须与任务记录一致，旧消息直接忽略。
             $where = [
                 'id' => $id,
                 'tenant_id' => $tenantId,
                 'user_id' => $userId,
                 'status' => 'scheduled',
-                'wake_token' => $token,
+                'next_wake_at' => $wakeAt,
             ];
             $task = Db::name(self::TABLE)->where($where)->find();
             if (!$task) {
@@ -111,8 +110,9 @@ final class PublishTaskService
             }
 
             $now = time();
-            $scheduledAt = (int)$task['next_run_at'];
-            $alreadyAttempted = (int)$task['last_run_at'] === $scheduledAt;
+            // 从本条消息的计划触发时间还原本轮，避免迟到的消息跳过应执行的轮次。
+            $scheduledAt = PublishTaskSchedule::first($task, $wakeAt);
+            $alreadyAttempted = $scheduledAt !== null && (int)$task['last_run_at'] === $scheduledAt;
             if ($alreadyAttempted && $task['last_run_status'] === 'sending') {
                 // 上次在发送阶段中断，结果记为未知，避免重复通知。
                 Db::name(self::TABLE)->where($where)->update([
@@ -122,7 +122,7 @@ final class PublishTaskService
                 ]);
             }
 
-            if (PublishTaskSchedule::hasEnded($task, $now)) {
+            if ($scheduledAt === null || PublishTaskSchedule::hasEnded($task, $now)) {
                 $nextRunAt = null;
             } elseif ($now < $scheduledAt) {
                 // 分段延时的消息提前到达，继续等待原定执行时间。
@@ -149,41 +149,33 @@ final class PublishTaskService
                 $nextRunAt = PublishTaskSchedule::next($task, max($scheduledAt + 1, time()));
             }
 
-            if ($nextRunAt === null) {
-                Db::name(self::TABLE)->where($where)->update([
-                    'status' => 'ended',
-                    'next_run_at' => null,
-                    'wake_token' => '',
-                    'update_time' => time(),
-                ]);
-                return;
+            $nextWakeAt = null;
+            if ($nextRunAt !== null) {
+                // 先投递再更新时间。投递失败时，当前消息仍可重试。
+                $nextWakeAt = PublishTaskSchedule::wakeAt($nextRunAt, time());
+                self::enqueue($id, $tenantId, $userId, $nextWakeAt);
             }
-
-            // 先投递再替换令牌，投递失败时旧消息仍可重试。
-            $nextToken = self::token();
-            self::enqueue($id, $tenantId, $userId, $nextRunAt, $nextToken);
             Db::name(self::TABLE)->where($where)->update([
-                'next_run_at' => $nextRunAt,
-                'wake_token' => $nextToken,
+                'status' => $nextWakeAt === null ? 'ended' : 'scheduled',
+                'next_wake_at' => $nextWakeAt,
                 'update_time' => time(),
             ]);
         });
     }
 
     /** 消费重试耗尽时终止该消息对应的调度，旧消息不会影响当前任务状态。 */
-    public static function abandon(int $id, int $tenantId, int $userId, string $token): void
+    public static function abandon(int $id, int $tenantId, int $userId, int $wakeAt): void
     {
-        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $token): void {
+        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $wakeAt): void {
             Db::name(self::TABLE)->where([
                 'id' => $id,
                 'tenant_id' => $tenantId,
                 'user_id' => $userId,
                 'status' => 'scheduled',
-                'wake_token' => $token,
+                'next_wake_at' => $wakeAt,
             ])->update([
                 'status' => 'failed',
-                'next_run_at' => null,
-                'wake_token' => '',
+                'next_wake_at' => null,
                 'update_time' => time(),
             ]);
         });
@@ -211,11 +203,15 @@ final class PublishTaskService
         }
     }
 
-    /** 根据执行时间计算本次延时，消息携带任务归属、任务 ID 和令牌。 */
-    private static function enqueue(int $id, int $tenantId, int $userId, int $next, string $token): void
+    /** 按指定时刻投递消息，消费时用该时间匹配任务记录。 */
+    private static function enqueue(int $id, int $tenantId, int $userId, int $wakeAt): void
     {
-        PublishTaskJob::dispatch(['task_id' => $id, 'user_id' => $userId, 'wake_token' => $token],
-            PublishTaskSchedule::delay($next, time()), '', $tenantId);
+        PublishTaskJob::dispatch(
+            ['task_id' => $id, 'user_id' => $userId, 'wake_at' => $wakeAt],
+            max(0, $wakeAt - time()),
+            '',
+            $tenantId
+        );
     }
 
     /** 在默认数据库连接上持有锁，让同一租户下同一用户的创建和消费串行执行。 */
@@ -241,12 +237,6 @@ final class PublishTaskService
         }
     }
 
-    /** 为每次新投递生成独立令牌，消费时用它区分有效消息和旧消息。 */
-    private static function token(): string
-    {
-        return bin2hex(random_bytes(16));
-    }
-
     /** 拒绝缺少有效租户或用户标识的请求和队列消息。 */
     private static function requireOwner(int $tenantId, int $userId): void
     {
@@ -258,9 +248,12 @@ final class PublishTaskService
     /** 将数据库记录转换成接口数据，隐藏内部标识并统一数值字段类型。 */
     private static function present(array $row): array
     {
-        unset($row['wake_token'], $row['tenant_id'], $row['user_id']);
+        // 接口返回真正发通知的时间，分段延时的中间触发时间仅供队列使用。
+        $row['next_run_at'] = $row['next_wake_at'] === null
+            ? null : PublishTaskSchedule::first($row, (int)$row['next_wake_at']);
+        unset($row['next_wake_at'], $row['tenant_id'], $row['user_id']);
         $row['platforms'] = json_decode($row['platforms'], true, flags: JSON_THROW_ON_ERROR);
-        foreach (['id', 'weekday', 'next_run_at', 'last_run_at', 'create_time', 'update_time'] as $key) {
+        foreach (['id', 'weekday', 'last_run_at', 'create_time', 'update_time'] as $key) {
             $row[$key] = $row[$key] === null ? null : (int)$row[$key];
         }
         return $row + ['timezone' => PublishTaskSchedule::TIMEZONE];
