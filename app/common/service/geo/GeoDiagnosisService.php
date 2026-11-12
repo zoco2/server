@@ -45,9 +45,10 @@ class GeoDiagnosisService
     /**
      * @param int $userId
      * @param array<string, mixed> $params
+     * @param int|null $taskRunId 内部计划执行记录 ID，手动检测留空
      * @return array<string, mixed>
      */
-    public static function create(int $userId, array $params): array
+    public static function create(int $userId, array $params, ?int $taskRunId = null): array
     {
         $brandId = (int)($params['brand_id'] ?? 0);
         $brand = MerchantBrand::where('id', $brandId)->findOrEmpty();
@@ -85,10 +86,11 @@ class GeoDiagnosisService
             }
         }
 
-        return Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions) {
+        return Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $taskRunId) {
             $now = time();
             $batch = GeoDiagBatch::create([
                 'user_id' => $userId,
+                'task_run_id' => $taskRunId,
                 'merchant_brand_id' => (int)$brand['id'],
                 'title' => mb_substr($title, 0, 200),
                 'brand_name' => (string)$brand['name'],
@@ -106,6 +108,9 @@ class GeoDiagnosisService
                 'update_time' => $now,
             ]);
             $idempotencyKey = self::idempotencyKey((int)$batch['tenant_id'], $userId, (int)$batch['id']);
+            if ($taskRunId !== null) {
+                $idempotencyKey = 'gdiag-task-' . $batch['tenant_id'] . '-' . $userId . '-' . $taskRunId;
+            }
             $items = [];
             foreach ($questions as $index => $prompt) {
                 $item = [
@@ -153,10 +158,16 @@ class GeoDiagnosisService
             }
 
             $payload = is_array($accepted['data']) ? $accepted['data'] : [];
+            if ($taskRunId !== null && empty($payload['id'])) {
+                throw new Exception('诊断服务未返回批次ID');
+            }
             $itemsResult = is_array($payload['items'] ?? null) ? $payload['items'] : [];
             $batch->save([
                 'upstream_batch_id' => (string)($payload['id'] ?? ''),
-                'status' => (string)($payload['status'] ?? GeoDiagBatch::STATUS_QUEUED),
+                // 自动检测统一在轮询阶段拉取明细，再确认终态。
+                'status' => $taskRunId === null
+                    ? (string)($payload['status'] ?? GeoDiagBatch::STATUS_QUEUED)
+                    : GeoDiagBatch::STATUS_QUEUED,
                 'provider_request_id' => (string)$accepted['request_id'],
                 'charged_cents' => (int)$accepted['charged_cents'],
                 'balance_cents' => (int)$accepted['balance_cents'],
@@ -258,7 +269,7 @@ class GeoDiagnosisService
     {
         $stat = ['checked' => 0, 'completed' => 0, 'failed' => 0];
         $now = time();
-        $batches = GeoDiagBatch::whereNotIn('status', GeoDiagBatch::TERMINAL_STATUS)
+        $batches = GeoDiagBatch::whereNull('task_run_id')->whereNotIn('status', GeoDiagBatch::TERMINAL_STATUS)
             ->where('next_poll_time', '<=', $now)
             ->order('next_poll_time', 'asc')
             ->limit(max(1, $limit))
@@ -280,7 +291,7 @@ class GeoDiagnosisService
     }
 
     /** @return array<string, mixed> */
-    public static function syncOne(int $id, int $userId = 0): array
+    public static function syncOne(int $id, int $userId = 0, ?int $taskRunId = null): array
     {
         $query = GeoDiagBatch::where('id', $id);
         if ($userId > 0) {
@@ -288,9 +299,14 @@ class GeoDiagnosisService
         }
         $batch = $query->findOrEmpty();
         if ($batch->isEmpty()) {
-            throw new Exception('诊断记录不存在');
+            throw new \InvalidArgumentException('诊断记录不存在');
         }
-        if (!in_array((string)$batch['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
+        $linkedRunId = isset($batch['task_run_id']) ? (int)$batch['task_run_id'] : null;
+        if ($taskRunId !== null && $linkedRunId !== $taskRunId) {
+            throw new \InvalidArgumentException('诊断批次与执行记录不匹配');
+        }
+        // 用户查看自动诊断时只读。关联批次由计划任务 Worker 独占轮询。
+        if ($linkedRunId === $taskRunId && !in_array((string)$batch['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
             self::syncBatch($batch);
         }
         return self::detail($id, $userId);
@@ -300,7 +316,7 @@ class GeoDiagnosisService
     {
         $upstreamBatchId = trim((string)$batch['upstream_batch_id']);
         if ($upstreamBatchId === '') {
-            throw new Exception('诊断记录缺少服务商批次ID');
+            throw new \InvalidArgumentException('诊断记录缺少服务商批次ID');
         }
         $statusResponse = GeoDiagProvider::batchStatus($upstreamBatchId);
         $status = is_array($statusResponse['data']) ? $statusResponse['data'] : [];
@@ -319,15 +335,16 @@ class GeoDiagnosisService
             'next_poll_time' => $now + max(5, $pollAfter ?: self::DEFAULT_POLL_AFTER),
             'update_time' => $now,
         ];
-        if (!empty($status['terminal']) || in_array((string)$data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
+        self::syncRunsFromStatus((int)$batch['id'], $status);
+        if ($data['terminal'] || in_array($data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
+            // 先持久化样本与汇总，拉取失败时保留原状态供下一次轮询。
+            self::syncBatchResults($batch);
+            $data['terminal'] = 1;
             $data['finish_time'] = $now;
             $data['next_poll_time'] = 0;
+            unset($data['completed_count'], $data['failed_count']);
         }
         $batch->save($data);
-        self::syncRunsFromStatus((int)$batch['id'], $status);
-        if (!empty($status['terminal']) || in_array((string)$data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
-            self::syncBatchResults($batch, $status);
-        }
     }
 
     /** @param array<string, mixed> $status */
@@ -349,8 +366,7 @@ class GeoDiagnosisService
         }
     }
 
-    /** @param array<string, mixed> $status */
-    private static function syncBatchResults(GeoDiagBatch $batch, array $status): void
+    private static function syncBatchResults(GeoDiagBatch $batch): void
     {
         $upstreamBatchId = (string)$batch['upstream_batch_id'];
         $page = 1;
@@ -472,7 +488,7 @@ class GeoDiagnosisService
             } elseif (in_array($status, ['failed', 'cancelled'], true)) {
                 $failed++;
             }
-            if ((int)$sample['local_mentioned'] === 1 || (int)$sample['brand_mentioned'] === 1) {
+            if ($status === 'completed' && ((int)$sample['local_mentioned'] === 1 || (int)$sample['brand_mentioned'] === 1)) {
                 $mentioned++;
             }
             $citations = self::decode($sample['citations_json'] ?? '[]', []);

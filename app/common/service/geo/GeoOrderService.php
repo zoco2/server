@@ -8,6 +8,7 @@ use app\common\model\geo\GeoMedia;
 use app\common\model\geo\GeoOrder;
 use app\common\model\geo\GeoOrderLog;
 use Exception;
+use InvalidArgumentException;
 
 /**
  * GEO 投稿：推送海讯社 / 回查状态 / 确认发布 / 提交修改意见。
@@ -39,20 +40,20 @@ class GeoOrderService
 
         $article = GeoArticle::where('id', $articleId)->findOrEmpty();
         if ($article->isEmpty() || (int)$article['user_id'] !== $userId) {
-            throw new Exception('稿件不存在');
+            throw new InvalidArgumentException('稿件不存在');
         }
         if (trim((string)$article['content']) === '') {
-            throw new Exception('稿件正文为空，不能投稿');
+            throw new InvalidArgumentException('稿件正文为空，不能投稿');
         }
         if (trim((string)$article['preview_url']) === '') {
-            throw new Exception('请先保存稿件再投稿');
+            throw new InvalidArgumentException('请先保存稿件再投稿');
         }
         $media = GeoMedia::where('id', $mediaId)->findOrEmpty();
         if ($media->isEmpty()) {
-            throw new Exception('媒体资源不存在');
+            throw new InvalidArgumentException('媒体资源不存在');
         }
         if ((int)$media['flag'] !== 1 || (int)$media['deleted'] !== 1) {
-            throw new Exception('该媒体已下架或已删除，请重新选择');
+            throw new InvalidArgumentException('该媒体已下架或已删除，请重新选择');
         }
 
         // 多价格类别：短视频/微信/微博必须选对类别，否则海讯按错误价格拒稿。
@@ -365,7 +366,7 @@ class GeoOrderService
                 return [$cost, GeoMediaSyncService::suggestSalePrice($cost, $ratio)];
             }
         }
-        throw new Exception('该媒体没有价格类别 ' . $priceType . '，请重新选择');
+        throw new InvalidArgumentException('该媒体没有价格类别 ' . $priceType . '，请重新选择');
     }
 
     /**

@@ -9654,6 +9654,7 @@ CREATE TABLE IF NOT EXISTS `la_geo_diag_batch` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` int unsigned NOT NULL DEFAULT 0,
   `user_id` int unsigned NOT NULL DEFAULT 0,
+  `task_run_id` bigint unsigned DEFAULT NULL COMMENT '计划执行记录 ID，手动检测为空',
   `merchant_brand_id` bigint unsigned NOT NULL DEFAULT 0 COMMENT '系统品牌ID',
   `title` varchar(200) NOT NULL DEFAULT '' COMMENT '诊断名称',
   `brand_name` varchar(120) NOT NULL DEFAULT '',
@@ -9693,7 +9694,8 @@ CREATE TABLE IF NOT EXISTS `la_geo_diag_batch` (
   KEY `idx_tenant_user` (`tenant_id`,`user_id`,`id`),
   KEY `idx_brand` (`tenant_id`,`user_id`,`merchant_brand_id`,`id`),
   KEY `idx_status` (`status`),
-  KEY `idx_poll` (`terminal`,`next_poll_time`)
+  KEY `idx_poll` (`terminal`,`next_poll_time`),
+  UNIQUE KEY `uk_task_run` (`task_run_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GEO诊断批次';
 
 CREATE TABLE IF NOT EXISTS `la_geo_diag_run` (
@@ -14676,6 +14678,7 @@ CREATE TABLE IF NOT EXISTS `la_user_task_plan` (
   `user_id` int unsigned NOT NULL,
   `name` varchar(100) NOT NULL,
   `job_type` varchar(32) NOT NULL,
+  `job_config` text NULL,
   `start_at` bigint unsigned NOT NULL,
   `interval_seconds` int unsigned NOT NULL DEFAULT 0,
   `schedule_type` varchar(16) NOT NULL,
@@ -14698,6 +14701,10 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   `tenant_id` int unsigned NOT NULL,
   `user_id` int unsigned NOT NULL,
   `job_type` varchar(32) NOT NULL,
+  `job_config` text NULL,
+  `workflow_step` varchar(24) DEFAULT NULL,
+  `workflow_data` text NULL,
+  `next_step_at` bigint unsigned DEFAULT NULL,
   `scheduled_at` bigint unsigned NOT NULL,
   `expires_at` bigint unsigned DEFAULT NULL COMMENT '排队记录领取截止时间',
   `status` varchar(16) NOT NULL DEFAULT 'queued',
@@ -14708,5 +14715,18 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_plan_slot` (`plan_id`,`scheduled_at`),
   KEY `idx_claim` (`status`,`id`),
-  KEY `idx_plan_status` (`plan_id`,`status`)
+  KEY `idx_plan_status` (`plan_id`,`status`),
+  KEY `idx_geo_step_due` (`status`,`job_type`,`next_step_at`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务执行记录';
+
+CREATE TABLE IF NOT EXISTS `la_user_task_run_event` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `run_id` bigint unsigned NOT NULL,
+  `step` varchar(24) NOT NULL,
+  `status` varchar(16) NOT NULL,
+  `message` varchar(255) NOT NULL,
+  `details` text NOT NULL,
+  `create_time` bigint unsigned NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_run_event` (`run_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务执行进度';
