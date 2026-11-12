@@ -56,6 +56,10 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
+        $nfcCodeAction = str_starts_with($accessUri, 'merchant.nfccode/');
+        if ($accessUri === 'merchant.nfccode/userchoices') {
+            $accessUri = 'merchant.nfccode/assignuser';
+        }
         $requiresUserEditPermission = in_array($accessUri, ['user.user/add', 'merchant.brand/add', 'merchant.brand/delete'], true);
         if ($requiresUserEditPermission) {
             $accessUri = 'user.user/edit';
@@ -68,7 +72,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if (!$nfcCodeAction && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
