@@ -249,64 +249,53 @@ final class WorkspaceAssetService
     }
 
     /**
-     * 解析单个资产的可读媒体地址，供素材分析等只读能力使用。
+     * 解析上传素材到可分析的媒体地址。
      *
-     * 已删除、已从资产库移除的资产不再可读，避免分析能力绕过删除语义。
+     * 只认用户本地上传（上传素材库），不读作品库的 user_asset_state 状态。
      *
-     * @param int $tenant
-     * @param int $user
-     * @param string $ref 资产标识，如 upload:result:12
-     * @return array{kind:string,url:string,cover_url:string,title:string}
+     * @return array{id:int,kind:string,url:string,cover_url:string,title:string}
      */
     public static function media(int $tenant, int $user, string $ref): array
     {
         self::identity($tenant, $user);
-        $asset = self::owned($tenant, $user, $ref);
-        if ($asset === null) {
-            throw new InvalidArgumentException('资产不存在或无权操作');
+        if (!preg_match('/^upload:result:([1-9][0-9]{0,10})$/D', $ref, $match)) {
+            throw new InvalidArgumentException('只支持分析素材库中上传的图片或视频');
         }
-        $state = Db::name(self::TABLE)->where(['tenant_id' => $tenant, 'user_id' => $user, 'asset_ref' => $ref])->find();
-        if ((int)($state['trashed_at'] ?? 0) > 0 || (int)($state['hidden_at'] ?? 0) > 0) {
-            throw new InvalidArgumentException('资产已删除或已从资产库移除');
+        $query = TenantFile::withTrashed()->where([
+            'id' => (int)$match[1],
+            'tenant_id' => $tenant,
+            'source' => FileEnum::SOURCE_USER,
+            'source_id' => $user,
+            'upload_origin' => 'local',
+        ]);
+        self::scopeVisibleUploads($query);
+        $file = $query->find();
+        if (!$file) {
+            throw new InvalidArgumentException('素材不存在或无权操作');
         }
-        $raw = $asset['raw'];
-        $kind = 'file';
-        $url = '';
-        // 生成结果自带明确的媒体字段，优先按字段判定，避免从扩展名猜测。
-        foreach (['video' => 'video_url', 'image' => 'image_url', 'audio' => 'audio_url'] as $name => $field) {
-            $value = trim((string)($raw[$field] ?? ''));
-            if ($value !== '') {
-                $kind = $name;
-                $url = $value;
-                break;
-            }
+        $row = $file->toArray();
+        if ((int)($row['delete_time'] ?? 0) > 0) {
+            throw new InvalidArgumentException('素材已删除');
         }
-        if ($url === '') {
-            $url = trim((string)($raw['url'] ?? ''));
-            $kind = self::kindOfMedia((int)($raw['type'] ?? 0), $url, (string)($raw['mime_type'] ?? ''));
-        }
-        if ($url === '') {
-            throw new InvalidArgumentException('资产缺少可读取的媒体地址');
+        $kind = self::kindOfMedia((int)($row['type'] ?? 0), (string)($row['uri'] ?? ''));
+        if (!in_array($kind, ['image', 'video'], true)) {
+            throw new InvalidArgumentException('只能分析图片或视频素材');
         }
         return [
+            'id' => (int)$row['id'],
             'kind' => $kind,
-            'url' => $url,
-            'cover_url' => trim((string)($raw['cover_url'] ?? '')),
-            'title' => trim((string)($raw['title'] ?? '')),
+            'url' => self::url($row, 'uri'),
+            'cover_url' => '',
+            'title' => (string)($row['name'] ?? ''),
         ];
     }
-
-    /** 上传记录的 type 优先；历史记录缺少 type 时退回 MIME 与扩展名。 */
-    private static function kindOfMedia(int $type, string $url, string $mime): string
+    /** 上传记录的 type 优先；历史记录缺少 type 时退回扩展名。 */
+    private static function kindOfMedia(int $type, string $uri): string
     {
         if ($type === FileEnum::IMAGE_TYPE) return 'image';
         if ($type === FileEnum::VIDEO_TYPE) return 'video';
         if ($type === FileEnum::AUDIO_TYPE) return 'audio';
-        $mime = strtolower(trim($mime));
-        if (str_starts_with($mime, 'image/')) return 'image';
-        if (str_starts_with($mime, 'video/')) return 'video';
-        if (str_starts_with($mime, 'audio/')) return 'audio';
-        $path = strtolower((string)parse_url($url, PHP_URL_PATH));
+        $path = strtolower((string)parse_url($uri, PHP_URL_PATH));
         foreach (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp'] as $ext) {
             if (str_ends_with($path, $ext)) return 'image';
         }
@@ -317,6 +306,56 @@ final class WorkspaceAssetService
             if (str_ends_with($path, $ext)) return 'audio';
         }
         return 'file';
+    }
+
+    /**
+     * 把 AI 分析结果写回素材表（la_tenant_file）。
+     *
+     * 只允许写用户本地上传的记录，避免把分析结果挂到自动保存的文件上。
+     *
+     * @param array<string,mixed> $analysis caption / tags / ocr / usability
+     */
+    public static function saveUploadAnalysis(int $tenant, int $user, int $fileId, array $analysis, string $model): void
+    {
+        self::identity($tenant, $user);
+        if ($fileId <= 0) {
+            throw new InvalidArgumentException('素材标识无效');
+        }
+        $json = json_encode($analysis, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            throw new InvalidArgumentException('分析结果无法保存');
+        }
+        $time = time();
+        $scope = [
+            'id' => $fileId,
+            'tenant_id' => $tenant,
+            'source' => FileEnum::SOURCE_USER,
+            'source_id' => $user,
+            'upload_origin' => 'local',
+        ];
+        $affected = Db::name('tenant_file')->where($scope)->update([
+            'analysis_json' => $json,
+            'analysis_model' => mb_substr($model, 0, 64, 'UTF-8'),
+            'analysis_time' => $time,
+            'update_time' => $time,
+        ]);
+        // 重复分析相同内容时 MySQL 返回 0 行，这里只在记录确实不存在时报错。
+        if ($affected === 0 && !Db::name('tenant_file')->where($scope)->count()) {
+            throw new InvalidArgumentException('素材不存在或无权操作');
+        }
+    }
+
+    /**
+     * @return array<string,mixed>|null 未分析或字段为空时返回 null
+     */
+    private static function decodeAnalysis(mixed $value): ?array
+    {
+        $json = trim((string)$value);
+        if ($json === '') {
+            return null;
+        }
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : null;
     }
     private static function owned(int $tenant, int $user, string $ref, bool $includeDeleted = false): ?array
     {
@@ -365,9 +404,13 @@ final class WorkspaceAssetService
 
     private static function presentUpload(array $row): array
     {
+        // 分析结果和素材在同一行，列表直接带出，不再额外查询。
         return ['source' => 'upload', 'ref' => 'upload:result:' . $row['id'], 'raw' => [
             'id' => (int)$row['id'], 'cid' => (int)($row['cid'] ?? 0), 'title' => $row['name'], 'type' => (int)$row['type'],
             'url' => self::url($row, 'uri'), 'uri' => (string)($row['uri'] ?? ''), 'create_time' => $row['create_time'],
+            'analysis' => self::decodeAnalysis($row['analysis_json'] ?? null),
+            'analysis_model' => (string)($row['analysis_model'] ?? ''),
+            'analysis_time' => (int)($row['analysis_time'] ?? 0),
         ]];
     }
 

@@ -82,8 +82,8 @@ PROMPT;
             if ($ref === '') {
                 continue;
             }
-            if (!preg_match('/^[a-z_]+:(?:result|task):[1-9][0-9]{0,10}(?::[1-9][0-9]{0,4})?$/D', $ref)) {
-                throw new InvalidArgumentException('素材标识无效');
+            if (!preg_match('/^upload:result:[1-9][0-9]{0,10}$/D', $ref)) {
+                throw new InvalidArgumentException('只支持分析素材库中上传的图片或视频');
             }
             $clean[$ref] = true;
         }
@@ -154,6 +154,22 @@ PROMPT;
             'name' => (string)($result['model_name'] ?? ''),
         ];
         $analysis['user_charge_points'] = (float)($result['billing']['user_charge_points'] ?? 0);
+        // 分析结果直接写回素材表（la_tenant_file），素材库刷新即可带上标签。
+        $persisted = ['caption' => $analysis['caption'] ?? '', 'tags' => $analysis['tags'] ?? []];
+        if (isset($analysis['ocr'])) {
+            $persisted['ocr'] = $analysis['ocr'];
+        }
+        if (isset($analysis['usability'])) {
+            $persisted['usability'] = $analysis['usability'];
+        }
+        try {
+            WorkspaceAssetService::saveUploadAnalysis($tenant, $user, (int)$media['id'], $persisted, (string)$analysis['model']['code']);
+            $analysis['saved'] = true;
+        } catch (Throwable $e) {
+            // 模型调用已经计费完成，写库失败不能把结果丢掉，交给前端提示重存。
+            Log::error('素材分析写库失败 ' . $ref . ' ' . get_class($e) . ' ' . $e->getMessage());
+            $analysis['saved'] = false;
+        }
         return $analysis;
     }
 
