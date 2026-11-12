@@ -193,6 +193,19 @@ class WeChatOaService
     }
 
 
+    public function sendCustomText(string $openid, string $content): void
+    {
+        $path = 'cgi-bin/message/custom/send';
+        $payload = ['touser' => $openid, 'msgtype' => 'text', 'text' => ['content' => $content]];
+        $result = $this->openPlatformMode
+            ? OpenPlatformService::authorizerRequest((int)request()->tenantId, 'official', $path, $payload, 'official.custom_text.send')
+            : $this->app->getClient()->postJson($path, $payload)->toArray(false);
+
+        if (!isset($result['errcode']) || (int)$result['errcode'] !== 0) {
+            throw new \RuntimeException('服务号文本消息发送失败', (int)($result['errcode'] ?? 0));
+        }
+    }
+
     /**
      * @notes 获取jssdkConfig
      * @param $url

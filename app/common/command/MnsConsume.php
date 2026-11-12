@@ -3,6 +3,7 @@
 namespace app\common\command;
 
 use app\common\model\FailedJob;
+use app\common\job\Job;
 use app\common\service\mq\LightMqService;
 use think\console\Command;
 use think\console\Input;
@@ -98,6 +99,7 @@ class MnsConsume extends Command
             return;
         }
 
+        $job = null;
         try {
             $job = LightMqService::restoreJob($payload);
             $job->handle();
@@ -112,7 +114,7 @@ class MnsConsume extends Command
             ));
             $output->writeln(sprintf('[ok] queue=%s job=%s job_id=%s', $queue, get_class($job), $job->getId()));
         } catch (\Throwable $e) {
-            $this->handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e, $output);
+            $this->handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e, $output, $job);
             // 无论成败都要清理租户上下文，避免串到下一个任务
             request()->tenantId = null;
             request()->source = null;
@@ -132,7 +134,8 @@ class MnsConsume extends Command
         string $messageId,
         int $dequeueCount,
         \Throwable $e,
-        Output $output
+        Output $output,
+        ?Job $job
     ): void {
         $jobClass = (string)($payload['data']['job'] ?? 'Unknown');
         $jobId = (string)($payload['id'] ?? '');
@@ -156,6 +159,7 @@ class MnsConsume extends Command
         }
 
         try {
+            $job?->failed();
             FailedJob::record($queue, $jobClass, $jobId, $payload, $e, $dequeueCount);
             $this->safeDelete($service, $queue, $receiptHandle);
             Log::channel('mns')->error(sprintf('[mns.consume] abandoned job=%s job_id=%s', $jobClass, $jobId));

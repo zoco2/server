@@ -3,6 +3,7 @@
 namespace app\common\command;
 
 use app\common\model\FailedJob;
+use app\common\job\Job;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\mq\LightMqService;
 use app\common\service\smart_edit\SmartEditService;
@@ -252,6 +253,7 @@ class Workerman extends Command
             return;
         }
 
+        $job = null;
         try {
             $job = LightMqService::restoreJob($payload);
             $job->handle();
@@ -265,7 +267,7 @@ class Workerman extends Command
                 $messageId
             ));
         } catch (\Throwable $e) {
-            self::handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e);
+            self::handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e, $job);
             request()->tenantId = null;
             request()->source = null;
         }
@@ -283,7 +285,8 @@ class Workerman extends Command
         string $receiptHandle,
         string $messageId,
         int $dequeueCount,
-        \Throwable $e
+        \Throwable $e,
+        ?Job $job
     ): void {
         $jobClass = (string)($payload['data']['job'] ?? 'Unknown');
         $jobId = (string)($payload['id'] ?? '');
@@ -307,6 +310,7 @@ class Workerman extends Command
 
         try {
             self::reconnectDatabase();
+            $job?->failed();
             FailedJob::record($queue, $jobClass, $jobId, $payload, $e, $dequeueCount);
             self::safeDelete($service, $queue, $receiptHandle);
             Log::channel('mns')->error(sprintf('[mns] abandoned job=%s job_id=%s', $jobClass, $jobId));
