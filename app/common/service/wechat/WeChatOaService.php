@@ -198,16 +198,26 @@ class WeChatOaService
      *
      * @param string $openid 接收用户在该服务号下的 OpenID。
      * @param string $content 要发送的文本内容。
+     * @param string|null $appId 员工绑定的公众号 AppID，省略时使用租户默认服务号。
      * @throws \RuntimeException 微信返回错误码或响应缺少错误码时抛出。
      */
-    public function sendCustomText(string $openid, string $content): void
+    public function sendCustomText(string $openid, string $content, ?string $appId = null): void
     {
         $path = 'cgi-bin/message/custom/send';
         $payload = ['touser' => $openid, 'msgtype' => 'text', 'text' => ['content' => $content]];
-        // 授权模式使用开放平台的授权方凭据，其余情况使用租户直连服务号。
-        $result = $this->openPlatformMode
-            ? OpenPlatformService::authorizerRequest((int)request()->tenantId, 'official', $path, $payload, 'official.custom_text.send')
-            : $this->app->getClient()->postJson($path, $payload)->toArray(false);
+        $app = $this->app;
+        if ($appId !== null) {
+            // OpenID 归属于绑定时的公众号，直连和开放平台都必须匹配该 AppID。
+            $config = WeChatConfigService::getOaConfig();
+            $app = $appId === (string)$config['app_id'] && !empty($config['secret'])
+                ? new Application($config)
+                : null;
+        }
+        $result = $app === null
+            ? OpenPlatformService::authorizerRequest(
+                (int)request()->tenantId, 'official', $path, $payload, 'official.custom_text.send', 'POST', $appId
+            )
+            : $app->getClient()->postJson($path, $payload)->toArray(false);
 
         if (!isset($result['errcode']) || (int)$result['errcode'] !== 0) {
             throw new \RuntimeException('服务号文本消息发送失败', (int)($result['errcode'] ?? 0));

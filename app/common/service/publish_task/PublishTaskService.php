@@ -6,6 +6,7 @@ namespace app\common\service\publish_task;
 
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
+use app\common\model\merchant\MerchantStaff;
 use app\common\model\user\UserAuth;
 use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
@@ -19,6 +20,7 @@ final class PublishTaskService
 {
     private const TABLE = 'publish_task';
     private const PLATFORMS = ['douyin', 'xiaohongshu', 'kuaishou'];
+    private const MAX_STAFF = 50;
 
     /** 校验任务内容和调度规则，保存任务并投递首次执行的消息。 */
     public static function create(int $tenantId, int $userId, array $input): array
@@ -39,10 +41,24 @@ final class PublishTaskService
             }
         }
         $rule = PublishTaskSchedule::normalize($input);
+        $staffIds = array_key_exists('staff_ids', $input) ? self::staffIds($input['staff_ids']) : null;
 
         return self::withOwnerLock($tenantId, $userId, static function () use (
-            $tenantId, $userId, $content, $platforms, $rule
+            $tenantId, $userId, $content, $platforms, $rule, $staffIds
         ): array {
+            if ($staffIds !== null) {
+                $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
+                    ->field('id,openid,appid')->select()->toArray();
+                if (count($staff) !== count($staffIds)) {
+                    throw new InvalidArgumentException('所选员工不存在或不属于当前商家');
+                }
+                foreach ($staff as $employee) {
+                    if (trim((string)$employee['openid']) === '' || trim((string)$employee['appid']) === '') {
+                        throw new InvalidArgumentException('所选员工中有未绑定服务号的员工');
+                    }
+                }
+            }
+
             // 取得锁后再按当前时间计算首轮，范围内没有可用时间时直接结束。
             $now = time();
             $nextRunAt = PublishTaskSchedule::first($rule, $now);
@@ -63,14 +79,21 @@ final class PublishTaskService
             ];
             // 投递失败时回滚任务记录。零延迟消息可能立即被取到，消费者会等待同一把锁，
             // 在创建事务提交或回滚后才读取任务。
-            $row['id'] = Db::transaction(static function () use ($tenantId, $userId, $row, $wakeAt): int {
-                $id = (int)Db::name(self::TABLE)->insertGetId($row);
-                if ($wakeAt !== null) {
-                    self::enqueue($id, $tenantId, $userId, $wakeAt);
+            $ids = Db::transaction(static function () use ($tenantId, $userId, $row, $wakeAt, $staffIds): array {
+                $ids = [];
+                foreach ($staffIds ?? [null] as $staffId) {
+                    $id = (int)Db::name(self::TABLE)->insertGetId($row + ['staff_id' => $staffId]);
+                    if ($wakeAt !== null) {
+                        self::enqueue($id, $tenantId, $userId, $wakeAt);
+                    }
+                    $ids[] = $id;
                 }
-                return $id;
+                return $ids;
             });
-            return self::present($row);
+            if ($staffIds !== null) {
+                return ['ids' => $ids, 'count' => count($ids)];
+            }
+            return self::present($row + ['id' => $ids[0]]);
         });
     }
 
@@ -129,11 +152,20 @@ final class PublishTaskService
                 $nextRunAt = $scheduledAt;
             } else {
                 if (!$alreadyAttempted) {
-                    $openid = trim((string)UserAuth::withoutGlobalScope()->where([
-                        'tenant_id' => $tenantId,
-                        'user_id' => $userId,
-                        'terminal' => UserTerminalEnum::WECHAT_OA,
-                    ])->order('id desc')->value('openid'));
+                    $appId = null;
+                    if (isset($task['staff_id'])) {
+                        // 员工可以在任务创建后解绑或删除，发送前重新检查。
+                        $staff = self::staffQuery($tenantId, $userId)->where('id', (int)$task['staff_id'])
+                            ->field('openid,appid')->findOrEmpty();
+                        $openid = trim((string)($staff['openid'] ?? ''));
+                        $appId = trim((string)($staff['appid'] ?? ''));
+                    } else {
+                        $openid = trim((string)UserAuth::withoutGlobalScope()->where([
+                            'tenant_id' => $tenantId,
+                            'user_id' => $userId,
+                            'terminal' => UserTerminalEnum::WECHAT_OA,
+                        ])->order('id desc')->value('openid'));
+                    }
 
                     // 发送前记录本轮已经开始，MNS 重投时可以跳过这次发送。
                     Db::name(self::TABLE)->where($where)->update([
@@ -142,7 +174,7 @@ final class PublishTaskService
                         'last_error' => '',
                         'update_time' => $now,
                     ]);
-                    $result = self::notify($id, $tenantId, $userId, $openid);
+                    $result = self::notify($id, $tenantId, $userId, $openid, $appId);
                     Db::name(self::TABLE)->where($where)->update($result + ['update_time' => time()]);
                 }
                 // 已错过的轮次不补发，只安排下一次未来的执行。
@@ -186,13 +218,16 @@ final class PublishTaskService
      *
      * @return array{last_run_status: string, last_error: string}
      */
-    private static function notify(int $id, int $tenantId, int $userId, string $openid): array
+    private static function notify(int $id, int $tenantId, int $userId, string $openid, ?string $appId): array
     {
-        if ($openid === '') {
-            return ['last_run_status' => 'failed', 'last_error' => '用户未绑定服务号'];
+        if ($openid === '' || $appId === '') {
+            return [
+                'last_run_status' => 'failed',
+                'last_error' => $appId === null ? '用户未绑定服务号' : '员工已删除或未绑定服务号',
+            ];
         }
         try {
-            (new WeChatOaService())->sendCustomText($openid, 'hello');
+            (new WeChatOaService())->sendCustomText($openid, 'hello', $appId);
             return ['last_run_status' => 'sent', 'last_error' => ''];
         } catch (Throwable $e) {
             // 请求异常可能包含带 access_token 的 URL，只记录异常类型和错误码。
@@ -245,6 +280,28 @@ final class PublishTaskService
         }
     }
 
+    /** 员工档案只允许当前租户下的创建用户查询，后台消费也使用相同范围。 */
+    private static function staffQuery(int $tenantId, int $userId): \think\db\Query
+    {
+        return MerchantStaff::withoutGlobalScope()
+            ->where(['tenant_id' => $tenantId, 'user_id' => $userId])
+            ->whereNull('delete_time');
+    }
+
+    /** 校验批量请求并去重，避免重复给同一员工创建任务。 */
+    private static function staffIds(mixed $staffIds): array
+    {
+        if (!is_array($staffIds) || !array_is_list($staffIds) || $staffIds === [] || count($staffIds) > self::MAX_STAFF) {
+            throw new InvalidArgumentException('请选择 1 至 50 名员工');
+        }
+        foreach ($staffIds as $staffId) {
+            if (!is_int($staffId) || $staffId <= 0) {
+                throw new InvalidArgumentException('员工 ID 无效');
+            }
+        }
+        return array_values(array_unique($staffIds));
+    }
+
     /** 将数据库记录转换成接口数据，隐藏内部标识并统一数值字段类型。 */
     private static function present(array $row): array
     {
@@ -252,6 +309,11 @@ final class PublishTaskService
         $row['next_run_at'] = $row['next_wake_at'] === null
             ? null : PublishTaskSchedule::first($row, (int)$row['next_wake_at']);
         unset($row['next_wake_at'], $row['tenant_id'], $row['user_id']);
+        if (isset($row['staff_id'])) {
+            $row['staff_id'] = (int)$row['staff_id'];
+        } else {
+            unset($row['staff_id']);
+        }
         $row['platforms'] = json_decode($row['platforms'], true, flags: JSON_THROW_ON_ERROR);
         foreach (['id', 'weekday', 'last_run_at', 'create_time', 'update_time'] as $key) {
             $row[$key] = $row[$key] === null ? null : (int)$row[$key];
