@@ -15,6 +15,14 @@ class WorkspaceAssetController extends BaseApiController
     public function uploads() { return $this->respond(fn($t, $u) => WorkspaceAssetService::uploads($t, $u, min(10000, max(1, (int)$this->request->get('page_no', 1))), $this->request->get('cid'))); }
     public function update() { return $this->respond(fn($t, $u) => WorkspaceAssetService::update($t, $u, $this->request->post()), true); }
     public function label() { return $this->respond(fn($t, $u) => \app\common\service\WorkspaceAssetLabelService::change($t, $u, $this->request->post()), true); }
+    /**
+     * 分析素材库里的图片或视频，返回画面描述、标签、OCR 与可用性等结构化结果。
+     * 传 ref 或 refs，一次最多 4 个；视频会先抽帧再交给视觉文本模型。
+     */
+    public function analyze()
+    {
+        return $this->respond(fn($t, $u) => \app\common\service\WorkspaceAssetAnalyzeService::analyze($t, $u, $this->request->post()), true);
+    }
     public function upload()
     {
         return $this->respond(function ($t, $u) {
