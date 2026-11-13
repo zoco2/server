@@ -12,8 +12,6 @@ use InvalidArgumentException;
 final class PublishTaskSchedule
 {
     public const TIMEZONE = 'Asia/Shanghai';
-    // 队列保留消息七天，单次延时最多六天，给消费和重投留出一天。
-    public const MAX_DELAY_SECONDS = 6 * 86400;
 
     /**
      * 将请求参数转换为可存储的调度规则，未使用的字段统一置空。
@@ -99,12 +97,6 @@ final class PublishTaskSchedule
     public static function hasEnded(array $rule, int $now): bool
     {
         return $rule['end_date'] !== null && self::local($now)->format('Y-m-d') > $rule['end_date'];
-    }
-
-    /** 返回本次 MNS 触发时间，超出延时上限时先安排一次中途触发。 */
-    public static function wakeAt(int $scheduledAt, int $now): int
-    {
-        return min($scheduledAt, $now + self::MAX_DELAY_SECONDS);
     }
 
     /** 按北京时间解释时间戳，避免受 PHP 默认时区影响。 */

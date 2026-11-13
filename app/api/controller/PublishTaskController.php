@@ -12,7 +12,7 @@ use Throwable;
 /** 提供当前登录用户的任务发布和查询接口，由框架默认路由分发。 */
 final class PublishTaskController extends BaseApiController
 {
-    /** POST /api/publish_task/create：保存任务并投递首次 MNS 消息。 */
+    /** POST /api/publish_task/create：保存任务和首次执行时间。 */
     public function create()
     {
         if (!$this->request->isPost()) {
@@ -31,7 +31,7 @@ final class PublishTaskController extends BaseApiController
         } catch (InvalidArgumentException $e) {
             return $this->fail($e->getMessage());
         } catch (Throwable $e) {
-            // 投递或存储故障记录到服务端，接口只返回通用提示。
+            // 记录创建失败的原因，接口返回通用提示。
             Log::channel('mns')->error(sprintf('[publish_task] create failed tenant=%d user=%d type=%s',
                 (int)$this->request->tenantId, $this->userId, get_class($e)));
             return $this->fail('任务发布失败，请稍后重试');
