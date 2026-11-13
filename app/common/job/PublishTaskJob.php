@@ -10,7 +10,7 @@ use InvalidArgumentException;
 /** 发布任务的 MNS 消费入口，将队列载荷交给发布服务处理。 */
 final class PublishTaskJob extends Job
 {
-    /** 校验消息中的任务归属和唤醒时间，再交给发布服务处理。 */
+    /** 校验执行记录和归属，再交给发布服务处理。 */
     public function handle(): void
     {
         $arguments = $this->arguments();
@@ -30,19 +30,18 @@ final class PublishTaskJob extends Job
     }
 
     /**
-     * 从队列上下文和消息数据提取任务 ID、租户 ID、用户 ID 和唤醒时间。
+     * 从队列上下文和消息数据提取执行记录 ID、租户 ID 和用户 ID。
      *
-     * @return array{int, int, int, int}|null
+     * @return array{int, int, int}|null
      */
     private function arguments(): ?array
     {
-        $id = (int)($this->data['task_id'] ?? 0);
+        $runId = (int)($this->data['run_id'] ?? 0);
         $tenantId = (int)$this->tenantId;
         $userId = (int)($this->data['user_id'] ?? 0);
-        $wakeAt = $this->data['wake_at'] ?? null;
-        if ($id <= 0 || $tenantId <= 0 || $userId <= 0 || !is_int($wakeAt) || $wakeAt <= 0) {
+        if ($runId <= 0 || $tenantId <= 0 || $userId <= 0) {
             return null;
         }
-        return [$id, $tenantId, $userId, $wakeAt];
+        return [$runId, $tenantId, $userId];
     }
 }

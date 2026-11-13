@@ -12,7 +12,7 @@ use Throwable;
 /** 提供当前登录用户的任务发布和查询接口，由框架默认路由分发。 */
 final class PublishTaskController extends BaseApiController
 {
-    /** POST /api/publish_task/create：保存任务并投递首次 MNS 消息。 */
+    /** POST /api/publish_task/create：保存任务和首次执行时间。 */
     public function create()
     {
         if (!$this->request->isPost()) {

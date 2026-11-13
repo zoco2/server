@@ -36,16 +36,11 @@ $daily = Schedule::normalize($clock + ['schedule_type' => 'daily']);
 same($today, Schedule::first($daily, $today), 'at the exact minute in Shanghai');
 same($tomorrow, Schedule::first($daily, $today + 1), 'past today moves to tomorrow');
 
-// 每周任务跨周时仍落在指定星期，较长的等待拆成多次延时投递。
+// 每周任务跨周时仍落在指定星期。
 $weekly = Schedule::normalize($clock + ['schedule_type' => 'weekly', 'weekday' => 4]);
 same($today, Schedule::first($weekly, at('2026-11-08 00:00:00')), 'weekly rolls forward to Thursday');
 $nextWeek = at('2026-11-19 20:13:00');
 same($nextWeek, Schedule::next($weekly, $today + 1), 'after Thursday goes to next Thursday');
-$relayAt = Schedule::wakeAt($nextWeek, $today);
-same(at('2026-11-18 20:13:00'), $relayAt, 'long wait gets a relay');
-same($nextWeek, Schedule::first($weekly, $relayAt), 'relay time resolves to the original weekly occurrence');
-same($nextWeek, Schedule::wakeAt($nextWeek, $relayAt), 'the next message targets the weekly occurrence');
-same($today, Schedule::wakeAt($today, $today + 1), 'a late enqueue retains the original occurrence time');
 
 // 日期范围包括首尾两天，末轮消息过了结束日期的午夜才失效。
 $range = Schedule::normalize($clock + ['schedule_type' => 'date_range', 'start_date' => '2026-11-12', 'end_date' => '2026-11-13']);
@@ -72,4 +67,4 @@ foreach ([
     throw new RuntimeException('Invalid schedule was accepted: ' . json_encode($input));
 }
 
-echo "PASS publish task schedule, range expiry and MNS delay relay\n";
+echo "PASS publish task schedule and range expiry\n";
