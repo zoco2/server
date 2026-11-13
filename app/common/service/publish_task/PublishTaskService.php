@@ -66,6 +66,7 @@ final class PublishTaskService
         $nextRunAt = PublishTaskSchedule::first($rule, $now);
         $row = $rule + [
             'user_id' => $userId,
+            'staff_ids' => $staffIds === null ? null : json_encode($staffIds, JSON_THROW_ON_ERROR),
             'content' => trim($content),
             'platforms' => json_encode(array_values(array_unique($platforms)), JSON_THROW_ON_ERROR),
             'notice_type' => 'official_account',
@@ -77,28 +78,24 @@ final class PublishTaskService
             'create_time' => $now,
             'update_time' => $now,
         ];
-        $ids = Db::transaction(static function () use ($tenantId, $row, $staffIds): array {
+        $id = Db::transaction(static function () use ($tenantId, $row): int {
             // 模型保存会忽略缺失字段，先检查旧表是否具备完整的任务字段。
             $query = PublishTask::query();
             $fields = $query->getConnection()->getTableFields($query->getTable());
-            if (array_diff([...array_keys($row), 'tenant_id', 'staff_id'], $fields) !== []) {
+            if (array_diff([...array_keys($row), 'tenant_id'], $fields) !== []) {
                 throw new RuntimeException('发布任务表结构不完整');
             }
-            $ids = [];
-            foreach ($staffIds ?? [null] as $staffId) {
-                $task = PublishTask::create($row + ['staff_id' => $staffId]);
-                $id = (int)$task->id;
-                if ($id <= 0 || (int)$task->tenant_id !== $tenantId) {
-                    throw new RuntimeException('任务保存失败或租户上下文无效');
-                }
-                $ids[] = $id;
+            $task = PublishTask::create($row);
+            if ((int)$task->id <= 0 || (int)$task->tenant_id !== $tenantId) {
+                throw new RuntimeException('任务保存失败或租户上下文无效');
             }
-            return $ids;
+            return (int)$task->id;
         });
         if ($staffIds !== null) {
-            return ['ids' => $ids, 'count' => count($ids)];
+            // count 表示员工人数，ids 只返回本次发布的任务 ID。
+            return ['ids' => [$id], 'count' => count($staffIds)];
         }
-        return self::present($row + ['id' => $ids[0]]);
+        return self::present($row + ['id' => $id]);
     }
 
     /** 按创建顺序倒序分页，仅返回当前租户下当前用户的任务。 */
@@ -200,14 +197,30 @@ final class PublishTaskService
                 throw new RuntimeException('发布任务尚未到执行时间');
             }
 
-            if ((int)$task['last_run_at'] === $scheduledAt && $task['last_run_status'] === 'sending') {
-                $result = ['last_run_status' => 'unknown', 'last_error' => '发送进程中断，无法确认微信是否接收'];
-            } elseif (PublishTaskSchedule::hasEnded($task, $now)) {
+            $results = json_decode((string)($run->recipient_results ?? '[]'), true, flags: JSON_THROW_ON_ERROR);
+            // 中断时只有正在发送的员工结果未知，已记录的结果继续保留。
+            foreach ($results as &$recipient) {
+                if ($recipient['last_run_status'] === 'sending') {
+                    $recipient = ['last_run_status' => 'unknown', 'last_error' => '发送进程中断，无法确认微信是否接收'];
+                }
+            }
+            unset($recipient);
+
+            if (PublishTaskSchedule::hasEnded($task, $now)) {
                 $result = ['last_run_status' => 'skipped', 'last_error' => '任务已超过结束日期'];
             } elseif ($failed) {
                 $result = ['last_run_status' => 'failed', 'last_error' => 'MNS 消费重试耗尽'];
             } else {
-                $result = self::sendRun($taskWhere, $task, $tenantId, $userId, $scheduledAt, $now);
+                $results = self::sendRun($runWhere, $task, $tenantId, $userId, $results);
+                $result = ['last_run_status' => 'sent', 'last_error' => ''];
+                foreach ($results as $recipient) {
+                    if ($recipient['last_run_status'] !== 'sent') {
+                        $result = $recipient;
+                        if ($result['last_run_status'] === 'unknown') {
+                            break;
+                        }
+                    }
+                }
             }
 
             $finishedAt = time();
@@ -216,9 +229,10 @@ final class PublishTaskService
             if ($taskStatus === 'ended' && $failed && $result['last_run_status'] === 'failed') {
                 $taskStatus = 'failed';
             }
-            Db::transaction(static function () use ($runWhere, $taskWhere, $scheduledAt, $result, $finishedAt, $nextRunAt, $taskStatus): void {
+            Db::transaction(static function () use ($runWhere, $taskWhere, $scheduledAt, $result, $results, $finishedAt, $nextRunAt, $taskStatus): void {
                 PublishTaskRun::where($runWhere)->update([
                     'status' => $result['last_run_status'],
+                    'recipient_results' => json_encode((object)$results, JSON_THROW_ON_ERROR),
                     'update_time' => $finishedAt,
                 ]);
                 PublishTask::where($taskWhere)->update($result + [
@@ -231,30 +245,46 @@ final class PublishTaskService
         });
     }
 
-    /** 发送前写入检查点，避免消费重试时重复通知。 */
-    private static function sendRun(array $where, array $task, int $tenantId, int $userId, int $scheduledAt, int $now): array
+    /** 同一轮逐个发送。记录每次发送的进度，重试时只继续处理未发送的人。 */
+    private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
-        $appId = null;
-        if (isset($task['staff_id'])) {
-            // 员工可以在任务创建后解绑或删除，发送前重新检查。
-            $staff = self::staffQuery($tenantId, $userId)->where('id', (int)$task['staff_id'])
-                ->field('openid,appid')->findOrEmpty();
-            $openid = trim((string)($staff['openid'] ?? ''));
-            $appId = trim((string)($staff['appid'] ?? ''));
+        if (isset($task['staff_ids'])) {
+            $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
+            $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
+                ->column('openid,appid', 'id');
         } else {
+            // 键 0 表示通知创建人，员工键使用实际的员工 ID。
+            $staffIds = [0];
             $openid = trim((string)UserAuth::where([
                 'user_id' => $userId,
                 'terminal' => UserTerminalEnum::WECHAT_OA,
             ])->order('id desc')->value('openid'));
+            $staff = [0 => ['openid' => $openid, 'appid' => null]];
         }
 
-        PublishTask::where($where)->update([
-            'last_run_at' => $scheduledAt,
-            'last_run_status' => 'sending',
-            'last_error' => '',
-            'update_time' => $now,
+        foreach ($staffIds as $staffId) {
+            if (isset($results[$staffId])) {
+                continue;
+            }
+            $openid = trim((string)($staff[$staffId]['openid'] ?? ''));
+            $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
+
+            // 发送前保存状态，进程中断后可以识别可能已发送的通知。
+            $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
+            self::saveRecipientResults($runWhere, $results);
+            $results[$staffId] = self::notify((int)$task['id'], $tenantId, $userId, $openid, $appId);
+            self::saveRecipientResults($runWhere, $results);
+        }
+        return $results;
+    }
+
+    /** 将收件人结果保存在本轮执行记录里。 */
+    private static function saveRecipientResults(array $runWhere, array $results): void
+    {
+        PublishTaskRun::where($runWhere)->update([
+            'recipient_results' => json_encode((object)$results, JSON_THROW_ON_ERROR),
+            'update_time' => time(),
         ]);
-        return self::notify((int)$task['id'], $tenantId, $userId, $openid, $appId);
     }
 
     /**
@@ -354,11 +384,8 @@ final class PublishTaskService
     private static function present(array $row): array
     {
         unset($row['tenant_id'], $row['user_id']);
-        if (isset($row['staff_id'])) {
-            $row['staff_id'] = (int)$row['staff_id'];
-        } else {
-            unset($row['staff_id']);
-        }
+        $row['staff_ids'] = $row['staff_ids'] === null
+            ? [] : json_decode($row['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
         $row['platforms'] = json_decode($row['platforms'], true, flags: JSON_THROW_ON_ERROR);
         foreach (['id', 'weekday', 'next_run_at', 'last_run_at', 'create_time', 'update_time'] as $key) {
             $row[$key] = $row[$key] === null ? null : (int)$row[$key];
