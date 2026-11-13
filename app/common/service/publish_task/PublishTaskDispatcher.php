@@ -18,32 +18,10 @@ final class PublishTaskDispatcher
 
     public static function scan(): void
     {
-        $taskTable = PublishTask::query()->getTable();
-        $runTable = PublishTaskRun::query()->getTable();
-        $tables = array_fill_keys(Db::connect()->getTables(), true);
+        $tasks = PublishTask::query()->getTable();
+        $runs = PublishTaskRun::query()->getTable();
         $now = time();
 
-        foreach ($tables as $table => $_) {
-            // 共用表用原名，分表用相同的租户后缀配对。
-            if ($table === $runTable
-                || !preg_match('/^' . preg_quote($taskTable, '/') . '(_[a-zA-Z0-9_]+)?$/D', $table, $match)) {
-                continue;
-            }
-            $runs = $runTable . ($match[1] ?? '');
-            if (!isset($tables[$runs])) {
-                continue;
-            }
-
-            try {
-                self::scanTables($table, $runs, $now);
-            } catch (Throwable $e) {
-                Log::channel('mns')->error(sprintf('[publish_task] scan failed table=%s error=%s', $table, $e->getMessage()));
-            }
-        }
-    }
-
-    private static function scanTables(string $tasks, string $runs, int $now): void
-    {
         // 入队失败或长期未消费时，重试原执行记录。
         $retryBefore = $now - PublishTaskService::REDISPATCH_AFTER_SECONDS;
         $retries = Db::table($runs)->where('status', 'running')->where(function ($query) use ($retryBefore) {
@@ -73,7 +51,7 @@ final class PublishTaskDispatcher
                 $taskId = (int)$row['task_id'];
                 $request->tenantId = $tenantId;
                 try {
-                    PublishTaskService::dispatchDue($taskId, $tenantId, (int)$row['user_id'], $tasks);
+                    PublishTaskService::dispatchDue($taskId, $tenantId, (int)$row['user_id']);
                 } catch (Throwable $e) {
                     Log::channel('mns')->error(sprintf('[publish_task] dispatch failed tenant=%d task=%d type=%s', $tenantId, $taskId, get_class($e)));
                 }

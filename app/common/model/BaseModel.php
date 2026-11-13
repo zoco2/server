@@ -33,8 +33,11 @@ class BaseModel extends Model
 
     private static bool $hasTenantId = false;
 
-    // 不需要检查分表的范围
-    private static $notCheckTables = ['tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config', 'hot_search', 'operation_log', 'pc_feedback'];
+    // 共用表不切换分表，带 tenant_id 的表仍按租户过滤。
+    private static $notCheckTables = [
+        'tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config',
+        'hot_search', 'operation_log', 'pc_feedback', 'publish_task', 'publish_task_run',
+    ];
 
     /**
      * @notes 公共处理图片，补全路径

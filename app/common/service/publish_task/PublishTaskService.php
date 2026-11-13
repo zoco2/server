@@ -80,8 +80,7 @@ final class PublishTaskService
         $ids = Db::transaction(static function () use ($tenantId, $row, $staffIds): array {
             // 模型保存会忽略缺失字段，先检查旧表是否具备完整的任务字段。
             $query = PublishTask::query();
-            $table = $query->parseOptions()['table'];
-            $fields = $query->getConnection()->getTableFields($table);
+            $fields = $query->getConnection()->getTableFields($query->getTable());
             if (array_diff([...array_keys($row), 'tenant_id', 'staff_id'], $fields) !== []) {
                 throw new RuntimeException('发布任务表结构不完整');
             }
@@ -119,16 +118,12 @@ final class PublishTaskService
         ];
     }
 
-    /** 复查到期记录的租户和分表，再保存并投递执行记录。 */
-    public static function dispatchDue(int $id, int $tenantId, int $userId, string $sourceTable): void
+    /** 在用户锁内确认任务到期，再保存并投递执行记录。 */
+    public static function dispatchDue(int $id, int $tenantId, int $userId): void
     {
-        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $sourceTable): void {
+        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId): void {
             // 只复查有待投递任务的租户，停用或已删除的租户暂停投递。
             if (!Tenant::where(['id' => $tenantId, 'disable' => 0])->value('id')) {
-                return;
-            }
-            // 分表的任务 ID 可以重复，确认候选记录来自模型当前路由的表。
-            if (PublishTask::query()->parseOptions()['table'] !== $sourceTable) {
                 return;
             }
             $now = time();

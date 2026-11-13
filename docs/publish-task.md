@@ -22,7 +22,7 @@
 
 `GET /api/publish_task/lists?page_no=1&page_size=20` 查询当前用户创建的任务。任务详情包含 `status`（`scheduled`、`ended`、`failed`）、`next_run_at`、`last_run_at`（最近处理的计划时刻）、`last_run_status` 和 `last_error`。员工任务还包含 `staff_id`。时间戳单位为秒。单轮失败记在 `last_run_status` 和 `last_error`，有后续轮次时仍继续排期。MNS 重试耗尽且没有后续轮次时，任务可以进入 `failed`。若进程在发送阶段中断且无法确认结果，记录为 `unknown`，不会补发同一轮。
 
-部署时先执行 `upgrade/20261112_publish_task.sql`。任务模型沿用项目的租户分表规则，新建分表租户由 `app/platformapi/db/tenant.sql` 初始化任务表。
+任务和执行记录分别存放在共用表 `publish_task` 和 `publish_task_run`，模型按 `tenant_id` 隔离数据。建表定义见 `upgrade/20261112_publish_task.sql`。
 
 任务表保存实际的下一次执行时间 `next_run_at`。启动 `php think workerman` 后，调度进程直接扫描任务表和执行记录表。同一租户下同一用户没有 `running` 执行记录时，才创建本轮记录并投递到 `mns.default_queue`。队列默认延时须为 0。
 
