@@ -22,18 +22,17 @@ final class PublishTaskDispatcher
         $runs = PublishTaskRun::query()->getTable();
         $now = time();
 
-        // 入队失败或长期未消费时，重试原执行记录。
-        $retryBefore = $now - PublishTaskService::REDISPATCH_AFTER_SECONDS;
-        $retries = Db::table($runs)->where('status', 'running')->where(function ($query) use ($retryBefore) {
-            $query->whereNull('dispatched_at')->whereOr('dispatched_at', '<=', $retryBefore);
-        })->field('task_id,tenant_id,user_id')->order('dispatched_at', 'asc')->order('id', 'asc')
-            ->limit(self::BATCH_SIZE)->select()->toArray();
-
-        // 共用表上可能有多个租户，同一租户和用户已有执行记录时跳过。
+        // 已有相同 tasksn 的记录，或同一租户和用户有待执行、执行中的记录时，跳过该计划。
         $due = Db::table($tasks)->alias('task')->where('task.status', 'scheduled')
+            ->whereNotNull('task.tasksn')
             ->where('task.next_run_at', '<=', $now)
             ->whereNotExists(static function ($query) use ($runs) {
-                $query->table($runs)->alias('run')->field('run.id')->where('run.status', 'running')
+                $query->table($runs)->alias('run')->field('run.id')
+                    ->whereColumn('run.tenant_id', '=', 'task.tenant_id')
+                    ->whereColumn('run.tasksn', '=', 'task.tasksn');
+            })
+            ->whereNotExists(static function ($query) use ($runs) {
+                $query->table($runs)->alias('run')->field('run.id')->whereIn('run.status', ['pending', 'running'])
                     ->whereColumn('run.tenant_id', '=', 'task.tenant_id')
                     ->whereColumn('run.user_id', '=', 'task.user_id');
             })->field('task.id AS task_id,task.tenant_id,task.user_id')
@@ -46,7 +45,7 @@ final class PublishTaskDispatcher
         try {
             // 候选查询只读。投递前恢复租户上下文，由模型在用户锁内复查。
             $request->source = AdminTerminalEnum::USER;
-            foreach (array_merge($retries, $due) as $row) {
+            foreach ($due as $row) {
                 $tenantId = (int)$row['tenant_id'];
                 $taskId = (int)$row['task_id'];
                 $request->tenantId = $tenantId;

@@ -24,8 +24,8 @@
 
 任务和执行记录分别存放在共用表 `publish_task` 和 `publish_task_run`，模型按 `tenant_id` 隔离数据。建表定义见 `upgrade/20261112_publish_task.sql`。
 
-任务表保存实际的下一次执行时间 `next_run_at`。启动 `php think workerman` 后，调度进程直接扫描任务表和执行记录表。同一租户下同一用户没有 `running` 执行记录时，才创建本轮记录并投递到 `mns.default_queue`。队列默认延时须为 0。
+创建计划时保存首轮的 `next_run_at` 和 `tasksn`。启动 `php think workerman` 后，调度器直接查询已到期且尚无对应 `tasksn` 执行记录的计划，创建 `pending` 记录并立即投递到 `mns.default_queue`。同一租户下同一用户有 `pending` 或 `running` 记录时，等本轮结束再安排下一轮。
 
-同一个 Job 逐个发送，并把每个人的结果写进本轮执行记录的 `recipient_results`。发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理其余待发送的人。处理完本轮后，在同一个事务里更新执行记录状态和任务的下一次执行时间。
+Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结果写入 `recipient_results`。发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理其余待发送的人。执行完成后将记录改为 `completed`，同时更新计划的 `next_run_at` 和 `tasksn`。没有下一轮时清空这两个字段。
 
 `hello` 通过微信公众号客服消息接口发送。实际送达需要租户配置或授权服务号、用户绑定服务号，且满足微信的客服消息发送窗口、权限与额度。

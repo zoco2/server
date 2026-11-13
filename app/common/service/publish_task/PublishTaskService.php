@@ -9,7 +9,6 @@ use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
-use app\common\model\tenant\Tenant;
 use app\common\model\user\UserAuth;
 use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
@@ -21,13 +20,10 @@ use Throwable;
 /** 管理当前租户用户的发布任务，由 MNS 消息逐轮触发执行。 */
 final class PublishTaskService
 {
-    // 投递后长期未完成时，重新投递同一条执行记录。
-    public const REDISPATCH_AFTER_SECONDS = 300;
-
     private const PLATFORMS = ['douyin', 'xiaohongshu', 'kuaishou'];
     private const MAX_STAFF = 50;
 
-    /** 校验发布规则，保存任务和首轮执行时间。 */
+    /** 保存计划和首轮执行时间、编号。 */
     public static function create(int $tenantId, int $userId, array $input): array
     {
         $content = $input['content'] ?? null;
@@ -72,6 +68,7 @@ final class PublishTaskService
             'notice_type' => 'official_account',
             'status' => $nextRunAt === null ? 'ended' : 'scheduled',
             'next_run_at' => $nextRunAt,
+            'tasksn' => $nextRunAt === null ? null : bin2hex(random_bytes(16)),
             'last_run_at' => null,
             'last_run_status' => '',
             'last_error' => '',
@@ -115,45 +112,39 @@ final class PublishTaskService
         ];
     }
 
-    /** 在用户锁内确认任务到期，再保存并投递执行记录。 */
+    /** 创建到期计划的执行记录并投递 Job。 */
     public static function dispatchDue(int $id, int $tenantId, int $userId): void
     {
         self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId): void {
-            // 只复查有待投递任务的租户，停用或已删除的租户暂停投递。
-            if (!Tenant::where(['id' => $tenantId, 'disable' => 0])->value('id')) {
+            $now = time();
+            $task = PublishTask::where(['id' => $id, 'user_id' => $userId, 'status' => 'scheduled'])
+                ->whereNotNull('tasksn')->where('next_run_at', '<=', $now)->findOrEmpty();
+            if ($task->isEmpty()) {
                 return;
             }
-            $now = time();
-            $run = PublishTaskRun::where(['user_id' => $userId, 'status' => 'running'])->findOrEmpty();
-            if ($run->isEmpty()) {
-                $task = PublishTask::where(['id' => $id, 'user_id' => $userId, 'status' => 'scheduled'])
-                    ->where('next_run_at', '<=', $now)->findOrEmpty();
-                if ($task->isEmpty()) {
-                    return;
-                }
+
+            // 取得用户锁后复查，避免并发扫描重复投递或同时执行同一用户的任务。
+            if (PublishTaskRun::where('tasksn', (string)$task->tasksn)->value('id')
+                || PublishTaskRun::where('user_id', $userId)->whereIn('status', ['pending', 'running'])->value('id')) {
+                return;
+            }
+
+            // 投递失败时回滚记录，下次扫描可以重试。Job 取得同一把用户锁后才读记录。
+            Db::transaction(static function () use ($task, $id, $tenantId, $userId, $now): void {
                 $run = PublishTaskRun::create([
                     'user_id' => $userId,
                     'task_id' => $id,
+                    'tasksn' => (string)$task->tasksn,
                     'scheduled_at' => (int)$task->next_run_at,
-                    'status' => 'running',
-                    'dispatched_at' => null,
+                    'status' => 'pending',
                     'create_time' => $now,
                     'update_time' => $now,
                 ]);
                 if ((int)$run->id <= 0 || (int)$run->tenant_id !== $tenantId) {
                     throw new RuntimeException('发布任务执行记录保存失败');
                 }
-            } elseif ((int)$run->task_id !== $id
-                || (int)$run->dispatched_at > $now - self::REDISPATCH_AFTER_SECONDS) {
-                return;
-            }
-
-            // 失败时保留原执行记录，下一次扫描仍投递同一个 ID。
-            PublishTaskJob::dispatch(['run_id' => (int)$run->id, 'user_id' => $userId]);
-            PublishTaskRun::where(['id' => (int)$run->id, 'user_id' => $userId])->update([
-                'dispatched_at' => time(),
-                'update_time' => time(),
-            ]);
+                PublishTaskJob::dispatch(['run_id' => (int)$run->id, 'user_id' => $userId]);
+            });
         }, 0);
     }
 
@@ -172,10 +163,16 @@ final class PublishTaskService
     private static function executeRun(int $runId, int $tenantId, int $userId, bool $failed): void
     {
         self::withOwnerLock($tenantId, $userId, static function () use ($runId, $tenantId, $userId, $failed): void {
-            $runWhere = ['id' => $runId, 'user_id' => $userId, 'status' => 'running'];
-            $run = PublishTaskRun::where($runWhere)->findOrEmpty();
+            $runWhere = ['id' => $runId, 'user_id' => $userId];
+            $run = PublishTaskRun::where($runWhere)->whereIn('status', ['pending', 'running'])->findOrEmpty();
             if ($run->isEmpty()) {
                 return;
+            }
+            // Job 开始处理时才进入 running，重试沿用同一条记录。
+            $runWhere['status'] = (string)$run->status;
+            if (!$failed && $runWhere['status'] === 'pending') {
+                PublishTaskRun::where($runWhere)->update(['status' => 'running', 'update_time' => time()]);
+                $runWhere['status'] = 'running';
             }
 
             $scheduledAt = (int)$run->scheduled_at;
@@ -183,7 +180,7 @@ final class PublishTaskService
                 'id' => (int)$run->task_id,
                 'user_id' => $userId,
                 'status' => 'scheduled',
-                'next_run_at' => $scheduledAt,
+                'tasksn' => (string)$run->tasksn,
             ];
             $record = PublishTask::where($taskWhere)->findOrEmpty();
             if ($record->isEmpty()) {
@@ -225,19 +222,23 @@ final class PublishTaskService
 
             $finishedAt = time();
             $nextRunAt = PublishTaskSchedule::next($task, max($scheduledAt + 1, $finishedAt));
-            $taskStatus = $nextRunAt !== null ? 'scheduled' : 'ended';
-            if ($taskStatus === 'ended' && $failed && $result['last_run_status'] === 'failed') {
-                $taskStatus = 'failed';
-            }
-            Db::transaction(static function () use ($runWhere, $taskWhere, $scheduledAt, $result, $results, $finishedAt, $nextRunAt, $taskStatus): void {
+            $runStatus = match (true) {
+                $result['last_run_status'] === 'skipped' => 'skipped',
+                $failed => 'failed',
+                default => 'completed',
+            };
+            $taskStatus = $nextRunAt !== null ? 'scheduled' : ($runStatus === 'failed' ? 'failed' : 'ended');
+            // 本轮结束与下一轮排期一起提交，避免扫描到未更新的计划。
+            Db::transaction(static function () use ($runWhere, $taskWhere, $scheduledAt, $result, $results, $finishedAt, $nextRunAt, $taskStatus, $runStatus): void {
                 PublishTaskRun::where($runWhere)->update([
-                    'status' => $result['last_run_status'],
+                    'status' => $runStatus,
                     'recipient_results' => json_encode((object)$results, JSON_THROW_ON_ERROR),
                     'update_time' => $finishedAt,
                 ]);
                 PublishTask::where($taskWhere)->update($result + [
                     'status' => $taskStatus,
                     'next_run_at' => $nextRunAt,
+                    'tasksn' => $nextRunAt === null ? null : bin2hex(random_bytes(16)),
                     'last_run_at' => $scheduledAt,
                     'update_time' => $finishedAt,
                 ]);
@@ -383,7 +384,7 @@ final class PublishTaskService
     /** 将数据库记录转换成接口数据，隐藏内部标识并统一数值字段类型。 */
     private static function present(array $row): array
     {
-        unset($row['tenant_id'], $row['user_id']);
+        unset($row['tenant_id'], $row['user_id'], $row['tasksn']);
         $row['staff_ids'] = $row['staff_ids'] === null
             ? [] : json_decode($row['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
         $row['platforms'] = json_decode($row['platforms'], true, flags: JSON_THROW_ON_ERROR);

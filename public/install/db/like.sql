@@ -14727,6 +14727,7 @@ CREATE TABLE IF NOT EXISTS `la_publish_task` (
   `end_date` date DEFAULT NULL COMMENT '自定义日期范围的结束日，含当天',
   `status` varchar(16) NOT NULL COMMENT 'scheduled 待执行，ended 已结束，failed 消费重试耗尽',
   `next_run_at` bigint unsigned DEFAULT NULL COMMENT '下一次计划执行时间（Unix 秒）',
+  `tasksn` char(32) DEFAULT NULL COMMENT '下一轮任务编号，任务结束后为空',
   `last_run_at` bigint unsigned DEFAULT NULL COMMENT '最近一次尝试的计划执行时间（Unix 秒）',
   `last_run_status` varchar(16) NOT NULL DEFAULT '' COMMENT '最近一轮通知结果：sending、sent、failed、unknown、skipped',
   `last_error` varchar(255) NOT NULL DEFAULT '' COMMENT '最近一轮通知失败或结果不明的原因',
@@ -14742,14 +14743,13 @@ CREATE TABLE IF NOT EXISTS `la_publish_task_run` (
   `tenant_id` int unsigned NOT NULL COMMENT '所属租户 ID',
   `user_id` int unsigned NOT NULL COMMENT '创建任务的用户 ID',
   `task_id` bigint unsigned NOT NULL COMMENT '发布任务 ID',
+  `tasksn` char(32) NOT NULL COMMENT '本轮任务编号，取自发布计划',
   `scheduled_at` bigint unsigned NOT NULL COMMENT '本轮计划执行时间（Unix 秒）',
-  `status` varchar(16) NOT NULL COMMENT 'running 待执行或执行中，sent 已发送，failed 失败，unknown 结果不明，skipped 已跳过',
-  `dispatched_at` bigint unsigned DEFAULT NULL COMMENT 'MNS 接受消息的时间（Unix 秒），空表示待投递',
+  `status` varchar(16) NOT NULL COMMENT 'pending 待执行，running 执行中，completed 已完成，failed 失败，skipped 已跳过',
   `recipient_results` json DEFAULT NULL COMMENT '各员工的发送状态和错误，键 0 表示创建人',
   `create_time` bigint unsigned NOT NULL COMMENT '创建时间（Unix 秒）',
   `update_time` bigint unsigned NOT NULL COMMENT '更新时间（Unix 秒）',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_task_schedule` (`tenant_id`, `task_id`, `scheduled_at`),
-  KEY `idx_owner_status` (`tenant_id`, `user_id`, `status`),
-  KEY `idx_pending_dispatch` (`status`, `dispatched_at`, `id`)
+  UNIQUE KEY `uk_tasksn` (`tenant_id`, `tasksn`),
+  KEY `idx_owner_status` (`tenant_id`, `user_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户发布任务执行记录';
