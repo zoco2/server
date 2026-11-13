@@ -18,7 +18,7 @@ final class PublishTaskDispatcher
         $tasks = PublishTask::query()->getTable();
         $due = Db::table($tasks)->where('status', 'scheduled')
             ->whereNotNull('tasksn')->where('next_run_at', '<=', time())
-            ->field('id,tenant_id,user_id')->order('next_run_at asc,id asc')->select();
+            ->field('id,tenant_id,user_id,tasksn')->order('next_run_at asc,id asc')->select();
 
         $request = request();
         $previousSource = $request->source;
@@ -31,7 +31,7 @@ final class PublishTaskDispatcher
                 $taskId = (int)$row['id'];
                 $request->tenantId = $tenantId;
                 try {
-                    PublishTaskService::dispatchDue($taskId, $tenantId, (int)$row['user_id']);
+                    PublishTaskService::dispatchDue($taskId, $tenantId, (int)$row['user_id'], (string)$row['tasksn']);
                 } catch (Throwable $e) {
                     Log::channel('mns')->error(sprintf('[publish_task] dispatch failed tenant=%d task=%d type=%s', $tenantId, $taskId, get_class($e)));
                 }
