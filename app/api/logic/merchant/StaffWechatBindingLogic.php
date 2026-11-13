@@ -214,7 +214,39 @@ class StaffWechatBindingLogic
         }
     }
 
-    private static function resolveBindTemplate(int $tenantId, bool $forceSync = false, string $appid = ''): array
+    /** 使用员工「测试发送」的模板发送任务内容。 */
+    public static function sendTaskNotice(int $tenantId, string $openid, ?string $appid, string $content): void
+    {
+        if ($appid === null) {
+            $appid = self::authorizedOfficialAppId($tenantId) ?: self::bindingOfficialAppId($tenantId);
+        }
+        $template = self::resolveBindTemplate($tenantId, false, $appid, true);
+        $values = $template['has_content_field'] ? ['content' => $content] : [
+            'first' => '任务发布提醒',
+            'task_name' => $content,
+            'audit_result' => '待执行',
+            'audit_time' => date('Y-m-d H:i:s'),
+            'remark' => $content,
+        ];
+        $data = [];
+        foreach ($values as $source => $value) {
+            $field = trim((string)($template['field_map'][$source] ?? ''));
+            if ($field !== '') {
+                $data[$field] = ['value' => $source === 'content' ? $value : mb_substr($value, 0, 20)];
+            }
+        }
+        $result = self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
+            'touser' => $openid,
+            'template_id' => $template['template_id'],
+            'data' => $data,
+        ], 'merchant.publish_task.template.send', 'POST', $appid);
+        if (!isset($result['errcode'])) {
+            throw new \RuntimeException('微信未返回模板通知发送结果');
+        }
+    }
+
+    /** 定时任务只查找现有模板，模板同步仍由员工管理入口负责。 */
+    private static function resolveBindTemplate(int $tenantId, bool $forceSync = false, string $appid = '', bool $readOnly = false): array
     {
         $definition = (array)config('merchant.staff_bind_notice', []);
         $shortId = trim((string)($definition['template_short_id'] ?? ''));
@@ -246,7 +278,9 @@ class StaffWechatBindingLogic
                 foreach ($templates as $template) {
                     $templateTitle = trim((string)($template['title'] ?? ''));
                     if (hash_equals($savedTemplateId, trim((string)($template['template_id'] ?? ''))) && $templateTitle === $title) {
-                        self::saveBindTemplateId($tenantId, $appid, $savedTemplateId);
+                        if (!$readOnly) {
+                            self::saveBindTemplateId($tenantId, $appid, $savedTemplateId);
+                        }
                         return [
                             'template_id' => $savedTemplateId,
                             'title' => $templateTitle,
@@ -268,7 +302,7 @@ class StaffWechatBindingLogic
         }
 
         if ($templateId === '') {
-            if ($shortId === '' || $keywords === []) {
+            if ($readOnly || $shortId === '' || $keywords === []) {
                 throw new \RuntimeException('当前公众号未找到「' . $title . '」模板，请先在公众号后台添加后再同步通知模板');
             }
             $created = self::wechatRequest($tenantId, 'cgi-bin/template/api_add_template', [
@@ -281,7 +315,9 @@ class StaffWechatBindingLogic
             throw new \RuntimeException('微信未返回员工绑定模板 ID');
         }
 
-        self::saveBindTemplateId($tenantId, $appid, $templateId);
+        if (!$readOnly) {
+            self::saveBindTemplateId($tenantId, $appid, $templateId);
+        }
         return [
             'template_id' => $templateId,
             'title' => $title,
@@ -376,10 +412,7 @@ class StaffWechatBindingLogic
             if ($manualConfig !== []) {
                 return self::manualWechatRequest($tenantId, $manualConfig, $path, $payload, $method, $apiName);
             }
-            if (hash_equals(self::authorizedOfficialAppId($tenantId), $appid)) {
-                return OpenPlatformService::authorizerRequest($tenantId, 'official', $path, $payload, $apiName, $method);
-            }
-            throw new \RuntimeException('员工绑定公众号与当前公众号配置不一致，请重新绑定');
+            return OpenPlatformService::authorizerRequest($tenantId, 'official', $path, $payload, $apiName, $method, $appid);
         }
 
         $config = WeChatConfigService::getOaConfig();
@@ -409,7 +442,7 @@ class StaffWechatBindingLogic
                 );
             }
         } catch (\Throwable $e) {
-            Log::warning('[merchant.staff.bind] manual official account request failed api=' . $apiName . ' tenant_id=' . $tenantId . ' error=' . $e->getMessage());
+            Log::warning('[merchant.staff.bind] manual official account request failed api=' . $apiName . ' tenant_id=' . $tenantId . ' type=' . get_class($e));
             throw new \RuntimeException('微信接口请求失败，请稍后重试');
         }
 
@@ -423,7 +456,7 @@ class StaffWechatBindingLogic
             return self::manualWechatRequest($tenantId, $config, $path, $payload, $method, $apiName, true);
         }
         if ((int)($result['errcode'] ?? 0) !== 0) {
-            throw new \RuntimeException('微信接口调用失败：' . (string)($result['errmsg'] ?? $result['errcode']));
+            throw new \RuntimeException('微信接口调用失败：' . (string)($result['errmsg'] ?? $result['errcode']), (int)$result['errcode']);
         }
         return $result;
     }
