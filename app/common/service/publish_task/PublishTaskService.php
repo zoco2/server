@@ -247,7 +247,7 @@ final class PublishTaskService
         });
     }
 
-    /** 同一轮逐个发送。记录每次发送的进度，重试时只继续处理未发送的人。 */
+    /** 同一轮逐个发送，重试时继续处理没有发送记录的人。 */
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
         if (isset($task['staff_ids'])) {

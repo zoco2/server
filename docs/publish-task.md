@@ -26,6 +26,6 @@
 
 创建计划时保存首轮的 `next_run_at` 和 `tasksn`。启动 `php think workerman` 后，调度器查询到期计划，在事务内用 `lock(true)` 锁住对应计划行。已有相同 `tasksn` 的执行记录就跳过，否则创建 `pending` 记录并立即投递到 `mns.default_queue`。Job 消费时锁住同一行，同一用户的不同计划可以分别处理。
 
-Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结果写入 `recipient_results`。发送进度由独立连接提交，发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理其余待发送的人。执行完成后将记录改为 `completed`，同时更新计划的 `next_run_at` 和 `tasksn`。没有下一轮时清空这两个字段。
+Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结果写入 `recipient_results`。发送进度由独立连接提交，发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理没有发送记录的人。本轮处理完记为 `completed`，超过结束日期记为 `skipped`，MNS 重试耗尽记为 `failed`。同时更新计划的 `next_run_at` 和 `tasksn`，没有下一轮时清空这两个字段。
 
 `hello` 通过微信公众号客服消息接口发送。实际送达需要租户配置或授权服务号、用户绑定服务号，且满足微信的客服消息发送窗口、权限与额度。
