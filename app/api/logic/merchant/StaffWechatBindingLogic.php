@@ -215,7 +215,7 @@ class StaffWechatBindingLogic
     }
 
     /** 使用员工「测试发送」的模板发送任务内容。 */
-    public static function sendTaskNotice(int $tenantId, string $openid, ?string $appid, string $content): void
+    public static function sendTaskNotice(int $tenantId, string $openid, ?string $appid, string $content, ?string $url): void
     {
         if ($appid === null) {
             $appid = self::authorizedOfficialAppId($tenantId) ?: self::bindingOfficialAppId($tenantId);
@@ -235,11 +235,15 @@ class StaffWechatBindingLogic
                 $data[$field] = ['value' => $source === 'content' ? $value : mb_substr($value, 0, 20)];
             }
         }
-        $result = self::wechatRequest($tenantId, 'cgi-bin/message/template/send', [
+        $payload = [
             'touser' => $openid,
             'template_id' => $template['template_id'],
             'data' => $data,
-        ], 'merchant.publish_task.template.send', 'POST', $appid);
+        ];
+        if ($url !== null) {
+            $payload['url'] = $url;
+        }
+        $result = self::wechatRequest($tenantId, 'cgi-bin/message/template/send', $payload, 'merchant.publish_task.template.send', 'POST', $appid);
         if (!isset($result['errcode'])) {
             throw new \RuntimeException('微信未返回模板通知发送结果');
         }

@@ -53,4 +53,21 @@ final class PublishTaskController extends BaseApiController
             return $this->fail($e->getMessage());
         }
     }
+
+    /** GET /api/publish_task/runs：分页返回指定计划的执行记录。 */
+    public function runs()
+    {
+        if (!$this->request->isGet()) {
+            return $this->fail('请使用 GET 请求');
+        }
+        try {
+            return $this->success('', PublishTaskService::runs(
+                (int)$this->request->tenantId, $this->userId,
+                (int)$this->request->get('task_id/d', 0),
+                (int)$this->request->get('page_no/d', 1), (int)$this->request->get('page_size/d', 20)
+            ));
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
 }

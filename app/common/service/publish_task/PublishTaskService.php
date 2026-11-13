@@ -10,7 +10,9 @@ use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
+use app\common\model\tenant\Tenant;
 use app\common\model\user\UserAuth;
+use app\common\service\tenant\TenantUrlService;
 use InvalidArgumentException;
 use RuntimeException;
 use think\facade\Db;
@@ -108,6 +110,39 @@ final class PublishTaskService
         return [
             'count' => $count,
             'lists' => array_map(self::present(...), $tasks),
+            'page_no' => $page,
+            'page_size' => $size,
+        ];
+    }
+
+    /** 按最近创建顺序返回当前用户指定计划的执行记录。 */
+    public static function runs(int $tenantId, int $userId, int $taskId, int $page, int $size): array
+    {
+        self::requireOwner($tenantId, $userId);
+        if ($taskId <= 0) {
+            throw new InvalidArgumentException('发布计划 ID 无效');
+        }
+        if (!PublishTask::where(['id' => $taskId, 'user_id' => $userId])->value('id')) {
+            throw new InvalidArgumentException('发布计划不存在或无权查看');
+        }
+
+        $page = max(1, $page);
+        $size = max(1, min(100, $size));
+        $where = ['task_id' => $taskId, 'user_id' => $userId];
+        $count = PublishTaskRun::where($where)->count();
+        $runs = PublishTaskRun::where($where)->order('id desc')->page($page, $size)->select()->toArray();
+        foreach ($runs as &$run) {
+            unset($run['tenant_id'], $run['user_id']);
+            foreach (['id', 'task_id', 'scheduled_at', 'create_time', 'update_time'] as $key) {
+                $run[$key] = (int)$run[$key];
+            }
+            // 接收人按员工 ID 索引，键 0 表示创建计划的用户。
+            $run['recipient_results'] = (object)json_decode($run['recipient_results'] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+        }
+        unset($run);
+        return [
+            'count' => $count,
+            'lists' => $runs,
             'page_no' => $page,
             'page_size' => $size,
         ];
@@ -250,10 +285,25 @@ final class PublishTaskService
     /** 同一轮逐个发送，重试时继续处理没有发送记录的人。 */
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
+        $storeOrigin = '';
+        $storeQuery = '';
         if (isset($task['staff_ids'])) {
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
-                ->column('openid,appid', 'id');
+                ->column('openid,appid,store_id', 'id');
+            // Job 没有 HTTP 请求域名，使用当前租户配置的 PC 访问地址。
+            $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
+            if (!$tenant->isEmpty()) {
+                $pcUrl = TenantUrlService::links($tenant->getData())['current']['pc'];
+                $host = TenantUrlService::normalizeHost($pcUrl);
+                if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
+                    $storeOrigin = 'https://' . $host;
+                    $storeQuery = '?pc=1';
+                    if (parse_url($pcUrl, PHP_URL_QUERY)) {
+                        $storeQuery .= '&tenant_id=' . $tenantId;
+                    }
+                }
+            }
         } else {
             // 键 0 表示通知创建人，员工键使用实际的员工 ID。
             $staffIds = [0];
@@ -270,11 +320,14 @@ final class PublishTaskService
             }
             $openid = trim((string)($staff[$staffId]['openid'] ?? ''));
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
+            $storeId = (int)($staff[$staffId]['store_id'] ?? 0);
+            $storeUrl = $storeId > 0 && $storeOrigin !== ''
+                ? $storeOrigin . '/pc/merchant/store/' . $storeId . '/decorate' . $storeQuery : null;
 
             // 发送前保存状态，进程中断后可以识别可能已发送的通知。
             $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
             self::saveRecipientResults($runWhere, $results);
-            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId);
+            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId, $storeUrl);
             self::saveRecipientResults($runWhere, $results);
         }
         return $results;
@@ -294,7 +347,7 @@ final class PublishTaskService
      *
      * @return array{last_run_status: string, last_error: string}
      */
-    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId): array
+    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId, ?string $storeUrl): array
     {
         if ($openid === '' || $appId === '') {
             return [
@@ -302,8 +355,11 @@ final class PublishTaskService
                 'last_error' => $appId === null ? '用户未绑定服务号' : '员工已删除或未绑定服务号',
             ];
         }
+        if ($appId !== null && $storeUrl === null) {
+            return ['last_run_status' => 'failed', 'last_error' => '无法生成门店链接，请检查员工所属门店和租户访问域名'];
+        }
         try {
-            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content']);
+            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content'], $storeUrl);
             return ['last_run_status' => 'sent', 'last_error' => ''];
         } catch (Throwable $e) {
             // 请求异常可能包含带 access_token 的 URL，只记录异常类型和错误码。
