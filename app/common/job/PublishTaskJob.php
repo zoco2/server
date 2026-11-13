@@ -30,19 +30,18 @@ final class PublishTaskJob extends Job
     }
 
     /**
-     * 从队列上下文和消息数据提取任务 ID、租户 ID、用户 ID 和唤醒时间。
+     * Job 基类已恢复租户上下文，这里只读取任务参数。
      *
-     * @return array{int, int, int, int}|null
+     * @return array{int, int, int}|null
      */
     private function arguments(): ?array
     {
         $id = (int)($this->data['task_id'] ?? 0);
-        $tenantId = (int)$this->tenantId;
         $userId = (int)($this->data['user_id'] ?? 0);
         $wakeAt = $this->data['wake_at'] ?? null;
-        if ($id <= 0 || $tenantId <= 0 || $userId <= 0 || !is_int($wakeAt) || $wakeAt <= 0) {
+        if ($id <= 0 || $userId <= 0 || !is_int($wakeAt) || $wakeAt <= 0) {
             return null;
         }
-        return [$id, $tenantId, $userId, $wakeAt];
+        return [$id, $userId, $wakeAt];
     }
 }

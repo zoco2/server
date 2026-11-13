@@ -25,10 +25,7 @@ final class PublishTaskController extends BaseApiController
             if (array_key_exists('staff_ids', $input)) {
                 $input['staff_ids'] = $this->request->post('staff_ids', null, null);
             }
-            // 任务归属取自登录上下文，请求体只提供任务配置。
-            return $this->success('', PublishTaskService::create(
-                (int)$this->request->tenantId, $this->userId, $input
-            ));
+            return $this->success('', PublishTaskService::create($this->userId, $input));
         } catch (InvalidArgumentException $e) {
             return $this->fail($e->getMessage());
         } catch (Throwable $e) {
@@ -50,7 +47,7 @@ final class PublishTaskController extends BaseApiController
         }
         try {
             return $this->success('', PublishTaskService::lists(
-                (int)$this->request->tenantId, $this->userId,
+                $this->userId,
                 (int)$this->request->get('page_no/d', 1), (int)$this->request->get('page_size/d', 20)
             ));
         } catch (InvalidArgumentException $e) {

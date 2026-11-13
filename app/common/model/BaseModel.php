@@ -31,10 +31,13 @@ class BaseModel extends Model
     // 定义全局的查询范围
     protected $globalScope = ['tenantId'];
 
+    // 共用表模型仍使用租户查询范围，只跳过租户分表。
+    protected const USE_TENANT_SUBTABLE = true;
+
     private static bool $hasTenantId = false;
 
     // 不需要检查分表的范围
-    private static $notCheckTables = ['tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config', 'hot_search', 'operation_log', 'pc_feedback', 'publish_task'];
+    private static $notCheckTables = ['tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config', 'hot_search', 'operation_log', 'pc_feedback'];
 
     /**
      * @notes 公共处理图片，补全路径
@@ -84,7 +87,7 @@ class BaseModel extends Model
                 $tenantId = \request()->tenantId;
             }
             // 分表全局控制
-            if (!in_array($tableNoPrefix, self::$notCheckTables)) {
+            if (static::USE_TENANT_SUBTABLE && !in_array($tableNoPrefix, self::$notCheckTables)) {
                 // 根据租户唯一标识获取对应表是否存在
                 $tenantInfo = Tenant::query()->where('id', $tenantId)->find()->toArray();
                 // 租户分表策略
