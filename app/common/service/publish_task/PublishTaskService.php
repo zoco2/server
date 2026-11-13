@@ -7,6 +7,7 @@ namespace app\common\service\publish_task;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
+use app\common\model\merchant\PublishTask;
 use app\common\model\user\UserAuth;
 use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
@@ -64,7 +65,6 @@ final class PublishTaskService
             $nextRunAt = PublishTaskSchedule::first($rule, $now);
             $wakeAt = $nextRunAt === null ? null : PublishTaskSchedule::wakeAt($nextRunAt, $now);
             $row = $rule + [
-                'tenant_id' => $tenantId,
                 'user_id' => $userId,
                 'content' => trim($content),
                 'platforms' => json_encode(array_values(array_unique($platforms)), JSON_THROW_ON_ERROR),
@@ -80,9 +80,19 @@ final class PublishTaskService
             // 投递失败时回滚任务记录。零延迟消息可能立即被取到，消费者会等待同一把锁，
             // 在创建事务提交或回滚后才读取任务。
             $ids = Db::transaction(static function () use ($tenantId, $userId, $row, $wakeAt, $staffIds): array {
+                // 模型保存会忽略缺失字段，先检查旧表是否具备完整的任务字段。
+                $query = PublishTask::query();
+                $fields = $query->getConnection()->getTableFields($query->getTable());
+                if (array_diff([...array_keys($row), 'tenant_id', 'staff_id'], $fields) !== []) {
+                    throw new RuntimeException('发布任务表缺少字段，请执行数据库迁移');
+                }
                 $ids = [];
                 foreach ($staffIds ?? [null] as $staffId) {
-                    $id = (int)Db::name(self::TABLE)->insertGetId($row + ['staff_id' => $staffId]);
+                    $task = PublishTask::create($row + ['staff_id' => $staffId]);
+                    $id = (int)$task->id;
+                    if ($id <= 0 || (int)$task->tenant_id !== $tenantId) {
+                        throw new RuntimeException('任务保存失败或租户上下文无效');
+                    }
                     if ($wakeAt !== null) {
                         self::enqueue($id, $tenantId, $userId, $wakeAt);
                     }
