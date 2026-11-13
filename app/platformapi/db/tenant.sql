@@ -484,7 +484,7 @@ CREATE TABLE IF NOT EXISTS `la_publish_task_{tenantSn}` (
   `update_time` bigint unsigned NOT NULL COMMENT '更新时间（Unix 秒）',
   PRIMARY KEY (`id`),
   KEY `idx_owner` (`tenant_id`, `user_id`, `id`),
-  KEY `idx_due` (`tenant_id`, `status`, `next_run_at`, `id`)
+  KEY `idx_due` (`status`, `next_run_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户发布任务';
 
 CREATE TABLE IF NOT EXISTS `la_publish_task_run_{tenantSn}` (
@@ -500,7 +500,7 @@ CREATE TABLE IF NOT EXISTS `la_publish_task_run_{tenantSn}` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_task_schedule` (`tenant_id`, `task_id`, `scheduled_at`),
   KEY `idx_owner_status` (`tenant_id`, `user_id`, `status`),
-  KEY `idx_pending_dispatch` (`tenant_id`, `status`, `dispatched_at`, `id`)
+  KEY `idx_pending_dispatch` (`status`, `dispatched_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户发布任务执行记录';
 
 SET FOREIGN_KEY_CHECKS = 1;

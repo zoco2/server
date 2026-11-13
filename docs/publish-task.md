@@ -24,7 +24,7 @@
 
 部署时先执行 `upgrade/20261112_publish_task.sql`。任务模型沿用项目的租户分表规则，新建分表租户由 `app/platformapi/db/tenant.sql` 初始化任务表。
 
-任务表保存实际的下一次执行时间 `next_run_at`。启动 `php think workerman` 后，调度进程按租户扫描到期任务。同一租户下同一用户没有 `running` 执行记录时，才创建本轮记录并投递到 `mns.default_queue`。队列默认延时须为 0。
+任务表保存实际的下一次执行时间 `next_run_at`。启动 `php think workerman` 后，调度进程直接扫描任务表和执行记录表。同一租户下同一用户没有 `running` 执行记录时，才创建本轮记录并投递到 `mns.default_queue`。队列默认延时须为 0。
 
 Job 根据执行记录 ID 处理本轮。结束时在同一个事务里写入本轮结果和任务的下一次执行时间。投递失败时沿用原执行记录重试，重复消费同一执行记录时不会重复发送通知。
 

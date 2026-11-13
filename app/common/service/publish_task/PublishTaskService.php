@@ -9,6 +9,7 @@ use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
+use app\common\model\tenant\Tenant;
 use app\common\model\user\UserAuth;
 use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
@@ -118,10 +119,18 @@ final class PublishTaskService
         ];
     }
 
-    /** 到期后先保存执行记录，再投递这条记录。 */
-    public static function dispatchDue(int $id, int $tenantId, int $userId): void
+    /** 复查到期记录的租户和分表，再保存并投递执行记录。 */
+    public static function dispatchDue(int $id, int $tenantId, int $userId, string $sourceTable): void
     {
-        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId): void {
+        self::withOwnerLock($tenantId, $userId, static function () use ($id, $tenantId, $userId, $sourceTable): void {
+            // 只复查有待投递任务的租户，停用或已删除的租户暂停投递。
+            if (!Tenant::where(['id' => $tenantId, 'disable' => 0])->value('id')) {
+                return;
+            }
+            // 分表的任务 ID 可以重复，确认候选记录来自模型当前路由的表。
+            if (PublishTask::query()->parseOptions()['table'] !== $sourceTable) {
+                return;
+            }
             $now = time();
             $run = PublishTaskRun::where(['user_id' => $userId, 'status' => 'running'])->findOrEmpty();
             if ($run->isEmpty()) {
