@@ -20,9 +20,11 @@
 - 日期范围内没有未来执行时间时，任务直接返回 `ended`。消息迟到但仍在范围内，可执行当前轮次；已过结束日则跳过并结束。每次执行完成只安排下一次未来的轮次。
 - 从员工列表发布时传入 `staff_ids`，它是包含 1 至 50 个正整数的数组。员工必须属于当前租户和商家，且已绑定服务号。去重后把员工 ID 存在同一条任务上。接口返回 `ids` 和 `count`，其中 `ids` 包含这条任务的 ID，`count` 是员工人数。省略 `staff_ids` 时通知当前用户，接口返回任务详情。
 
-`GET /api/publish_task/lists?page_no=1&page_size=20` 查询当前用户创建的任务。任务详情包含 `status`（`scheduled`、`ended`、`failed`）、`staff_ids`、`next_run_at`、`last_run_at`（最近处理的计划时刻）、`last_run_status` 和 `last_error`。时间戳单位为秒。有后续轮次时继续排期。MNS 重试耗尽且没有后续轮次时，任务可以进入 `failed`。
+`GET /api/publish_task/lists?page_no=1&page_size=20` 查询当前用户创建的任务。任务详情包含 `status`（`scheduled`、`paused`、`ended`、`failed`）、`staff_ids`、`staff`、`next_run_at`、`last_run_at`（最近处理的计划时刻）、`last_run_status` 和 `last_error`。时间戳单位为秒。有后续轮次时继续排期。MNS 重试耗尽且没有后续轮次时，任务可以进入 `failed`。
 
-`GET /api/publish_task/runs?task_id=1&page_no=1&page_size=20` 查询当前用户指定计划的执行记录，按执行记录 ID 倒序返回。每条记录包含 `tasksn`、`scheduled_at`、`status`、`create_time`、`update_time` 和 `recipient_results`。发送结果以员工 ID 为键，键 `0` 表示计划创建人。
+`GET /api/publish_task/runs?task_id=1&page_no=1&page_size=20` 查询当前用户指定计划的执行记录，按执行记录 ID 倒序返回。每条记录包含 `tasksn`、`scheduled_at`、`status`、`create_time`、`update_time`、`staff` 和 `recipient_results`。`staff` 包含可查到的员工 ID、姓名和所属门店。发送结果以员工 ID 为键，键 `0` 表示计划创建人。
+
+`POST /api/publish_task/pause` 和 `POST /api/publish_task/resume` 接收 `task_id`。暂停会跳过已入队但尚未开始的轮次，已开始的轮次处理完后再暂停。恢复时重新计算下一次时间，原周期已结束的计划变为 `ended`。
 
 任务和执行记录分别存放在共用表 `publish_task` 和 `publish_task_run`，模型按 `tenant_id` 隔离数据。建表定义见 `upgrade/20261112_publish_task.sql`。
 

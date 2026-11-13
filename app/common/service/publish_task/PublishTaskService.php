@@ -8,6 +8,7 @@ use app\api\logic\merchant\StaffWechatBindingLogic;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
+use app\common\model\merchant\MerchantStore;
 use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
 use app\common\model\tenant\Tenant;
@@ -107,9 +108,16 @@ final class PublishTaskService
         $count = PublishTask::where('user_id', $userId)->count();
         $tasks = PublishTask::where('user_id', $userId)
             ->order('id desc')->page($page, $size)->select()->toArray();
+        $tasks = array_map(self::present(...), $tasks);
+        $staff = self::staffDetails($tenantId, $userId, array_merge(...array_column($tasks, 'staff_ids')));
+        foreach ($tasks as &$task) {
+            $task['staff'] = self::selectStaff($staff, $task['staff_ids']);
+        }
+        unset($task);
+
         return [
             'count' => $count,
-            'lists' => array_map(self::present(...), $tasks),
+            'lists' => $tasks,
             'page_no' => $page,
             'page_size' => $size,
         ];
@@ -122,7 +130,8 @@ final class PublishTaskService
         if ($taskId <= 0) {
             throw new InvalidArgumentException('发布计划 ID 无效');
         }
-        if (!PublishTask::where(['id' => $taskId, 'user_id' => $userId])->value('id')) {
+        $task = PublishTask::where(['id' => $taskId, 'user_id' => $userId])->field('id,staff_ids')->findOrEmpty();
+        if ($task->isEmpty()) {
             throw new InvalidArgumentException('发布计划不存在或无权查看');
         }
 
@@ -131,13 +140,23 @@ final class PublishTaskService
         $where = ['task_id' => $taskId, 'user_id' => $userId];
         $count = PublishTaskRun::where($where)->count();
         $runs = PublishTaskRun::where($where)->order('id desc')->page($page, $size)->select()->toArray();
+        $plannedStaff = json_decode($task->staff_ids ?? '[]', true, flags: JSON_THROW_ON_ERROR);
+        $staffIds = $plannedStaff;
         foreach ($runs as &$run) {
             unset($run['tenant_id'], $run['user_id']);
             foreach (['id', 'task_id', 'scheduled_at', 'create_time', 'update_time'] as $key) {
                 $run[$key] = (int)$run[$key];
             }
             // 接收人按员工 ID 索引，键 0 表示创建计划的用户。
-            $run['recipient_results'] = (object)json_decode($run['recipient_results'] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+            $results = json_decode($run['recipient_results'] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+            $run['recipient_results'] = (object)$results;
+            $staffIds = array_merge($staffIds, array_keys($results));
+        }
+        unset($run);
+
+        $staff = self::staffDetails($tenantId, $userId, $staffIds);
+        foreach ($runs as &$run) {
+            $run['staff'] = self::selectStaff($staff, array_unique([...$plannedStaff, ...array_keys((array)$run['recipient_results'])]));
         }
         unset($run);
         return [
@@ -146,6 +165,50 @@ final class PublishTaskService
             'page_no' => $page,
             'page_size' => $size,
         ];
+    }
+
+    /** 暂停当前计划，或从现在重新计算恢复后的排期。 */
+    public static function setPaused(int $tenantId, int $userId, int $taskId, bool $paused): void
+    {
+        self::requireOwner($tenantId, $userId);
+        if ($taskId <= 0) {
+            throw new InvalidArgumentException('发布计划 ID 无效');
+        }
+        Db::transaction(static function () use ($userId, $taskId, $paused): void {
+            $where = ['id' => $taskId, 'user_id' => $userId];
+            $task = PublishTask::where($where)->lock(true)->findOrEmpty();
+            if ($task->isEmpty()) {
+                throw new InvalidArgumentException('发布计划不存在或无权操作');
+            }
+            $status = (string)$task->status;
+            if ($status === ($paused ? 'paused' : 'scheduled')) {
+                return;
+            }
+            if ($status !== ($paused ? 'scheduled' : 'paused')) {
+                throw new InvalidArgumentException('当前状态无法' . ($paused ? '暂停' : '恢复') . '计划');
+            }
+
+            $now = time();
+            $nextRunAt = null;
+            if ($paused) {
+                // 消费端锁住同一条计划，正在重试的轮次也要等它处理完。
+                $runWhere = ['task_id' => $taskId, 'user_id' => $userId, 'tasksn' => (string)$task->tasksn];
+                if (PublishTaskRun::where($runWhere)->value('status') === 'running') {
+                    throw new InvalidArgumentException('本轮任务尚在处理中，请稍后暂停');
+                }
+                PublishTaskRun::where($runWhere)->where('status', 'pending')
+                    ->update(['status' => 'skipped', 'update_time' => $now]);
+            } else {
+                $nextRunAt = PublishTaskSchedule::first($task->getData(), max($now, (int)$task->last_run_at + 1));
+            }
+
+            PublishTask::where($where)->update([
+                'status' => $paused ? 'paused' : ($nextRunAt === null ? 'ended' : 'scheduled'),
+                'next_run_at' => $nextRunAt,
+                'tasksn' => $nextRunAt === null ? null : bin2hex(random_bytes(16)),
+                'update_time' => $now,
+            ]);
+        });
     }
 
     /** 创建到期计划的执行记录并投递 Job。 */
@@ -389,6 +452,42 @@ final class PublishTaskService
         return MerchantStaff::withoutGlobalScope()
             ->where(['tenant_id' => $tenantId, 'user_id' => $userId])
             ->whereNull('delete_time');
+    }
+
+    /** 批量读取当前页涉及的员工和门店，仅返回列表展示需要的字段。 */
+    private static function staffDetails(int $tenantId, int $userId, array $ids): array
+    {
+        $ids = array_unique(array_filter(array_map('intval', $ids)));
+        if ($ids === []) {
+            return [];
+        }
+        $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $ids)
+            ->field('id,name,store_id')->select()->toArray();
+        if ($staff === []) {
+            return [];
+        }
+        $stores = MerchantStore::withoutGlobalScope()
+            ->where(['tenant_id' => $tenantId, 'user_id' => $userId])->whereNull('delete_time')
+            ->whereIn('id', array_unique(array_column($staff, 'store_id')))->column('name', 'id');
+        foreach ($staff as &$row) {
+            $row['id'] = (int)$row['id'];
+            $row['store_id'] = (int)$row['store_id'];
+            $row['store_name'] = (string)($stores[$row['store_id']] ?? '');
+        }
+        unset($row);
+        return array_column($staff, null, 'id');
+    }
+
+    /** 保留原有接收人顺序，缺失员工由接口原有的 ID 标识。 */
+    private static function selectStaff(array $staff, array $ids): array
+    {
+        $selected = [];
+        foreach ($ids as $id) {
+            if (isset($staff[$id])) {
+                $selected[] = $staff[$id];
+            }
+        }
+        return $selected;
     }
 
     /** 校验批量请求并去重，避免重复给同一员工创建任务。 */

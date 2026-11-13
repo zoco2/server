@@ -70,4 +70,32 @@ final class PublishTaskController extends BaseApiController
             return $this->fail($e->getMessage());
         }
     }
+
+    /** POST /api/publish_task/pause：暂停发布计划。 */
+    public function pause()
+    {
+        return $this->changePaused(true);
+    }
+
+    /** POST /api/publish_task/resume：恢复发布计划。 */
+    public function resume()
+    {
+        return $this->changePaused(false);
+    }
+
+    private function changePaused(bool $paused)
+    {
+        if (!$this->request->isPost()) {
+            return $this->fail('请使用 POST 请求');
+        }
+        try {
+            PublishTaskService::setPaused(
+                (int)$this->request->tenantId, $this->userId,
+                (int)$this->request->post('task_id/d', 0), $paused
+            );
+            return $this->success();
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
 }
