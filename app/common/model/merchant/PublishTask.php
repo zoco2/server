@@ -6,13 +6,10 @@ namespace app\common\model\merchant;
 
 use app\common\model\BaseModel;
 
-/** 用于向共用的发布任务表写入新任务。 */
+/** 商家发布任务，沿用 BaseModel 的租户分表和自动填充。 */
 final class PublishTask extends BaseModel
 {
     protected $name = 'publish_task';
-
-    // 写入固定任务表，租户字段由 BaseModel::onBeforeInsert 自动填入。
-    protected $globalScope = [];
 
     protected $autoWriteTimestamp = false;
 }
