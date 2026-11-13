@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace app\common\service\publish_task;
 
+use app\api\logic\merchant\StaffWechatBindingLogic;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
 use app\common\model\user\UserAuth;
-use app\common\service\wechat\WeChatOaService;
 use InvalidArgumentException;
 use RuntimeException;
 use think\facade\Db;
@@ -274,7 +274,7 @@ final class PublishTaskService
             // 发送前保存状态，进程中断后可以识别可能已发送的通知。
             $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
             self::saveRecipientResults($runWhere, $results);
-            $results[$staffId] = self::notify((int)$task['id'], $tenantId, $userId, $openid, $appId);
+            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId);
             self::saveRecipientResults($runWhere, $results);
         }
         return $results;
@@ -290,11 +290,11 @@ final class PublishTaskService
     }
 
     /**
-     * 尝试发送服务号文本并返回本轮结果，供调用方保存。
+     * 发送服务号模板通知并返回接收人的发送结果。
      *
      * @return array{last_run_status: string, last_error: string}
      */
-    private static function notify(int $id, int $tenantId, int $userId, string $openid, ?string $appId): array
+    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId): array
     {
         if ($openid === '' || $appId === '') {
             return [
@@ -303,14 +303,14 @@ final class PublishTaskService
             ];
         }
         try {
-            (new WeChatOaService())->sendCustomText($openid, 'hello', $appId);
+            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content']);
             return ['last_run_status' => 'sent', 'last_error' => ''];
         } catch (Throwable $e) {
             // 请求异常可能包含带 access_token 的 URL，只记录异常类型和错误码。
             Log::channel('mns')->warning(sprintf('[publish_task] WeChat send failed id=%d tenant=%d user=%d type=%s code=%d',
-                $id, $tenantId, $userId, get_class($e), (int)$e->getCode()));
+                (int)$task['id'], $tenantId, $userId, get_class($e), (int)$e->getCode()));
             return ['last_run_status' => 'failed', 'last_error' => $e->getCode()
-                ? '服务号通知发送失败（错误码 ' . $e->getCode() . '）' : '服务号通知发送失败，请检查配置及用户互动权限'];
+                ? '服务号模板通知发送失败（错误码 ' . $e->getCode() . '）' : '服务号模板通知发送失败，请检查员工通知模板和公众号配置'];
         }
     }
 
