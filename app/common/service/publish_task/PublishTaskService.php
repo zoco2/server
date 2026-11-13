@@ -123,9 +123,13 @@ final class PublishTaskService
                 return;
             }
 
-            // 取得用户锁后复查，避免并发扫描重复投递或同时执行同一用户的任务。
-            if (PublishTaskRun::where('tasksn', (string)$task->tasksn)->value('id')
-                || PublishTaskRun::where('user_id', $userId)->whereIn('status', ['pending', 'running'])->value('id')) {
+            // 同一轮已有执行记录，直接跳过。
+            if (PublishTaskRun::where('tasksn', (string)$task->tasksn)->value('id')) {
+                return;
+            }
+
+            // 同一用户还有任务在排队或执行，等那条任务处理完。
+            if (PublishTaskRun::where('user_id', $userId)->whereIn('status', ['pending', 'running'])->value('id')) {
                 return;
             }
 

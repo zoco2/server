@@ -24,7 +24,7 @@
 
 任务和执行记录分别存放在共用表 `publish_task` 和 `publish_task_run`，模型按 `tenant_id` 隔离数据。建表定义见 `upgrade/20261112_publish_task.sql`。
 
-创建计划时保存首轮的 `next_run_at` 和 `tasksn`。启动 `php think workerman` 后，调度器直接查询已到期且尚无对应 `tasksn` 执行记录的计划，创建 `pending` 记录并立即投递到 `mns.default_queue`。同一租户下同一用户有 `pending` 或 `running` 记录时，等本轮结束再安排下一轮。
+创建计划时保存首轮的 `next_run_at` 和 `tasksn`。启动 `php think workerman` 后，调度器查询到期计划。投递前逐个检查执行表，已有相同 `tasksn` 的记录就跳过。同一租户下同一用户有 `pending` 或 `running` 记录时，等这条记录处理完。通过检查后创建 `pending` 记录并立即投递到 `mns.default_queue`。
 
 Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结果写入 `recipient_results`。发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理其余待发送的人。执行完成后将记录改为 `completed`，同时更新计划的 `next_run_at` 和 `tasksn`。没有下一轮时清空这两个字段。
 
