@@ -354,16 +354,15 @@ final class PublishTaskService
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
                 ->column('openid,appid,store_id', 'id');
-            // Job 没有 HTTP 请求域名，使用当前租户配置的 PC 访问地址。
+            // Job 没有 HTTP 请求域名，从租户配置的访问地址取域名。
             $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
             if (!$tenant->isEmpty()) {
                 $pcUrl = TenantUrlService::links($tenant->getData())['current']['pc'];
                 $host = TenantUrlService::normalizeHost($pcUrl);
                 if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
                     $storeOrigin = 'https://' . $host;
-                    $storeQuery = '?pc=1';
                     if (parse_url($pcUrl, PHP_URL_QUERY)) {
-                        $storeQuery .= '&tenant_id=' . $tenantId;
+                        $storeQuery = '?tenant_id=' . $tenantId;
                     }
                 }
             }
@@ -385,7 +384,7 @@ final class PublishTaskService
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
             $storeId = (int)($staff[$staffId]['store_id'] ?? 0);
             $storeUrl = $storeId > 0 && $storeOrigin !== ''
-                ? $storeOrigin . '/pc/merchant/store/' . $storeId . '/decorate' . $storeQuery : null;
+                ? $storeOrigin . '/storefront/' . $storeId . $storeQuery : null;
 
             // 发送前保存状态，进程中断后可以识别可能已发送的通知。
             $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
