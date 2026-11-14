@@ -349,7 +349,6 @@ final class PublishTaskService
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
         $storeOrigin = '';
-        $storeQuery = '';
         if (isset($task['staff_ids'])) {
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
@@ -361,9 +360,6 @@ final class PublishTaskService
                 $host = TenantUrlService::normalizeHost($pcUrl);
                 if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
                     $storeOrigin = 'https://' . $host;
-                    if (parse_url($pcUrl, PHP_URL_QUERY)) {
-                        $storeQuery = '?tenant_id=' . $tenantId;
-                    }
                 }
             }
         } else {
@@ -384,7 +380,7 @@ final class PublishTaskService
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
             $storeId = (int)($staff[$staffId]['store_id'] ?? 0);
             $storeUrl = $storeId > 0 && $storeOrigin !== ''
-                ? $storeOrigin . '/storefront/' . $storeId . $storeQuery : null;
+                ? $storeOrigin . '/storefront/' . $storeId : null;
 
             // 发送前保存状态，进程中断后可以识别可能已发送的通知。
             $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
