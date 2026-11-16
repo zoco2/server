@@ -13,8 +13,6 @@ use app\common\model\merchant\PublishTaskRun;
 /** 验证发给员工的任务链接，只公开发布所需的字段。 */
 final class PublishTaskPublicLink
 {
-    public const TOKEN_PATTERN = '[A-Za-z0-9_-]{40,160}';
-
     /** 每个接收人生成独立链接，数据库只保存校验值。 */
     public static function create(int $tenantId, int $runId, int $staffId, string $appId, string $openid): array
     {
@@ -25,36 +23,15 @@ final class PublishTaskPublicLink
 
     public static function detail(string $token, int $tenantId): ?array
     {
-        if ($tenantId <= 0) {
-            return null;
-        }
-        $link = self::resolve($token, $tenantId);
-        if ($link === null) {
-            return null;
-        }
-        $brandId = (int)MerchantStore::where(['id' => $link['store_id'], 'user_id' => $link['user_id']])
-            ->value('brand_id');
-        $brandName = $brandId > 0
-            ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $link['user_id']])->value('name')
-            : '';
-        return [
-            'content' => (string)$link['task']['content'],
-            'platforms' => json_decode($link['task']['platforms'], true, flags: JSON_THROW_ON_ERROR),
-            'brand_name' => $brandName,
-        ];
-    }
-
-    private static function resolve(string $token, int $expectedTenantId): ?array
-    {
-        if (!preg_match('/^' . self::TOKEN_PATTERN . '$/D', $token)) {
+        if ($tenantId <= 0 || !preg_match('/^[A-Za-z0-9_-]{40,160}$/D', $token)) {
             return null;
         }
         $payload = base64_decode(strtr($token, '-_', '+/'), true);
         if ($payload === false || !preg_match('/^([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):[a-f0-9]{48}$/D', $payload, $matches)) {
             return null;
         }
-        [$tenantId, $runId, $staffId] = array_map('intval', array_slice($matches, 1));
-        if ($tenantId !== $expectedTenantId) {
+        [$linkTenantId, $runId, $staffId] = array_map('intval', array_slice($matches, 1));
+        if ($linkTenantId !== $tenantId) {
             return null;
         }
 
@@ -86,7 +63,17 @@ final class PublishTaskPublicLink
         if ($task->isEmpty() || !is_array($staffIds) || !in_array($staffId, $staffIds, true)) {
             return null;
         }
-        return ['user_id' => $userId, 'store_id' => (int)$employee->store_id, 'task' => $task->getData()];
+
+        $brandId = (int)MerchantStore::where(['id' => (int)$employee->store_id, 'user_id' => $userId])
+            ->value('brand_id');
+        $brandName = $brandId > 0
+            ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $userId])->value('name')
+            : '';
+        return [
+            'content' => (string)$task->content,
+            'platforms' => json_decode($task->platforms, true, flags: JSON_THROW_ON_ERROR),
+            'brand_name' => $brandName,
+        ];
     }
 
     private static function hash(string $token, string $appId, string $openid): string
