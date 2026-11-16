@@ -14,7 +14,9 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
 
 # mix
 RUN apt-get install -y --no-install-recommends \
-      build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev \
+      build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev ffmpeg \
+ && ffprobe -version > /dev/null \
+ && ffmpeg -version > /dev/null \
  && docker-php-ext-install zip pdo_mysql pdo_pgsql pgsql bcmath mysqli pcntl
 
 # intl
