@@ -353,7 +353,7 @@ final class PublishTaskService
     /** 同一轮逐个发送，重试时继续处理没有发送记录的人。 */
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
-        $siteOrigin = '';
+        $taskBase = '';
         if (isset($task['staff_ids'])) {
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
@@ -361,10 +361,10 @@ final class PublishTaskService
             // Job 没有 HTTP 请求域名，从租户配置的访问地址取域名。
             $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
             if (!$tenant->isEmpty()) {
-                $pcUrl = TenantUrlService::links($tenant->getData())['current']['pc'];
+                $pcUrl = TenantUrlService::links($tenant->getData())['subdomain']['pc'];
                 $host = TenantUrlService::normalizeHost($pcUrl);
                 if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
-                    $siteOrigin = 'https://' . $host;
+                    $taskBase = 'https://' . $host . '/page/publish-task/';
                 }
             }
         } else {
@@ -385,9 +385,9 @@ final class PublishTaskService
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
             $taskUrl = null;
             $link = [];
-            if ($staffId !== 0 && $openid !== '' && $appId !== '' && $siteOrigin !== '') {
+            if ($staffId !== 0 && $openid !== '' && $appId !== '' && $taskBase !== '') {
                 [$token, $hash] = PublishTaskPublicLink::create($tenantId, (int)$runWhere['id'], $staffId, $appId, $openid);
-                $taskUrl = $siteOrigin . '/publish-task/' . $token;
+                $taskUrl = $taskBase . $token;
                 $link = ['public_link_hash' => $hash];
             }
 

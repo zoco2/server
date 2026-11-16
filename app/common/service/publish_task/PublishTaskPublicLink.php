@@ -23,12 +23,6 @@ final class PublishTaskPublicLink
         return [$token, self::hash($token, $appId, $openid)];
     }
 
-    /** 共享域名上先校验链接，再建立请求的租户上下文。 */
-    public static function tenantId(string $token): int
-    {
-        return (int)(self::resolve($token)['tenant_id'] ?? 0);
-    }
-
     public static function detail(string $token, int $tenantId): ?array
     {
         if ($tenantId <= 0) {
@@ -50,7 +44,7 @@ final class PublishTaskPublicLink
         ];
     }
 
-    private static function resolve(string $token, int $expectedTenantId = 0): ?array
+    private static function resolve(string $token, int $expectedTenantId): ?array
     {
         if (!preg_match('/^' . self::TOKEN_PATTERN . '$/D', $token)) {
             return null;
@@ -60,12 +54,12 @@ final class PublishTaskPublicLink
             return null;
         }
         [$tenantId, $runId, $staffId] = array_map('intval', array_slice($matches, 1));
-        if ($expectedTenantId > 0 && $tenantId !== $expectedTenantId) {
+        if ($tenantId !== $expectedTenantId) {
             return null;
         }
 
-        // 此查询也用于共享域名的租户解析，因此每条查询显式限定租户。
-        $run = PublishTaskRun::withoutGlobalScope()->where(['tenant_id' => $tenantId, 'id' => $runId])
+        // 使用现有租户上下文查询本轮执行记录和接收人。
+        $run = PublishTaskRun::where('id', $runId)
             ->field('task_id,user_id,recipient_results')->findOrEmpty();
         if ($run->isEmpty()) {
             return null;
@@ -78,21 +72,21 @@ final class PublishTaskPublicLink
             return null;
         }
 
-        $owner = ['tenant_id' => $tenantId, 'user_id' => (int)$run->user_id];
-        $employee = MerchantStaff::withoutGlobalScope()->where($owner)
-            ->where('id', $staffId)->whereNull('delete_time')->field('store_id,appid,openid')->findOrEmpty();
+        $userId = (int)$run->user_id;
+        $employee = MerchantStaff::where(['id' => $staffId, 'user_id' => $userId])
+            ->field('store_id,appid,openid')->findOrEmpty();
         if ($employee->isEmpty() || !$employee->appid || !$employee->openid
             || !hash_equals($savedHash, self::hash($token, trim((string)$employee->appid), trim((string)$employee->openid)))) {
             return null;
         }
 
-        $task = PublishTask::withoutGlobalScope()->where($owner)
-            ->where('id', (int)$run->task_id)->field('staff_ids,content,platforms')->findOrEmpty();
+        $task = PublishTask::where(['id' => (int)$run->task_id, 'user_id' => $userId])
+            ->field('staff_ids,content,platforms')->findOrEmpty();
         $staffIds = json_decode($task->staff_ids ?? '[]', true);
         if ($task->isEmpty() || !is_array($staffIds) || !in_array($staffId, $staffIds, true)) {
             return null;
         }
-        return $owner + ['store_id' => (int)$employee->store_id, 'task' => $task->getData()];
+        return ['user_id' => $userId, 'store_id' => (int)$employee->store_id, 'task' => $task->getData()];
     }
 
     private static function hash(string $token, string $appId, string $openid): string
