@@ -17,16 +17,16 @@ final class PublishTaskPublicLink
     public static function create(int $tenantId, int $runId, int $staffId, string $appId, string $openid): array
     {
         $payload = implode(':', [$tenantId, $runId, $staffId, bin2hex(random_bytes(24))]);
-        $token = rtrim(strtr(base64_encode($payload), '+/', '-_'), '=');
+        $token = base64_encode($payload);
         return [$token, self::hash($token, $appId, $openid)];
     }
 
     public static function detail(string $token, int $tenantId): ?array
     {
-        if ($tenantId <= 0 || !preg_match('/^[A-Za-z0-9_-]{40,160}$/D', $token)) {
+        if ($tenantId <= 0 || strlen($token) > 160) {
             return null;
         }
-        $payload = base64_decode(strtr($token, '-_', '+/'), true);
+        $payload = base64_decode($token, true);
         if ($payload === false || !preg_match('/^([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):[a-f0-9]{48}$/D', $payload, $matches)) {
             return null;
         }
