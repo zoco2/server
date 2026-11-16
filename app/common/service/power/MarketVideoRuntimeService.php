@@ -570,7 +570,12 @@ class MarketVideoRuntimeService
                 if ($completed===[]&&$receipt!==null) $completed=self::videos($receipt,(int)$c['tenant_id'],(int)$c['user_id'],self::requiresDurableResultStorage((string)$context['app_task']['app_code']));
                 if ($completed!==[]) {
                     self::settle($consumptionId,$completed,(string)$c['upstream_request_id'],$taskId,$receipt??$summary);
-                    return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
+                    $c = AiConsumptionLog::findOrEmpty($consumptionId);
+                    // A saved video can precede its measured usage. Keep polling
+                    // the accepted task until settlement can actually finish.
+                    if (!in_array((string)$c['billing_status'], ['reserved', 'pending_usage'], true)) {
+                        return self::response($c->toArray());
+                    }
                 }
             } catch (\Throwable $e) {
                 self::recordRefreshError($consumptionId,$taskId,$e);
@@ -580,7 +585,7 @@ class MarketVideoRuntimeService
         if ($taskId === '' && ($receipt=(\app\common\service\app\aigc_micro_video\MicroVideoSubmission::receipt($c->toArray()) ?? \app\common\service\open_platform\OpenSubmission::receipt($c->toArray())))!==null) {
             try{
                 $videos=self::videos($receipt,(int)$c['tenant_id'],(int)$c['user_id'],self::requiresDurableResultStorage((string)$context['app_task']['app_code']));
-                if($videos!==[]){self::settle($consumptionId,$videos,self::requestId($receipt),'',$receipt);return ['status'=>'success','provider_task_id'=>'','videos'=>$videos];}
+                if($videos!==[]){self::settle($consumptionId,$videos,self::requestId($receipt),'',$receipt);return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());}
             }catch(\Throwable $e){self::recordRefreshError($consumptionId,'',$e);}
         }
         if ($taskId === '') {
@@ -616,11 +621,13 @@ class MarketVideoRuntimeService
                     $stored = self::arrayValue($c['response_summary'] ?? []);
                     $settleVideos = $videos !== [] ? $videos : (array)($stored['videos'] ?? []);
                     self::settle($consumptionId, $settleVideos, self::requestId($response), $taskId, $response);
+                    if (\app\common\service\app\aigc_micro_video\MicroVideoSubmission::applies($c->toArray())) return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
                     return ['status' => 'success', 'provider_task_id' => $taskId, 'videos' => $settleVideos];
                 }
                 $stored = self::arrayValue($c['response_summary'] ?? []);
                 $storedVideos = (array)($stored['videos'] ?? []);
                 if ($storedVideos !== []) {
+                    if (\app\common\service\app\aigc_micro_video\MicroVideoSubmission::applies($c->toArray())) return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
                     return ['status' => 'success', 'provider_task_id' => $taskId, 'videos' => $storedVideos];
                 }
             }
@@ -687,7 +694,7 @@ class MarketVideoRuntimeService
                     'upstream_request_id' => $requestId ?: (string)$c['upstream_request_id'],
                     'upstream_task_id' => $taskId ?: (string)$c['upstream_task_id'],
                     'usage_snapshot' => $usage,
-                    'response_summary' => ['video_count' => count($videos), 'videos' => $videos],
+                    'response_summary' => array_replace(self::arrayValue($c['response_summary']), ['video_count' => count($videos), 'videos' => $videos]),
                     'update_time' => $now,
                 ]));
                 $task->save(['status' => 'success', 'progress' => 100, 'finish_time' => $now, 'update_time' => $now]);
