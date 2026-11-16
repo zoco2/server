@@ -33,6 +33,17 @@ final class MicroVideoTimelineTest extends TestCase
     {
         MicroVideoTimeline::validate("0-3秒：全景。\r\n3-15秒：细节。",15);self::assertTrue(true);
     }
+    public function testListMarkersAreDistinctFromNegativeClocks(): void
+    {
+        MicroVideoTimeline::validate("- 0-3秒：全景。\n*3-8秒：细节。\n##8-15秒：收尾。",15);self::assertTrue(true);
+    }
+    public function testInlineShotsKeepTheirTimesAndSceneNumbers(): void
+    {
+        $prompt='0-1.5秒：展示标有3-5秒字样的包装。 1.5s~3s: 展示1.5升瓶身；【3至15秒】：接续镜头。';
+        $rows=MicroVideoPolicy::segments([$this->segment($prompt)],[15],1,1,8,true);
+        self::assertSame("0-1.5秒：展示标有3-5秒字样的包装。\n1.5s~3s: 展示1.5升瓶身；\n【3至15秒】：接续镜头。",$rows[0]['prompt']);
+        self::assertSame($rows[0]['prompt'],MicroVideoTimeline::normalize($rows[0]['prompt']));
+    }
     /** @dataProvider invalidTimelines */
     public function testInvalidShotClocksAreRejected(string $prompt): void
     {
@@ -42,6 +53,14 @@ final class MicroVideoTimelineTest extends TestCase
     public static function invalidTimelines(): array
     {
         return [
+            'inline-gap'=>['0-3秒：全景。4-15秒：细节。'],
+            'inline-overlap'=>['0-6秒：全景。3-15秒：细节。'],
+            'inline-long'=>['0-3秒：全景。3-16秒：细节。'],
+            'inline-negative'=>['0-3秒：全景。-3-15秒：细节。'],
+            'multiline-negative'=>["0-3秒：全景。\n-3-15秒：细节。"],
+            'inline-malformed-extra'=>['0-3秒：全景。3-15秒：细节。16-20秒 远景收尾。'],
+            'inline-missing-unit'=>['0-3秒：全景。3-15秒：细节。16-20：远景收尾。'],
+            'inline-empty-description'=>['0-3秒：全景。3-15秒：'],
             'unparsed-extra-shot'=>["0-3秒：全景。\n3-15秒：细节。\n16-20秒 远景收尾。"],
             'one-shot'=>["0-15秒：只有一个镜头。"],
             'gap'=>["0-3秒：全景。\n4-15秒：细节。"],

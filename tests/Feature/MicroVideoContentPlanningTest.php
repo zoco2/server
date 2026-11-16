@@ -50,6 +50,16 @@ final class MicroVideoContentPlanningTest extends TestCase
         self::assertSame(20,$c['required_total_duration']);self::assertSame(10.0,$c['source_timeline'][2]['start']);
         self::assertSame(20.0,$c['source_timeline'][3]['end']);
     }
+    public function testInlineSourceAndOutputRetainEveryOriginalShotBoundary(): void
+    {
+        $prompt='0-3秒：发现。3-8秒：拿起。8-15秒：展示。';
+        $c=P::contract($this->params($prompt,15),[15],10);
+        self::assertSame([3.0,8.0,15.0],array_column($c['source_timeline'],'end'));
+        P::validatePrompt($prompt,$c);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('原镜头');
+        P::validatePrompt('0-3秒：发现。3-9秒：拿起。9-15秒：展示。',$c);
+    }
     public function testExplicitDurationCannotBeSilentlyStretchedToAnAvailableModelSku(): void
     {
         $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('无法匹配');
