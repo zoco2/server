@@ -88,7 +88,7 @@ class GeoDiagnosisService
             }
         }
 
-        return Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $taskRunId) {
+        $result = Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $taskRunId) {
             $now = time();
             $batch = GeoDiagBatch::create([
                 'user_id' => $userId,
@@ -151,18 +151,15 @@ class GeoDiagnosisService
 
             try {
                 $accepted = GeoDiagProvider::createRun($request, $idempotencyKey);
+                $payload = is_array($accepted['data']) ? $accepted['data'] : [];
+                if ($taskRunId !== null && empty($payload['id'])) {
+                    throw new Exception('诊断服务未返回批次ID');
+                }
             } catch (GeoDiagProviderException $e) {
                 self::markCreateFailed($batch, $e->getMessage(), $e->providerCode(), $e->requestId(), $e->payload());
-                throw new Exception($e->getMessage());
-            } catch (Exception $e) {
-                self::markCreateFailed($batch, $e->getMessage());
-                throw $e;
+                return new GeoDiagnosisSubmissionException((int)$batch['id'], $e);
             }
 
-            $payload = is_array($accepted['data']) ? $accepted['data'] : [];
-            if ($taskRunId !== null && empty($payload['id'])) {
-                throw new Exception('诊断服务未返回批次ID');
-            }
             $itemsResult = is_array($payload['items'] ?? null) ? $payload['items'] : [];
             $batch->save([
                 'upstream_batch_id' => (string)($payload['id'] ?? ''),
@@ -196,6 +193,11 @@ class GeoDiagnosisService
 
             return self::detail((int)$batch['id'], $userId);
         });
+        // API 明确返回的失败是业务结果，先落库再报告；其他程序/数据库异常仍由事务回滚。
+        if ($result instanceof GeoDiagnosisSubmissionException) {
+            throw $result;
+        }
+        return $result;
     }
 
     /**
@@ -609,13 +611,23 @@ class GeoDiagnosisService
     /** @param array<string, mixed> $payload */
     private static function markCreateFailed(GeoDiagBatch $batch, string $message, string $code = '', string $requestId = '', array $payload = []): void
     {
+        $error = mb_substr(($code !== '' ? $code . ': ' : '') . $message, 0, 500);
         $batch->save([
             'status' => GeoDiagBatch::STATUS_FAILED,
             'terminal' => 1,
-            'error' => mb_substr(($code !== '' ? $code . ': ' : '') . $message, 0, 500),
+            'error' => $error,
             'provider_request_id' => $requestId,
             'response_json' => self::json($payload),
             'finish_time' => time(),
+            'next_poll_time' => 0,
+            'update_time' => time(),
+        ]);
+        GeoDiagRun::where('batch_id', (int)$batch['id'])->update([
+            'status' => GeoDiagRun::STATUS_FAILED,
+            'terminal' => 1,
+            'error' => $error,
+            'provider_request_id' => $requestId,
+            'response_json' => self::json($payload),
             'next_poll_time' => 0,
             'update_time' => time(),
         ]);
