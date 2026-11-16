@@ -182,12 +182,8 @@ final class PublishTaskService
         $runId = (int)$matches[1];
         $staffId = (int)$matches[2];
 
-        $run = PublishTaskRun::where('id', $runId)->field('task_id,user_id,tasksn,recipient_results')->findOrEmpty();
+        $run = PublishTaskRun::where('id', $runId)->field('task_id,user_id,tasksn')->findOrEmpty();
         if ($run->isEmpty() || !$run->tasksn) {
-            return null;
-        }
-        $results = json_decode($run->recipient_results ?? '{}', true);
-        if (!in_array($results[$staffId]['last_run_status'] ?? '', ['sending', 'sent', 'unknown'], true)) {
             return null;
         }
 
