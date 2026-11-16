@@ -38,12 +38,10 @@ final class PublishTaskPublicLink
         if ($link === null) {
             return null;
         }
-        $owner = ['tenant_id' => $tenantId, 'user_id' => $link['user_id']];
-        $brandId = (int)MerchantStore::withoutGlobalScope()->where($owner)
-            ->where('id', $link['store_id'])->whereNull('delete_time')->value('brand_id');
+        $brandId = (int)MerchantStore::where(['id' => $link['store_id'], 'user_id' => $link['user_id']])
+            ->value('brand_id');
         $brandName = $brandId > 0
-            ? (string)MerchantBrand::withoutGlobalScope()->where($owner)
-                ->where('id', $brandId)->whereNull('delete_time')->value('name')
+            ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $link['user_id']])->value('name')
             : '';
         return [
             'content' => (string)$link['task']['content'],
