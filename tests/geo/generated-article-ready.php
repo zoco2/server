@@ -38,10 +38,14 @@ namespace app\common\model\geo {
             return self::$rows[$id] = new Row($data + ['id' => $id, 'update_time' => time()]);
         }
 
-        public static function where(string $field, mixed $value): Query
+        public static function where(string|array $field, mixed $value = null): Query
         {
+            $conditions = is_array($field) ? $field : [$field => $value];
             foreach (self::$rows as $row) {
-                if ($row[$field] === $value) return new Query($row);
+                foreach ($conditions as $key => $expected) {
+                    if ($row[$key] !== $expected) continue 2;
+                }
+                return new Query($row);
             }
             return new Query(new Row());
         }
@@ -166,6 +170,27 @@ namespace {
     $count = count(GeoArticle::$rows);
     expectError(fn() => GeoArticleService::createGeneratedArticle(999, 23, '不存在的租户', $article), '租户不存在，无法生成稿件预览地址');
     check(count(GeoArticle::$rows) === $count, 'Missing tenant must not create a partially ready article');
+
+    // Automatic task callbacks must share the tenant-aware preview builder from master.
+    foreach ([$id, $aliasId, $idModeId] as $generatedId) {
+        $generated = GeoArticle::$rows[$generatedId];
+        $tenantId = $generated['tenant_id'];
+        $readyUrl = $generated['preview_url'];
+        GeoArticleService::prepareForAutomaticSubmission($tenantId, 23, $generatedId);
+        check($generated['preview_url'] === $readyUrl, 'Automatic submission must preserve a ready article URL');
+
+        $draft = GeoArticle::create($generated->toArray());
+        $draftId = array_key_last(GeoArticle::$rows);
+        $token = bin2hex(random_bytes(20));
+        $draft->save(['id' => $draftId, 'status' => 'draft', 'preview_token' => $token, 'preview_url' => '']);
+        expectError(fn() => GeoArticleService::prepareForAutomaticSubmission($tenantId, 24, $draftId), '生成的稿件不存在或正文为空');
+        expectError(fn() => GeoArticleService::prepareForAutomaticSubmission(999, 23, $draftId), '生成的稿件不存在或正文为空');
+        check($draft['preview_url'] === '', 'An unauthorized callback must not activate a draft');
+        GeoArticleService::prepareForAutomaticSubmission($tenantId, 23, $draftId);
+        check($draft['status'] === 'ready' && $draft['preview_token'] === $token, 'Automatic preparation must activate legacy drafts and preserve their tokens');
+        check($draft['preview_url'] === str_replace($generated['preview_token'], $token, $readyUrl), 'Automatic preparation must use the same tenant routing as generated articles');
+        check(GeoArticleService::preview($token)['title'] === $draft['title'], 'Automatically prepared drafts must be previewable');
+    }
 
     echo "PASS: generated articles are ready, previewable, eligible for submission, editable and tenant-aware; legacy saves remain supported\n";
 }

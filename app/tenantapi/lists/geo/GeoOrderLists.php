@@ -3,6 +3,7 @@
 namespace app\tenantapi\lists\geo;
 
 use app\common\model\geo\GeoOrder;
+use app\common\service\geo\AigcGeoManuscriptService;
 use app\tenantapi\lists\BaseAdminDataLists;
 
 /**
@@ -99,6 +100,7 @@ class GeoOrderLists extends BaseAdminDataLists
 
         foreach ($lists as &$item) {
             $item['status_text'] = GeoOrder::STATUS_TEXT[$item['status']] ?? (string)$item['status'];
+            $item['fail_reason'] = AigcGeoManuscriptService::publicMessage((string)$item['fail_reason']);
             $item['can_retry'] = in_array((int)$item['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
                 && ((int)$item['status'] === GeoOrder::STATUS_LOCAL || (bool)$item['retryable']);
             $item['can_confirm'] = (int)$item['remote_flag'] === GeoOrder::STATUS_PUBLISHED;

@@ -8,6 +8,7 @@ use app\common\model\geo\GeoMedia;
 use app\common\model\geo\GeoOrder;
 use app\common\model\geo\GeoOrderLog;
 use Exception;
+use InvalidArgumentException;
 
 /**
  * GEO 投稿：推送海讯社 / 回查状态 / 确认发布 / 提交修改意见。
@@ -39,20 +40,20 @@ class GeoOrderService
 
         $article = GeoArticle::where('id', $articleId)->findOrEmpty();
         if ($article->isEmpty() || (int)$article['user_id'] !== $userId) {
-            throw new Exception('稿件不存在');
+            throw new InvalidArgumentException('稿件不存在');
         }
         if (trim((string)$article['content']) === '') {
-            throw new Exception('稿件正文为空，不能投稿');
+            throw new InvalidArgumentException('稿件正文为空，不能投稿');
         }
         if (trim((string)$article['preview_url']) === '') {
-            throw new Exception('请先保存稿件再投稿');
+            throw new InvalidArgumentException('请先保存稿件再投稿');
         }
         $media = GeoMedia::where('id', $mediaId)->findOrEmpty();
         if ($media->isEmpty()) {
-            throw new Exception('媒体资源不存在');
+            throw new InvalidArgumentException('媒体资源不存在');
         }
         if ((int)$media['flag'] !== 1 || (int)$media['deleted'] !== 1) {
-            throw new Exception('该媒体已下架或已删除，请重新选择');
+            throw new InvalidArgumentException('该媒体已下架或已删除，请重新选择');
         }
 
         // 多价格类别：短视频/微信/微博必须选对类别，否则海讯按错误价格拒稿。
@@ -86,7 +87,7 @@ class GeoOrderService
     }
 
     /**
-     * 推送一张本地订单到海讯社。
+     * 提交一张本地投稿单。
      *
      * @param GeoOrder $order 投稿单
      * @return GeoOrder 刷新后的订单
@@ -116,7 +117,7 @@ class GeoOrderService
         $costPrice = self::costOf($media, (int)$order['price_type']);
         if (abs($costPrice - (float)$order['cost_price']) > 0.005) {
             $order->save(['cost_price' => $costPrice, 'update_time' => time()]);
-            GeoOrderLog::record($order, $from, $from, 'push', sprintf('海讯价格变动 %.2f -> %.2f', (float)$order['cost_price'], $costPrice));
+            GeoOrderLog::record($order, $from, $from, 'push', sprintf('媒体价格变动 %.2f -> %.2f', (float)$order['cost_price'], $costPrice));
         }
 
         try {
@@ -141,7 +142,7 @@ class GeoOrderService
             // orderExist 说明已经推送过，按待安排处理继续轮询。
             if (str_contains($e->getMessage(), '订单已存在')) {
                 $order->save(['status' => GeoOrder::STATUS_PENDING, 'remote_flag' => GeoOrder::STATUS_PENDING, 'update_time' => time()]);
-                GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '海讯提示订单已存在，转为待安排继续查询');
+                GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '订单已存在，转为待安排继续查询');
                 return $order;
             }
             self::fail($order, $e->getMessage(), self::isRetryableMessage($e->getMessage()));
@@ -157,7 +158,7 @@ class GeoOrderService
             'retryable' => 0,
             'update_time' => time(),
         ]);
-        GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '推送海讯成功');
+        GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '投稿已提交');
         return $order;
     }
 
@@ -291,11 +292,18 @@ class GeoOrderService
         $data['can_retry'] = in_array((int)$data['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
             && ((int)$data['status'] === GeoOrder::STATUS_LOCAL || (bool)$data['retryable']);
         $data['can_confirm'] = (int)$data['remote_flag'] === GeoOrder::STATUS_PUBLISHED;
+        $data['fail_reason'] = AigcGeoManuscriptService::publicMessage((string)$data['fail_reason']);
         $data['logs'] = GeoOrderLog::where('order_id', $id)
             ->order('id', 'asc')
             ->field('from_status,to_status,action,message,create_time')
             ->select()
             ->toArray();
+        foreach ($data['logs'] as &$log) {
+            if ($log['action'] !== 'feedback') {
+                $log['message'] = AigcGeoManuscriptService::publicMessage((string)$log['message']);
+            }
+        }
+        unset($log);
         return $data;
     }
 
@@ -339,6 +347,7 @@ class GeoOrderService
         $rows = $query->order('id', 'desc')->limit(($pageNo - 1) * $pageSize, $pageSize)->select()->toArray();
         foreach ($rows as &$row) {
             $row['status_text'] = GeoOrder::STATUS_TEXT[$row['status']] ?? (string)$row['status'];
+            $row['fail_reason'] = AigcGeoManuscriptService::publicMessage((string)$row['fail_reason']);
             $row['can_retry'] = in_array((int)$row['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
                 && ((int)$row['status'] === GeoOrder::STATUS_LOCAL || (bool)$row['retryable']);
             $row['can_confirm'] = (int)$row['remote_flag'] === GeoOrder::STATUS_PUBLISHED;
@@ -365,7 +374,7 @@ class GeoOrderService
                 return [$cost, GeoMediaSyncService::suggestSalePrice($cost, $ratio)];
             }
         }
-        throw new Exception('该媒体没有价格类别 ' . $priceType . '，请重新选择');
+        throw new InvalidArgumentException('该媒体没有价格类别 ' . $priceType . '，请重新选择');
     }
 
     /**
@@ -404,7 +413,7 @@ class GeoOrderService
             try {
                 return $call($token);
             } catch (GeoTokenExpiredException $retryError) {
-                throw new Exception('访问令牌已失效，请检查海讯社账号配置：' . $retryError->getMessage());
+                throw new Exception('访问令牌已失效，请检查文稿代发账号配置：' . $retryError->getMessage());
             }
         }
     }

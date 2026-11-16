@@ -264,6 +264,29 @@ class GeoArticleService
             . ($query !== '' ? '&' . $query : '');
     }
 
+    /** 为本轮生成的稿件启用投稿所需的公开预览。 */
+    public static function prepareForAutomaticSubmission(int $tenantId, int $userId, int $articleId): void
+    {
+        $article = GeoArticle::where([
+            'id' => $articleId,
+            'tenant_id' => $tenantId,
+            'user_id' => $userId,
+            'source' => 'ai',
+        ])->findOrEmpty();
+        if ($article->isEmpty() || trim((string)$article['content']) === '') {
+            throw new \InvalidArgumentException('生成的稿件不存在或正文为空');
+        }
+        if ((string)$article['preview_url'] !== '') {
+            return;
+        }
+        $token = $article['preview_token'] ?: self::newToken();
+        $article->save([
+            'status' => GeoArticle::STATUS_READY,
+            'preview_token' => $token,
+            'preview_url' => self::buildPreviewUrl($token, $tenantId),
+        ]);
+    }
+
     /**
      * 清洗正文：去掉脚本、事件属性，统一图片相对路径。
      *

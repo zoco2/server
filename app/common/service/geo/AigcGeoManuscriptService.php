@@ -85,7 +85,7 @@ class AigcGeoManuscriptService
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
         $key = self::incomingSecret($params, 'key', (string)($current['key'] ?? ''));
         if ($token === '' || $key === '') {
-            throw new Exception('请填写海讯社 token 和 key');
+            throw new Exception('请填写文稿代发 Token 和 Key');
         }
         $openToken = self::issueToken($token, $key);
         $account = ['token' => $token, 'key' => $key];
@@ -105,7 +105,7 @@ class AigcGeoManuscriptService
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
-            throw new Exception('请先配置海讯社账号');
+            throw new Exception('请先配置文稿代发账号');
         }
         $tokenCache = new GeoManuscriptTokenCache();
         $cached = $tokenCache->getAccessToken($tenantId);
@@ -143,7 +143,7 @@ class AigcGeoManuscriptService
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
-            throw new Exception('请先配置海讯社账号');
+            throw new Exception('请先配置文稿代发账号');
         }
         (new GeoManuscriptTokenCache())->deleteAccessToken($tenantId);
         return self::accessToken($tenantId);
@@ -161,7 +161,7 @@ class AigcGeoManuscriptService
         $token = trim($token);
         $key = trim($key);
         if ($token === '' || $key === '') {
-            throw new Exception('海讯社 token 与 key 不能为空');
+            throw new Exception('文稿代发 Token 和 Key 不能为空');
         }
         $payload = self::request('POST', '/api/member/user/tokenON', [
             'token' => $token,
@@ -419,10 +419,9 @@ class AigcGeoManuscriptService
         curl_setopt_array($ch, $options);
         $raw = curl_exec($ch);
         $errno = curl_errno($ch);
-        $error = curl_error($ch);
         curl_close($ch);
         if ($errno) {
-            throw new Exception($error !== '' ? $error : '文稿代发请求失败');
+            throw new Exception('文稿代发请求失败，请稍后重试');
         }
         $payload = json_decode((string)$raw, true);
         if (!is_array($payload)) {
@@ -436,11 +435,26 @@ class AigcGeoManuscriptService
             $message = $message !== '' ? $message : '文稿代发失败';
             // 令牌失效单独抛，避免长任务把它当成数据问题直接判失败。
             if (self::looksLikeTokenExpired((int)($payload['code'] ?? 0), $message)) {
-                throw new GeoTokenExpiredException($message);
+                throw new GeoTokenExpiredException(self::publicMessage($message));
             }
-            throw new Exception($message);
+            throw new Exception(self::publicMessage($message));
         }
         return $payload;
+    }
+
+    /** 整理对外显示的投稿错误与历史日志，避免露出代发接口地址和供应商名。 */
+    public static function publicMessage(string $message): string
+    {
+        $message = preg_replace(
+            '~(?:https?://)?(?:[a-z0-9-]+\.)*haipress\.com\b(?::\d+)?(?:[/?#][\x21-\x7e]*)?~i',
+            '代发服务',
+            $message
+        );
+        return str_ireplace(
+            ['海讯社', '海迅社', '海讯', '海迅', 'HaiPress', 'HaiXun'],
+            '代发服务',
+            $message
+        );
     }
 
     /**

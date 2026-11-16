@@ -30,9 +30,14 @@ final class UserTaskPlanService
             throw new InvalidArgumentException('有效期内没有可执行的时间');
         }
 
+        $jobConfig = $jobType === GeoRankingTaskJob::TYPE
+            ? GeoRankingTaskConfig::fromInput($tenantId, $userId, $params['job_config'] ?? null)
+            : null;
+
         $id = Db::name(self::TABLE)->insertGetId($owner + $schedule->toRow() + [
             'name' => trim($name),
             'job_type' => $jobType,
+            'job_config' => $jobConfig === null ? null : json_encode($jobConfig, JSON_THROW_ON_ERROR),
             'next_run_at' => $next,
             'status' => 'enabled',
             'create_time' => $now,
@@ -63,6 +68,7 @@ final class UserTaskPlanService
         $result = self::paginate($query, $page, $pageSize);
         foreach ($result['lists'] as &$plan) {
             $plan['schedule_config'] = json_decode($plan['schedule_config'], flags: JSON_THROW_ON_ERROR);
+            unset($plan['job_config']);
         }
         return $result;
     }
@@ -145,6 +151,8 @@ final class UserTaskPlanService
                     'tenant_id' => $plan['tenant_id'],
                     'user_id' => $plan['user_id'],
                     'job_type' => $plan['job_type'],
+                    // 每轮执行保存配置快照，后续异步阶段使用同一份参数。
+                    'job_config' => $plan['job_config'],
                     'scheduled_at' => $scheduledAt,
                     'expires_at' => $schedule->endAt,
                     'status' => $active ? 'skipped' : UserTaskRunService::QUEUED,

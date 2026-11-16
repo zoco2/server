@@ -27,6 +27,10 @@ namespace app\common\service\geo {
         public const RESOURCE_TYPES = [1 => '软文', 12 => '短视频'];
         public static array $submissions = [];
         public static bool $reject = false;
+        public static function publicMessage(string $message): string
+        {
+            return $message;
+        }
         public static function accessToken(int $tenantId): string
         {
             if ($tenantId !== 7) throw new \RuntimeException('Wrong tenant');

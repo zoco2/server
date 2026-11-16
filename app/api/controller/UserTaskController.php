@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\api\controller;
 
 use app\common\service\user_task\UserTaskPlanService;
+use app\common\service\user_task\UserTaskRunProgress;
 use InvalidArgumentException;
 
 final class UserTaskController extends BaseApiController
@@ -42,6 +43,17 @@ final class UserTaskController extends BaseApiController
             (int)$this->request->get('id/d', 0),
             (int)$this->request->get('page_no/d', 1),
             (int)$this->request->get('page_size/d', 20)
+        ));
+    }
+
+    /** 按事件 ID 增量读取当前用户的执行进度。 */
+    public function progress()
+    {
+        return $this->respond(fn () => UserTaskRunProgress::read(
+            (int)$this->request->tenantId,
+            $this->userId,
+            (int)$this->request->get('id/d', 0),
+            (int)$this->request->get('after_id/d', 0)
         ));
     }
 
