@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace app\api\controller;
 
-use app\common\service\publish_task\PublishTaskPublicLink;
 use app\common\service\publish_task\PublishTaskService;
 use InvalidArgumentException;
 use think\facade\Log;
@@ -23,7 +22,7 @@ final class PublishTaskController extends BaseApiController
         }
         $token = $this->request->get('token');
         $detail = is_string($token)
-            ? PublishTaskPublicLink::detail($token, (int)$this->request->tenantId) : null;
+            ? PublishTaskService::publicDetail($token) : null;
         $response = $detail === null ? $this->fail('任务链接无效或已不可用') : $this->data($detail);
         return $response->header(['Cache-Control' => 'private, no-store']);
     }
