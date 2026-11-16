@@ -462,7 +462,7 @@ class GeoOrderService
     {
         do {
             $no = self::ORDER_PREFIX . date('YmdHis') . str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        } while (!GeoOrder::where('order_no', $no)->isEmpty());
+        } while (GeoOrder::where('order_no', $no)->value('id') !== null);
         return $no;
     }
 }

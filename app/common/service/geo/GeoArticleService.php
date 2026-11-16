@@ -4,7 +4,9 @@ namespace app\common\service\geo;
 
 use app\common\model\geo\GeoArticle;
 use app\common\model\geo\GeoOrder;
+use app\common\model\tenant\Tenant;
 use app\common\service\FileService;
+use app\common\service\tenant\TenantUrlService;
 use Exception;
 
 /**
@@ -148,14 +150,15 @@ class GeoArticleService
         return self::detail((int)$row['id'], $userId);
     }
 
-    /** 将模型返回的纯文本存为稿件草稿，用户保存后才启用公开预览。 */
-    public static function createGeneratedDraft(int $tenantId, int $userId, string $prompt, array $article): int
+    /** 将模型返回的纯文本直接存为待投稿稿件，并启用公开预览。 */
+    public static function createGeneratedArticle(int $tenantId, int $userId, string $prompt, array $article): int
     {
         $paragraphs = preg_split('/\R{2,}/u', $article['content']) ?: [$article['content']];
         $content = implode("\n", array_map(
             static fn(string $text): string => '<p>' . nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p>',
             $paragraphs
         ));
+        $previewToken = self::newToken();
         $row = GeoArticle::create([
             'tenant_id' => $tenantId,
             'user_id' => $userId,
@@ -164,9 +167,9 @@ class GeoArticleService
             'content' => $content,
             'source_question' => mb_substr($prompt, 0, 2000, 'UTF-8'),
             'source' => 'ai',
-            'status' => GeoArticle::STATUS_DRAFT,
-            'preview_token' => self::newToken(),
-            'preview_url' => '',
+            'status' => GeoArticle::STATUS_READY,
+            'preview_token' => $previewToken,
+            'preview_url' => self::buildPreviewUrl($previewToken, $tenantId),
         ]);
         $id = (int)$row['id'];
         if ($id <= 0) {
@@ -242,15 +245,27 @@ class GeoArticleService
      * 预览地址。取当前租户域名，保证海讯社能公网访问。
      *
      * @param string $token 预览 token
+     * @param int $tenantId 后台生成时显式传入租户 ID，不依赖队列进程的请求域名
      */
-    public static function buildPreviewUrl(string $token, ?string $origin = null): string
+    public static function buildPreviewUrl(string $token, int $tenantId = 0): string
     {
-        $domain = rtrim($origin ?? (string)request()->domain(), '/');
-        return $domain . '/api/geo.article/preview?token=' . $token;
+        $domain = (string)request()->domain();
+        $query = '';
+        if ($tenantId > 0) {
+            $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
+            if ($tenant->isEmpty()) {
+                throw new Exception('租户不存在，无法生成稿件预览地址');
+            }
+            $links = TenantUrlService::links($tenant->toArray());
+            // 同时支持子域名、自定义域名和带 tenant_id 的租户入口。
+            [$domain, $query] = array_pad(explode('?', $links['current']['pc'], 2), 2, '');
+        }
+        return rtrim($domain, '/') . '/api/geo.article/preview?token=' . rawurlencode($token)
+            . ($query !== '' ? '&' . $query : '');
     }
 
     /** 为本轮生成的稿件启用投稿所需的公开预览。 */
-    public static function prepareForAutomaticSubmission(int $tenantId, int $userId, int $articleId, string $origin): void
+    public static function prepareForAutomaticSubmission(int $tenantId, int $userId, int $articleId): void
     {
         $article = GeoArticle::where([
             'id' => $articleId,
@@ -268,7 +283,7 @@ class GeoArticleService
         $article->save([
             'status' => GeoArticle::STATUS_READY,
             'preview_token' => $token,
-            'preview_url' => self::buildPreviewUrl($token, $origin) . '&tenant_id=' . $tenantId,
+            'preview_url' => self::buildPreviewUrl($token, $tenantId),
         ]);
     }
 

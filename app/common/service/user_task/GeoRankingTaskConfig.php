@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace app\common\service\user_task;
 
 use app\common\model\merchant\MerchantBrand;
-use app\common\model\tenant\Tenant;
 use app\common\service\geo\GeoDiagnosisService;
 use app\common\service\geo\GeoMediaCatalogService;
-use app\common\service\tenant\TenantUrlService;
 use Exception;
 use InvalidArgumentException;
 
@@ -20,7 +18,7 @@ final class GeoRankingTaskConfig
             throw new InvalidArgumentException('请填写 GEO 任务配置');
         }
         $brandId = filter_var($input['brand_id'] ?? null, FILTER_VALIDATE_INT);
-        $brand = $brandId > 0 ? MerchantBrand::where(['id' => $brandId, 'user_id' => $userId])->findOrEmpty() : null;
+        $brand = $brandId > 0 ? MerchantBrand::where(['id' => $brandId, 'tenant_id' => $tenantId, 'user_id' => $userId])->findOrEmpty() : null;
         if (!$brand || $brand->isEmpty()) {
             throw new InvalidArgumentException('品牌不存在或无权限');
         }
@@ -62,7 +60,6 @@ final class GeoRankingTaskConfig
             'repeat_count' => $repeat,
             'target_mention_rate' => $threshold,
             'media_targets' => self::mediaTargets($input['media_targets'] ?? null),
-            'preview_origin' => self::previewOrigin($tenantId),
         ];
     }
 
@@ -89,21 +86,5 @@ final class GeoRankingTaskConfig
             $targets[$id] = ['media_id' => $id, 'price_type' => $type, 'media_name' => (string)$media['name']];
         }
         return array_values($targets);
-    }
-
-    private static function previewOrigin(int $tenantId): string
-    {
-        $tenant = Tenant::findOrEmpty($tenantId);
-        if ($tenant->isEmpty()) {
-            throw new InvalidArgumentException('当前租户不存在');
-        }
-        // CLI 无请求域名，保存按租户访问方式解析出的主机和当前入口的协议。
-        $url = TenantUrlService::links($tenant->toArray())['current']['pc'];
-        $host = parse_url($url, PHP_URL_HOST);
-        $scheme = parse_url(request()->domain(), PHP_URL_SCHEME);
-        if (!$host || !in_array($scheme, ['http', 'https'], true)) {
-            throw new InvalidArgumentException('无法确定租户的稿件预览地址');
-        }
-        return $scheme . '://' . $host;
     }
 }

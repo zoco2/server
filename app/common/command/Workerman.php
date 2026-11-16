@@ -3,8 +3,10 @@
 namespace app\common\command;
 
 use app\common\model\FailedJob;
+use app\common\job\Job;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\mq\LightMqService;
+use app\common\service\publish_task\PublishTaskDispatcher;
 use app\common\service\smart_edit\SmartEditService;
 use app\common\service\user_task\UserTaskPlanService;
 use app\common\service\user_task\UserTaskRunService;
@@ -89,9 +91,10 @@ class Workerman extends Command
             self::pollSmartEdit($worker);
         };
 
-        // 两个子进程各自运行事件循环，MNS 长轮询和 Job 耗时都不会阻塞调度。
+        // 任务调度子进程各自运行事件循环，MNS 长轮询和 Job 耗时都不会阻塞调度。
         self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
         self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
+        self::registerTaskWorker('publish-task-dispatcher', [PublishTaskDispatcher::class, 'scan']);
 
         Worker::runAll();
         return 0;
@@ -252,6 +255,8 @@ class Workerman extends Command
             return;
         }
 
+        // 消息还原失败时没有 Job 实例，仍需按原始消息记录失败。
+        $job = null;
         try {
             $job = LightMqService::restoreJob($payload);
             $job->handle();
@@ -265,7 +270,7 @@ class Workerman extends Command
                 $messageId
             ));
         } catch (\Throwable $e) {
-            self::handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e);
+            self::handleFailure($service, $queue, $payload, $receiptHandle, $messageId, $dequeueCount, $e, $job);
             request()->tenantId = null;
             request()->source = null;
         }
@@ -283,7 +288,8 @@ class Workerman extends Command
         string $receiptHandle,
         string $messageId,
         int $dequeueCount,
-        \Throwable $e
+        \Throwable $e,
+        ?Job $job
     ): void {
         $jobClass = (string)($payload['data']['job'] ?? 'Unknown');
         $jobId = (string)($payload['id'] ?? '');
@@ -307,6 +313,8 @@ class Workerman extends Command
 
         try {
             self::reconnectDatabase();
+            // 耗尽重试后先让任务更新业务状态，再记录失败并确认消息。
+            $job?->failed();
             FailedJob::record($queue, $jobClass, $jobId, $payload, $e, $dequeueCount);
             self::safeDelete($service, $queue, $receiptHandle);
             Log::channel('mns')->error(sprintf('[mns] abandoned job=%s job_id=%s', $jobClass, $jobId));

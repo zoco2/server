@@ -158,7 +158,7 @@ final class GeoRankingTaskJob
         }
         try {
             $config = json_decode($run['job_config'], true, flags: JSON_THROW_ON_ERROR);
-            GeoArticleService::prepareForAutomaticSubmission($tenantId, $userId, $articleId, $config['preview_origin']);
+            GeoArticleService::prepareForAutomaticSubmission($tenantId, $userId, $articleId);
             UserTaskRunProgress::record($id, 'generation', 'success', '稿件已生成，开始自动投稿', $details + ['article_id' => $articleId]);
 
             $submitted = 0;

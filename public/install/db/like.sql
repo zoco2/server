@@ -14727,3 +14727,81 @@ CREATE TABLE IF NOT EXISTS `la_user_task_run_event` (
   PRIMARY KEY (`id`),
   KEY `idx_run_event` (`run_id`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户计划任务执行进度';
+
+CREATE TABLE IF NOT EXISTS `la_publish_task` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '任务 ID',
+  `tenant_id` int unsigned NOT NULL COMMENT '所属租户 ID',
+  `user_id` int unsigned NOT NULL COMMENT '创建任务的用户 ID',
+  `staff_ids` json DEFAULT NULL COMMENT '接收通知的员工 ID 数组，空表示通知创建人',
+  `content` varchar(500) NOT NULL COMMENT '用户填写的任务内容',
+  `platforms` varchar(64) NOT NULL COMMENT '发布平台编码的 JSON 数组',
+  `notice_type` varchar(24) NOT NULL DEFAULT 'official_account' COMMENT '通知渠道，当前为服务号',
+  `push_mode` varchar(16) NOT NULL COMMENT 'immediate 立即，scheduled 定时',
+  `schedule_type` varchar(16) DEFAULT NULL COMMENT '定时规则：daily、weekly、date_range',
+  `push_time` char(5) DEFAULT NULL COMMENT '北京时间 HH:mm，立即推送时为空',
+  `weekday` tinyint unsigned DEFAULT NULL COMMENT '每周推送日，周一为 1，周日为 7',
+  `start_date` date DEFAULT NULL COMMENT '自定义日期范围的开始日，含当天',
+  `end_date` date DEFAULT NULL COMMENT '自定义日期范围的结束日，含当天',
+  `status` varchar(16) NOT NULL COMMENT 'scheduled 待执行，ended 已结束，failed 消费重试耗尽',
+  `next_run_at` bigint unsigned DEFAULT NULL COMMENT '下一次计划执行时间（Unix 秒）',
+  `tasksn` char(32) DEFAULT NULL COMMENT '下一轮任务编号，任务结束后为空',
+  `last_run_at` bigint unsigned DEFAULT NULL COMMENT '最近一次尝试的计划执行时间（Unix 秒）',
+  `last_run_status` varchar(16) NOT NULL DEFAULT '' COMMENT '最近一轮通知结果：sent、failed、unknown、skipped',
+  `last_error` varchar(255) NOT NULL DEFAULT '' COMMENT '最近一轮通知失败或结果不明的原因',
+  `create_time` bigint unsigned NOT NULL COMMENT '创建时间（Unix 秒）',
+  `update_time` bigint unsigned NOT NULL COMMENT '更新时间（Unix 秒）',
+  PRIMARY KEY (`id`),
+  KEY `idx_owner` (`tenant_id`, `user_id`, `id`),
+  KEY `idx_due` (`status`, `next_run_at`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户发布任务';
+
+CREATE TABLE IF NOT EXISTS `la_publish_task_run` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '执行记录 ID',
+  `tenant_id` int unsigned NOT NULL COMMENT '所属租户 ID',
+  `user_id` int unsigned NOT NULL COMMENT '创建任务的用户 ID',
+  `task_id` bigint unsigned NOT NULL COMMENT '发布任务 ID',
+  `tasksn` char(32) NOT NULL COMMENT '本轮任务编号，取自发布计划',
+  `scheduled_at` bigint unsigned NOT NULL COMMENT '本轮计划执行时间（Unix 秒）',
+  `status` varchar(16) NOT NULL COMMENT 'pending 待执行，running 执行中，completed 已完成，failed 失败，skipped 已跳过',
+  `recipient_results` json DEFAULT NULL COMMENT '各员工的发送状态和错误，键 0 表示创建人',
+  `create_time` bigint unsigned NOT NULL COMMENT '创建时间（Unix 秒）',
+  `update_time` bigint unsigned NOT NULL COMMENT '更新时间（Unix 秒）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_tasksn` (`tenant_id`, `tasksn`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户发布任务执行记录';
+
+CREATE TABLE IF NOT EXISTS `la_merchant_topic` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL COMMENT '租户ID',
+  `user_id` int unsigned NOT NULL COMMENT '商家用户ID',
+  `name` varchar(100) NOT NULL COMMENT '话题名称',
+  `create_time` int unsigned NOT NULL DEFAULT 0 COMMENT '创建时间',
+  `update_time` int unsigned NOT NULL DEFAULT 0 COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_owner` (`tenant_id`, `user_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家话题库';
+
+CREATE TABLE IF NOT EXISTS `la_merchant_graphic` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL,
+  `user_id` int unsigned NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `content` mediumtext NOT NULL,
+  `file_ids` text NOT NULL,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_owner` (`tenant_id`, `user_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家图文库';
+
+CREATE TABLE IF NOT EXISTS `la_merchant_copy` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL,
+  `user_id` int unsigned NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `content` mediumtext NOT NULL,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_owner` (`tenant_id`, `user_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家文案库';

@@ -1,6 +1,6 @@
 <?php
 
-return [
+$config = [
     // 默认使用的数据库连接配置
     'default'         => env('database.driver', 'mysql'),
 
@@ -60,3 +60,8 @@ return [
         // 更多的数据库配置信息
     ],
 ];
+
+// 发布任务持有计划行锁时，通过同一个库的独立连接提交发送进度。
+$config['connections']['publish_task_progress'] = $config['connections'][$config['default']];
+
+return $config;

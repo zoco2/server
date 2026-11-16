@@ -1738,16 +1738,20 @@ class OpenPlatformService
      * Use the effective open-platform account for tenant-scoped operations.
      * Direct-mode callers keep using their existing credentials and services.
      */
-    public static function authorizerRequest(int $tenantId, string $authorizerType, string $path, array $payload, string $apiName, string $method = 'POST'): array
+    public static function authorizerRequest(
+        int $tenantId, string $authorizerType, string $path, array $payload, string $apiName,
+        string $method = 'POST', ?string $authorizerAppId = null
+    ): array
     {
-        $authorizer = WechatAuthorizer::withoutGlobalScope()
-            ->where([
-                'tenant_id' => $tenantId,
-                'authorizer_type' => $authorizerType,
-                'authorization_status' => 1,
-            ])
-            ->order('id desc')
-            ->findOrEmpty();
+        $where = [
+            'tenant_id' => $tenantId,
+            'authorizer_type' => $authorizerType,
+            'authorization_status' => 1,
+        ];
+        if ($authorizerAppId !== null) {
+            $where['authorizer_appid'] = $authorizerAppId;
+        }
+        $authorizer = WechatAuthorizer::withoutGlobalScope()->where($where)->order('id desc')->findOrEmpty();
         if ($authorizer->isEmpty()) {
             throw new \RuntimeException('当前租户未授权对应微信账号');
         }

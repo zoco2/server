@@ -109,6 +109,25 @@ class StaffLogic extends BaseLogic
         return true;
     }
 
+    /** 清空当前商家员工的公众号身份，已解绑的员工可重复操作。 */
+    public static function unbindWechat(int $id): bool
+    {
+        $staff = MerchantScope::query(MerchantStaff::class)->where('id', $id)->findOrEmpty();
+        if ($staff->isEmpty()) {
+            self::setError('员工不存在或无权限');
+            return false;
+        }
+        try {
+            if ($staff->save(['appid' => null, 'openid' => null])) {
+                return true;
+            }
+        } catch (Throwable $e) {
+            // 数据库异常统一提示，不返回底层错误。
+        }
+        self::setError('解绑失败，请稍后重试');
+        return false;
+    }
+
     /**
      * @param int $storeId
      * @return bool

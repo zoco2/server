@@ -16,6 +16,7 @@ declare (strict_types=1);
 
 namespace app\common\http\middleware;
 
+use app\common\model\merchant\MerchantStore;
 use app\common\model\tenant\Tenant;
 use app\common\service\JsonService;
 use app\common\service\tenant\TenantContractService;
@@ -204,12 +205,20 @@ class LikeAdminAllowMiddleware
 
         // 通过 /t/{tenant_id}/... 或请求参数/请求头访问租户
         $tenantId = $this->extractExplicitTenantId($request);
+        $resolveMode = $this->extractTenantIdFromPath($request) ? 'path_id' : 'param_id';
+
+        // 共享域名上的公开门店页，通过门店 ID 找到所属租户。
+        if (!$tenantId && in_array($domain, TenantUrlService::platformHosts(), true)) {
+            $tenantId = $this->findPublicStorefrontTenantId($request);
+            $resolveMode = 'public_storefront';
+        }
+
         if ($tenantId) {
             $tenant = $tenantModel->where(['id' => $tenantId])->findOrEmpty();
             if (!$tenant->isEmpty() && TenantContractService::enforceTenantActive($tenant)) {
                 $request->tenantId = $tenant->id;
                 $request->tenantSn = $tenant->sn;
-                $request->tenantResolveMode = $this->extractTenantIdFromPath($request) ? 'path_id' : 'param_id';
+                $request->tenantResolveMode = $resolveMode;
                 if ($isPage && ($entry = $this->tenantPathFrontendEntry($request))) {
                     return response(app()->getRootPath() . 'public/' . $entry . '/index.html', 200, [], 'file');
                 }
@@ -221,6 +230,31 @@ class LikeAdminAllowMiddleware
 
         // 租户不存在或域名错误
         return $isPage ? view(app()->getRootPath() . 'public/error/tenant/404.html') : JsonService::fail('接口域名错误或租户不存在', [], 4, 0);
+    }
+
+    /** 仅处理公开门店页面及其读取接口，其他路由仍使用常规租户解析。 */
+    private function findPublicStorefrontTenantId($request): int
+    {
+        if (!in_array($request->method(), ['GET', 'HEAD'], true)) {
+            return 0;
+        }
+
+        $path = trim((string)$request->baseUrl(), '/');
+        if (preg_match('#^storefront/([1-9][0-9]*)$#D', $path, $matches)) {
+            $storeId = $matches[1];
+        } elseif (preg_match('#^(?:index\.php/)?api/merchant\.storeDesign/storefront$#iD', $path)) {
+            $storeId = $request->get('store_id');
+        } else {
+            return 0;
+        }
+
+        $storeId = filter_var($storeId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if (!$storeId) {
+            return 0;
+        }
+
+        // 门店表以 ID 为主键，查询发生在租户上下文建立之前。
+        return (int)MerchantStore::where('id', $storeId)->where('status', 1)->value('tenant_id');
     }
 
     private function resolveTenantFromPayload(Tenant $tenantModel, $request): void

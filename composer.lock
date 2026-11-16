@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c59fafe51984d90eb18a9faf89b006fc",
+    "content-hash": "ab059abda609a8763117b69711908e5d",
     "packages": [
         {
             "name": "adbario/php-dot-notation",
@@ -306,6 +306,59 @@
                 "source": "https://github.com/alipay/alipay-easysdk/tree/v2.2.3"
             },
             "time": "2022-11-28T14:04:57+00:00"
+        },
+        {
+            "name": "aliyun/aliyun-mns-php-sdk",
+            "version": "1.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/aliyun/aliyun-mns-php-sdk.git",
+                "reference": "962ead2777da6501723c661cd1a25bf6a9fab3ac"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/aliyun/aliyun-mns-php-sdk/zipball/962ead2777da6501723c661cd1a25bf6a9fab3ac",
+                "reference": "962ead2777da6501723c661cd1a25bf6a9fab3ac",
+                "shasum": ""
+            },
+            "require": {
+                "guzzlehttp/guzzle": ">=6.0.0",
+                "php": ">=5.5.0",
+                "psr/http-message": "^1.0"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "*"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "AliyunMNS\\": "AliyunMNS/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Aliyun MNS Team",
+                    "homepage": "http://www.aliyun.com/product/mns"
+                }
+            ],
+            "description": "Aliyun Message and Notification Service SDK for PHP, PHP>=5.5.0",
+            "homepage": "https://github.com/aliyun/aliyun-mns-php-sdk",
+            "keywords": [
+                "aliyun",
+                "message",
+                "message service",
+                "mns",
+                "notification"
+            ],
+            "support": {
+                "issues": "https://github.com/aliyun/aliyun-mns-php-sdk/issues",
+                "source": "https://github.com/aliyun/aliyun-mns-php-sdk/tree/1.4.0"
+            },
+            "time": "2025-08-01T05:59:04+00:00"
         },
         {
             "name": "aliyuncs/oss-sdk-php",
@@ -4570,6 +4623,122 @@
                 }
             ],
             "time": "2026-08-07T21:52:29+00:00"
+        },
+        {
+            "name": "workerman/coroutine",
+            "version": "v1.1.7",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/workerman-php/coroutine.git",
+                "reference": "68a905d50f7ec1efcedc1ec317a75dcc3dea3f0f"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/workerman-php/coroutine/zipball/68a905d50f7ec1efcedc1ec317a75dcc3dea3f0f",
+                "reference": "68a905d50f7ec1efcedc1ec317a75dcc3dea3f0f",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=8.1",
+                "workerman/workerman": "^5.1"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^11.0",
+                "psr/log": "*"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Workerman\\": "src",
+                    "Workerman\\Coroutine\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Workerman coroutine",
+            "support": {
+                "issues": "https://github.com/workerman-php/coroutine/issues",
+                "source": "https://github.com/workerman-php/coroutine/tree/v1.1.7"
+            },
+            "time": "2026-10-24T05:06:43+00:00"
+        },
+        {
+            "name": "workerman/workerman",
+            "version": "v5.2.3",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/walkor/workerman.git",
+                "reference": "8fd5c148ff7dcd7bbc88621e1712eeb1f66b7f56"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/walkor/workerman/zipball/8fd5c148ff7dcd7bbc88621e1712eeb1f66b7f56",
+                "reference": "8fd5c148ff7dcd7bbc88621e1712eeb1f66b7f56",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "php": ">=8.1",
+                "workerman/coroutine": "^1.1 || dev-main"
+            },
+            "conflict": {
+                "ext-swow": "<v1.0.0"
+            },
+            "require-dev": {
+                "guzzlehttp/guzzle": "^7.10",
+                "mockery/mockery": "^1.6.12",
+                "pestphp/pest": "^2.36 || ^3 || ^4",
+                "phpstan/phpstan": "^2.1"
+            },
+            "suggest": {
+                "ext-event": "For better performance. "
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Workerman\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "walkor",
+                    "email": "walkor@workerman.net",
+                    "homepage": "https://www.workerman.net",
+                    "role": "Developer"
+                }
+            ],
+            "description": "An asynchronous event driven PHP framework for easily building fast, scalable network applications.",
+            "homepage": "https://www.workerman.net",
+            "keywords": [
+                "asynchronous",
+                "event-loop",
+                "framework",
+                "http"
+            ],
+            "support": {
+                "email": "walkor@workerman.net",
+                "forum": "https://www.workerman.net/questions",
+                "issues": "https://github.com/walkor/workerman/issues",
+                "source": "https://github.com/walkor/workerman",
+                "wiki": "https://www.workerman.net/doc/workerman/"
+            },
+            "funding": [
+                {
+                    "url": "https://opencollective.com/workerman",
+                    "type": "open_collective"
+                },
+                {
+                    "url": "https://www.patreon.com/walkor",
+                    "type": "patreon"
+                }
+            ],
+            "time": "2026-10-09T01:12:31+00:00"
         }
     ],
     "packages-dev": [
@@ -6502,7 +6671,9 @@
         "php": ">=8.2",
         "ext-iconv": "*",
         "ext-curl": "*",
-        "ext-zip": "*"
+        "ext-zip": "*",
+        "ext-pcntl": "*",
+        "ext-posix": "*"
     },
     "platform-dev": {},
     "plugin-api-version": "2.9.0"

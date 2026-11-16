@@ -6,6 +6,22 @@ use PHPUnit\Framework\TestCase;
 
 final class MicroVideoWorkbenchJsonTest extends TestCase
 {
+    public function testRetainedInlineScriptCanBeParsedWithoutRegeneration(): void
+    {
+        $content = file_get_contents(__DIR__.'/../fixtures/micro-video-inline-script.json');
+        $original = json_decode($content, true, 512, JSON_THROW_ON_ERROR);
+        $contract = \app\common\service\app\aigc_micro_video\MicroVideoContentPlanning::contract(['target_duration'=>30,'mode'=>'theme'],[30],10,3);
+        $row = ['action'=>'rewrite','request_json'=>json_encode(['snapshot'=>['target_duration'=>30],'planning_contract'=>$contract,'video_reference_limit'=>3])];
+        $result = Worker::parse($row, ['content'=>$content]);
+        $prompt = $result['script']['segments'][0]['prompt'];
+        self::assertCount(4, explode("\n", $prompt));
+        self::assertSame($original['script']['segments'][0]['prompt'], str_replace("\n", '', $prompt));
+        $result['script']['segments'][0]['prompt'] = $original['script']['segments'][0]['prompt'];
+        ksort($original['script']['segments'][0]);
+        ksort($result['script']['segments'][0]);
+        self::assertSame($original['script'], $result['script']);
+    }
+
     private function decode(string $content): array
     {
         return (new \ReflectionMethod(Worker::class, 'decodeContent'))->invoke(null, $content);

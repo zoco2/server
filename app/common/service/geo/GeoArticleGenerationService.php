@@ -281,7 +281,7 @@ PROMPT;
             $articleIds = [];
             $messages = [];
             foreach ($articles as $article) {
-                $articleIds[] = GeoArticleService::createGeneratedDraft(
+                $articleIds[] = GeoArticleService::createGeneratedArticle(
                     (int)$task['tenant_id'],
                     (int)$task['user_id'],
                     (string)$task['prompt'],
