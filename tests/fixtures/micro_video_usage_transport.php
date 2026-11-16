@@ -37,6 +37,20 @@ namespace app\common\service\ai {
     }
 }
 
+namespace app\common\service\app\aigc_micro_video {
+    final class MicroVideoMedia
+    {
+        public static ?float $seconds = null;
+        public static array $measurements = [];
+        public static function measureDuration(int $tenant, int $user, string $uri): float
+        {
+            self::$measurements[] = [$tenant, $user, $uri];
+            if (self::$seconds === null) throw new \RuntimeException('Fixture media temporarily unavailable');
+            return self::$seconds;
+        }
+    }
+}
+
 namespace app\common\service\point {
     final class PointService
     {

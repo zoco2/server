@@ -67,6 +67,24 @@ final class MicroVideoMedia
         return $result;
     }
 
+    /** Read the generated file without publishing another asset or changing its timing. */
+    public static function measureDuration(int $tenant, int $user, string $uri): float
+    {
+        if ($tenant <= 0 || $user <= 0) throw new RuntimeException('视频片段身份无效');
+        $workspace = self::workspace();
+        try {
+            $source = $workspace . '/source.mp4';
+            if (!preg_match('#^(?:https?://|data:video/)#i', $uri)) {
+                $canonical = self::canonicalUri($uri);
+                $file = self::ownedFile($tenant, $user, $canonical, FileEnum::VIDEO_TYPE);
+                $storage = self::storage($file, $tenant);
+                if ($storage['storage_engine'] !== 'local') $uri = self::managedUrl($canonical, $storage, $tenant);
+            }
+            self::materialize($uri, $source, $tenant, $user);
+            return self::probe($source)['duration'];
+        } finally { self::cleanup($workspace); }
+    }
+
     public static function persistSegment(int $tenant, int $user, string $uri, int $taskId, int $segmentId): array
     {
         if ($tenant <= 0 || $user <= 0 || $taskId <= 0 || $segmentId <= 0) throw new RuntimeException('视频片段身份无效');
@@ -314,7 +332,7 @@ final class MicroVideoMedia
 
     private static function probe(string $path): array
     {
-        $output = self::run([self::binary('ffprobe'), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', $path], 60);
+        $output = self::run([self::binary('ffprobe'), '-v', 'error', '-protocol_whitelist', 'file', '-format_whitelist', 'mov,matroska,webm,avi', '-show_streams', '-show_format', '-of', 'json', $path], 60);
         $info = json_decode($output, true, 512, JSON_THROW_ON_ERROR); $video = null; $hasAudio = false;
         foreach ($info['streams'] ?? [] as $stream) {
             if (($stream['codec_type'] ?? '') === 'video' && empty($stream['disposition']['attached_pic']) && $video === null) $video = $stream;

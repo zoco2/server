@@ -3,6 +3,7 @@ namespace Tests\Feature;
 
 use app\common\model\ai\AiConsumptionLog;
 use app\common\service\app\aigc_micro_video\MicroVideoSubmission;
+use app\common\service\app\aigc_micro_video\MicroVideoMedia;
 use app\common\service\point\PointService;
 use app\common\service\power\MarketVideoRuntimeService as Runtime;
 use app\common\service\power\MicroVideoUsageTransport as Transport;
@@ -186,6 +187,92 @@ final class MicroVideoUsageRefreshTest extends TestCase
         self::assertSame('reserved', $this->row()['billing_status']);
         self::assertNotEmpty($this->row()['response_summary']['videos']);
         self::assertSame([], PointService::$charges);
+        $this->assertOnlyQueries(0);
+    }
+
+    public function testCompletedWanReceiptWithoutSecondsSettlesMeasuredOutputUsingFrozenPrice(): void
+    {
+        // Same response shape as consumption 229; points_cost is not a duration.
+        MicroVideoMedia::$seconds = 30.023;
+        $receipt = ['code' => 1, 'msg' => 'success', 'data' => [
+            'task_id' => 'accepted-video', 'type' => 'video', 'status' => 'completed',
+            'result' => ['video_url' => self::VIDEOS[0]['video_uri'], 'outputs' => [self::VIDEOS[0]['video_uri']]],
+            'usage' => ['input_tokens' => 0, 'output_tokens' => 0, 'total_tokens' => 0, 'points_cost' => 4576],
+        ]];
+        MicroVideoSubmission::capture(1, $receipt, 'accepted-video', 'accepted-request');
+        $snapshot = $this->row()['price_snapshot'];
+        $snapshot['tenant_price'] = 160; // The tenant charge need not equal upstream cost.
+        Db::name('ai_consumption_log')->where('id', 1)->update(['price_snapshot' => json_encode($snapshot)]);
+        $result = Runtime::refresh(1);
+        self::assertSame('success', $result['status']);
+        self::assertSame('settled', $this->row()['billing_status']);
+        self::assertSame(30.023, $this->row()['usage_snapshot']['actual_quantity']);
+        self::assertSame('generated_video_file', $this->row()['usage_snapshot']['duration_source']);
+        self::assertSame(4576, $this->row()['usage_snapshot']['upstream_usage']['points_cost']);
+        self::assertSame(4804.0, (float)$this->row()['actual_user_price']);
+        self::assertSame([[1, 1, self::VIDEOS[0]['video_uri']]], MicroVideoMedia::$measurements);
+        Runtime::refresh(1);
+        self::assertCount(1, MicroVideoMedia::$measurements);
+        self::assertCount(1, PointService::$charges);
+        $this->assertOnlyQueries(0);
+    }
+
+    public function testLegacyCachedVideoWithoutReceiptCanRecoverByMeasuringFile(): void
+    {
+        MicroVideoMedia::$seconds = 30.023;
+        self::assertSame('success', Runtime::refresh(1)['status']);
+        self::assertSame('settled', $this->row()['billing_status']);
+        self::assertSame(4576.0, (float)$this->row()['actual_user_price']);
+        $this->assertOnlyQueries(0);
+    }
+
+    public function testInvalidMeasuredDurationNeverSettlesOrUsesQuotedDuration(): void
+    {
+        MicroVideoMedia::$seconds = 0.0;
+        Transport::$responses = [['data' => ['status' => 'completed']]];
+        $result = Runtime::refresh(1);
+        self::assertSame('running', $result['status']);
+        self::assertSame([], $result['videos']);
+        self::assertSame('reserved', $this->row()['billing_status']);
+        self::assertSame('output_duration_retrying', $this->row()['error_code']);
+        self::assertSame([], PointService::$charges);
+        $this->assertOnlyQueries(1);
+    }
+
+    public function testUpstreamDurationTakesPrecedenceOverMediaProbe(): void
+    {
+        MicroVideoMedia::$seconds = 99.0;
+        MicroVideoSubmission::capture(1, ['data' => ['usage' => ['output_seconds' => 29.5]]], 'accepted-video', 'accepted-request');
+        self::assertSame('success', Runtime::refresh(1)['status']);
+        self::assertSame(29.5, $this->row()['usage_snapshot']['actual_quantity']);
+        self::assertSame([], MicroVideoMedia::$measurements);
+        $this->assertOnlyQueries(0);
+    }
+
+    public function testMediaFailureCanRecoverWithoutRegenerationOrAnotherUpstreamQuery(): void
+    {
+        Transport::$responses = [['data' => ['status' => 'completed']]];
+        self::assertSame('running', Runtime::refresh(1)['status']);
+        self::assertSame('output_duration_retrying', $this->row()['error_code']);
+        self::assertSame('reserved', $this->row()['billing_status']);
+        MicroVideoMedia::$seconds = 30.023;
+        self::assertSame('success', Runtime::refresh(1)['status']);
+        self::assertSame('', $this->row()['error_code']);
+        self::assertCount(1, PointService::$charges);
+        $this->assertOnlyQueries(1);
+    }
+
+    public function testPerCallVideoStillSettlesOneCallWithoutMeasuringDuration(): void
+    {
+        $snapshot = $this->row()['price_snapshot'];
+        $snapshot['billing_meter']['basis'] = 'call';
+        $snapshot['usage_unit'] = 'per_call';
+        $snapshot['requires_actual_duration'] = false;
+        $snapshot['quantity'] = 1;
+        Db::name('ai_consumption_log')->where('id', 1)->update(['price_snapshot' => json_encode($snapshot)]);
+        self::assertSame('success', Runtime::refresh(1)['status']);
+        self::assertSame(1.0, (float)$this->row()['quantity']);
+        self::assertSame([], MicroVideoMedia::$measurements);
         $this->assertOnlyQueries(0);
     }
 }
