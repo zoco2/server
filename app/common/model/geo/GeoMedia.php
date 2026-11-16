@@ -26,6 +26,9 @@ use app\common\service\geo\GeoMediaSyncService;
  */
 class GeoMedia extends BaseModel
 {
+    /** 必须明确提供价格类别的资源：短视频、微信、微博。 */
+    public const MULTI_PRICE_RESOURCE_TYPES = [12, 13, 14];
+
     protected $name = 'geo_media';
     protected $json = ['price_type_json'];
     protected $jsonAssoc = true;
@@ -76,7 +79,7 @@ class GeoMedia extends BaseModel
         $cost = is_numeric($data['costprice'] ?? null) ? round((float)$data['costprice'], 2) : 0.0;
         if (in_array($value, [null, '', []], true)
             && isset(GeoMediaSyncService::RESOURCE_TYPES[$resourceType])
-            && !in_array($resourceType, [12, 13, 14], true)
+            && !in_array($resourceType, self::MULTI_PRICE_RESOURCE_TYPES, true)
             && is_finite($cost) && $cost > 0) {
             $items = [['type' => 1, 'price' => $cost]];
         }

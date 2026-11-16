@@ -316,7 +316,7 @@ class GeoMediaSyncService
             'costprice' => $cost,
             // 必须写真实列名：模型 $json 声明的是 price_type_json，
             // 写成 price_types 既不是列也不是 json 声明名，会被当普通数组塞进 SQL。
-            'price_type_json' => self::priceTypes($row),
+            'price_type_json' => self::priceTypes($row, $type),
             'linktype' => (int)($row['linktype'] ?? 0),
             'publishtime' => (int)($row['publishtime'] ?? 0),
             'newsresource' => (int)($row['newsresource'] ?? 0),
@@ -370,22 +370,27 @@ class GeoMediaSyncService
 
     /**
      * 多价格类别。海讯文档未给出独立字段，若上游返回了价格数组则原样保存，
-     * 否则用单一成本价生成默认类别。
+     * 单价资源可以用成本价生成默认类别，多价资源缺少明确报价时保持不可投稿。
      *
      * @param array<string, mixed> $row 海讯原始行
+     * @param int $resourceType 资源类型
      * @return array<int, array{type:int, price:float}>
      */
-    private static function priceTypes(array $row): array
+    private static function priceTypes(array $row, int $resourceType): array
     {
         $raw = $row['pricetype'] ?? $row['priceType'] ?? $row['prices'] ?? null;
+        if (is_string($raw)) {
+            $raw = json_decode($raw, true);
+        }
         if (is_array($raw)) {
             $items = [];
             foreach ($raw as $item) {
                 if (is_array($item)) {
                     $type = (int)($item['type'] ?? $item['priceType'] ?? 0);
-                    $price = (float)($item['price'] ?? $item['costprice'] ?? 0);
-                    if ($type > 0 && $price > 0) {
-                        $items[] = ['type' => $type, 'price' => round($price, 2)];
+                    $value = $item['price'] ?? $item['costprice'] ?? null;
+                    $price = is_numeric($value) ? round((float)$value, 2) : 0.0;
+                    if ($type > 0 && is_finite($price) && $price > 0) {
+                        $items[] = ['type' => $type, 'price' => $price];
                     }
                 }
             }
@@ -393,7 +398,12 @@ class GeoMediaSyncService
                 return $items;
             }
         }
-        return [['type' => 1, 'price' => round((float)($row['costprice'] ?? 0), 2)]];
+        if (!isset(self::RESOURCE_TYPES[$resourceType])
+            || in_array($resourceType, GeoMedia::MULTI_PRICE_RESOURCE_TYPES, true)) {
+            return [];
+        }
+        $cost = is_numeric($row['costprice'] ?? null) ? round((float)$row['costprice'], 2) : 0.0;
+        return is_finite($cost) && $cost > 0 ? [['type' => 1, 'price' => $cost]] : [];
     }
 
     /**

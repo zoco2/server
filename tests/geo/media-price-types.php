@@ -5,6 +5,7 @@ require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
 use app\common\model\geo\GeoMedia;
 use app\common\service\geo\GeoMediaCatalogService;
+use app\common\service\geo\GeoMediaSyncService;
 use app\common\service\geo\GeoOrderService;
 
 function checkPrice(bool $condition, string $message): void
@@ -74,4 +75,31 @@ foreach ([$tiers, json_encode($tiers)] as $storedTiers) {
     }
 }
 
-echo "PASS: legacy single-price media, public quotes, order create/push pricing and strict category checks\n";
+$syncPrices = new ReflectionMethod(GeoMediaSyncService::class, 'priceTypes');
+foreach ([12, 13, 14] as $resourceType) {
+    foreach ([['costprice' => 100], ['costprice' => 100, 'prices' => []],
+        ['costprice' => 100, 'prices' => 'invalid JSON'],
+        ['costprice' => 100, 'prices' => [['type' => 2, 'price' => 'invalid']]]] as $raw) {
+        $synced = $syncPrices->invoke(null, $raw, $resourceType);
+        checkPrice($synced === [], 'Sync must not fabricate category 1 when a multi-price resource has no valid tiers');
+        $media = mediaFixture(['resource_type' => $resourceType, 'price_type_json' => $synced]);
+        rejectPrice($media, 1);
+        $public = GeoMediaCatalogService::publicRow($media->toArray());
+        checkPrice(empty($public['price_types']), 'Missing multi-price tiers must stay unavailable to the frontend');
+    }
+    foreach (['pricetype', 'priceType', 'prices'] as $field) {
+        foreach ([$tiers, json_encode($tiers)] as $rawTiers) {
+            $synced = $syncPrices->invoke(null, ['costprice' => 999, $field => $rawTiers], $resourceType);
+            checkPrice($synced === [['type' => 2, 'price' => 80.0], ['type' => 3, 'price' => 120.0]], 'Sync must preserve explicit tiers, including JSON strings');
+            $media = mediaFixture(['resource_type' => $resourceType, 'price_type_json' => $synced]);
+            checkPrice($resolve->invoke(null, $media, 3) === [120.0, 150.0], 'Submission must use the selected tier after sync');
+            rejectPrice($media, 1);
+        }
+    }
+}
+checkPrice($syncPrices->invoke(null, ['costprice' => 322], 1) === [['type' => 1, 'price' => 322.0]], 'Sync must retain the default category for single-price resources');
+foreach ([0, -1, 'invalid', INF, NAN] as $invalidCost) {
+    checkPrice($syncPrices->invoke(null, ['costprice' => $invalidCost], 1) === [], 'Sync must not invent a free or invalid default quote');
+}
+
+echo "PASS: single/multi-price sync, public quotes, order create/push pricing and strict category checks\n";
