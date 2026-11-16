@@ -26,6 +26,9 @@ use app\common\service\geo\GeoMediaSyncService;
  */
 class GeoMedia extends BaseModel
 {
+    /** 必须明确提供价格类别的资源：短视频、微信、微博。 */
+    public const MULTI_PRICE_RESOURCE_TYPES = [12, 13, 14];
+
     protected $name = 'geo_media';
     protected $json = ['price_type_json'];
     protected $jsonAssoc = true;
@@ -57,13 +60,29 @@ class GeoMedia extends BaseModel
      * 方法名必须与列名对齐：get + studly(price_type_json) + Attr，
      * 叫 getPriceTypesAttr 是取不到的，会原样返回未换算的 json。
      *
-     * @param mixed $value price_type_json（json 字段，已解码成数组）
+     * @param mixed $value price_type_json（JSON 字符串或已解码的数组）
      * @param array<string, mixed> $data 当前行
      * @return array<int, array{type:int, price:float, sale_price:float}>
      */
     public function getPriceTypeJsonAttr($value, array $data): array
     {
+        if (is_string($value) && trim($value) !== '') {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $value = $decoded;
+            }
+        }
         $items = is_array($value) ? array_values($value) : [];
+        // 历史单价资源可能只有 costprice。与同步时的默认类别保持一致，
+        // 让资源报价、建单和推送都能读取类别 1；多价资源必须有明确类别。
+        $resourceType = (int)($data['resource_type'] ?? 0);
+        $cost = is_numeric($data['costprice'] ?? null) ? round((float)$data['costprice'], 2) : 0.0;
+        if (in_array($value, [null, '', []], true)
+            && isset(GeoMediaSyncService::RESOURCE_TYPES[$resourceType])
+            && !in_array($resourceType, self::MULTI_PRICE_RESOURCE_TYPES, true)
+            && is_finite($cost) && $cost > 0) {
+            $items = [['type' => 1, 'price' => $cost]];
+        }
         $ratio = self::ratio($data);
         $result = [];
         foreach ($items as $item) {
