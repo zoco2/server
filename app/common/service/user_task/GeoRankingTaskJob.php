@@ -10,6 +10,7 @@ use app\common\model\geo\GeoOrder;
 use app\common\service\geo\GeoArticleGenerationService;
 use app\common\service\geo\GeoArticleService;
 use app\common\service\geo\GeoDiagnosisService;
+use app\common\service\geo\GeoDiagnosisSubmissionException;
 use app\common\service\geo\GeoOrderService;
 use Exception;
 use InvalidArgumentException;
@@ -222,10 +223,15 @@ final class GeoRankingTaskJob
     private static function fail(int $id, string $expected, string $step, string $message, Throwable $e): void
     {
         Log::error(sprintf('[user-task-geo] run=%d step=%s error=%s', $id, $step, $e->getMessage()));
-        if ($e instanceof InvalidArgumentException) {
+        $details = [];
+        if ($e instanceof GeoDiagnosisSubmissionException) {
+            $details['diagnosis_id'] = $e->batchId();
+            $details['failure_reason'] = mb_substr($e->getMessage(), 0, 500);
+        }
+        if ($e instanceof InvalidArgumentException || $e instanceof GeoDiagnosisSubmissionException) {
             $message .= '。' . mb_substr($e->getMessage(), 0, 160);
         }
-        self::finish($id, $expected, $step, $message, false);
+        self::finish($id, $expected, $step, $message, false, $details);
     }
 
     private static function finish(int $id, string $expected, string $step, string $message, bool $success, array $details = []): void
