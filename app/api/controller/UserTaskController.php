@@ -73,9 +73,7 @@ final class UserTaskController extends BaseApiController
 
     public function delete()
     {
-        return $this->write(fn () => UserTaskPlanService::delete(
-            (int)$this->request->tenantId, $this->userId, (int)$this->request->post('id/d', 0)
-        ));
+        return $this->fail('禁止删除');
     }
 
     private function write(callable $action)
