@@ -7,6 +7,7 @@ namespace app\common\service\publish_task;
 use app\api\logic\merchant\StaffWechatBindingLogic;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
+use app\common\model\merchant\MerchantBrand;
 use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\MerchantStore;
 use app\common\model\merchant\PublishTask;
@@ -164,6 +165,55 @@ final class PublishTaskService
             'lists' => $runs,
             'page_no' => $page,
             'page_size' => $size,
+        ];
+    }
+
+    /** 员工打开通知链接后，只读取这个租户下的任务内容和发布平台。 */
+    public static function publicDetail(string $token): ?array
+    {
+        $tenantId = (int)(request()->tenantId ?? 0);
+        if ($tenantId <= 0 || strlen($token) > 160) {
+            return null;
+        }
+        $payload = base64_decode($token, true);
+        if ($payload === false || !preg_match('/^([1-9][0-9]*):([1-9][0-9]*):[a-f0-9]{64}$/D', $payload, $matches)) {
+            return null;
+        }
+        $runId = (int)$matches[1];
+        $staffId = (int)$matches[2];
+
+        $run = PublishTaskRun::where('id', $runId)->field('task_id,user_id,tasksn')->findOrEmpty();
+        if ($run->isEmpty() || !$run->tasksn) {
+            return null;
+        }
+
+        $userId = (int)$run->user_id;
+        $employee = MerchantStaff::where(['id' => $staffId, 'user_id' => $userId])
+            ->field('store_id,appid,openid')->findOrEmpty();
+        if ($employee->isEmpty()) {
+            return null;
+        }
+        $appId = trim((string)$employee->appid);
+        $openid = trim((string)$employee->openid);
+        if ($appId === '' || $openid === '' || !hash_equals(
+            self::noticeToken($tenantId, $runId, $staffId, (string)$run->tasksn, $appId, $openid),
+            $token
+        )) {
+            return null;
+        }
+
+        $task = PublishTask::where(['id' => (int)$run->task_id, 'user_id' => $userId])
+            ->field('staff_ids,content,platforms')->findOrEmpty();
+        $staffIds = json_decode($task->staff_ids ?? '[]', true);
+        if ($task->isEmpty() || !is_array($staffIds) || !in_array($staffId, $staffIds, true)) {
+            return null;
+        }
+        $brandId = (int)MerchantStore::where(['id' => (int)$employee->store_id, 'user_id' => $userId])->value('brand_id');
+        return [
+            'content' => (string)$task->content,
+            'platforms' => json_decode($task->platforms, true, flags: JSON_THROW_ON_ERROR),
+            'brand_name' => $brandId > 0
+                ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $userId])->value('name') : '',
         ];
     }
 
@@ -345,21 +395,28 @@ final class PublishTaskService
         });
     }
 
+    /** 用本轮 tasksn 生成链接签名，打开时按相同规则计算。 */
+    private static function noticeToken(int $tenantId, int $runId, int $staffId, string $taskSn, string $appId, string $openid): string
+    {
+        $signature = hash_hmac('sha256', implode("\0", ['publish_task', $tenantId, $runId, $staffId, $appId, $openid]), $taskSn);
+        return base64_encode($runId . ':' . $staffId . ':' . $signature);
+    }
+
     /** 同一轮逐个发送，重试时继续处理没有发送记录的人。 */
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
-        $storeOrigin = '';
+        $taskBase = '';
         if (isset($task['staff_ids'])) {
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
-                ->column('openid,appid,store_id', 'id');
+                ->column('openid,appid', 'id');
             // Job 没有 HTTP 请求域名，从租户配置的访问地址取域名。
             $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
             if (!$tenant->isEmpty()) {
-                $pcUrl = TenantUrlService::links($tenant->getData())['current']['pc'];
+                $pcUrl = TenantUrlService::links($tenant->getData())['subdomain']['pc'];
                 $host = TenantUrlService::normalizeHost($pcUrl);
                 if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
-                    $storeOrigin = 'https://' . $host;
+                    $taskBase = 'https://' . $host . '/page/publish-task/';
                 }
             }
         } else {
@@ -378,14 +435,14 @@ final class PublishTaskService
             }
             $openid = trim((string)($staff[$staffId]['openid'] ?? ''));
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
-            $storeId = (int)($staff[$staffId]['store_id'] ?? 0);
-            $storeUrl = $storeId > 0 && $storeOrigin !== ''
-                ? $storeOrigin . '/storefront/' . $storeId : null;
+            $taskUrl = $taskBase !== '' && $appId && $openid !== ''
+                ? $taskBase . self::noticeToken($tenantId, (int)$runWhere['id'], $staffId, $runWhere['tasksn'], $appId, $openid)
+                : null;
 
             // 发送前保存状态，进程中断后可以识别可能已发送的通知。
             $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
             self::saveRecipientResults($runWhere, $results);
-            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId, $storeUrl);
+            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId, $taskUrl);
             self::saveRecipientResults($runWhere, $results);
         }
         return $results;
@@ -405,7 +462,7 @@ final class PublishTaskService
      *
      * @return array{last_run_status: string, last_error: string}
      */
-    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId, ?string $storeUrl): array
+    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId, ?string $taskUrl): array
     {
         if ($openid === '' || $appId === '') {
             return [
@@ -413,11 +470,11 @@ final class PublishTaskService
                 'last_error' => $appId === null ? '用户未绑定服务号' : '员工已删除或未绑定服务号',
             ];
         }
-        if ($appId !== null && $storeUrl === null) {
-            return ['last_run_status' => 'failed', 'last_error' => '无法生成门店链接，请检查员工所属门店和租户访问域名'];
+        if ($appId !== null && $taskUrl === null) {
+            return ['last_run_status' => 'failed', 'last_error' => '无法生成任务链接，请检查租户访问域名'];
         }
         try {
-            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content'], $storeUrl);
+            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content'], $taskUrl);
             return ['last_run_status' => 'sent', 'last_error' => ''];
         } catch (Throwable $e) {
             // 请求异常可能包含带 access_token 的 URL，只记录异常类型和错误码。
