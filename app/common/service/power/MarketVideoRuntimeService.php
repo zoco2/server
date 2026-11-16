@@ -570,7 +570,12 @@ class MarketVideoRuntimeService
                 if ($completed===[]&&$receipt!==null) $completed=self::videos($receipt,(int)$c['tenant_id'],(int)$c['user_id'],self::requiresDurableResultStorage((string)$context['app_task']['app_code']));
                 if ($completed!==[]) {
                     self::settle($consumptionId,$completed,(string)$c['upstream_request_id'],$taskId,$receipt??$summary);
-                    return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
+                    $c = AiConsumptionLog::findOrEmpty($consumptionId);
+                    // A saved video can precede its measured usage. Keep polling
+                    // the accepted task until settlement can actually finish.
+                    if (!in_array((string)$c['billing_status'], ['reserved', 'pending_usage'], true)) {
+                        return self::response($c->toArray());
+                    }
                 }
             } catch (\Throwable $e) {
                 self::recordRefreshError($consumptionId,$taskId,$e);
@@ -580,7 +585,7 @@ class MarketVideoRuntimeService
         if ($taskId === '' && ($receipt=(\app\common\service\app\aigc_micro_video\MicroVideoSubmission::receipt($c->toArray()) ?? \app\common\service\open_platform\OpenSubmission::receipt($c->toArray())))!==null) {
             try{
                 $videos=self::videos($receipt,(int)$c['tenant_id'],(int)$c['user_id'],self::requiresDurableResultStorage((string)$context['app_task']['app_code']));
-                if($videos!==[]){self::settle($consumptionId,$videos,self::requestId($receipt),'',$receipt);return ['status'=>'success','provider_task_id'=>'','videos'=>$videos];}
+                if($videos!==[]){self::settle($consumptionId,$videos,self::requestId($receipt),'',$receipt);return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());}
             }catch(\Throwable $e){self::recordRefreshError($consumptionId,'',$e);}
         }
         if ($taskId === '') {
@@ -616,11 +621,13 @@ class MarketVideoRuntimeService
                     $stored = self::arrayValue($c['response_summary'] ?? []);
                     $settleVideos = $videos !== [] ? $videos : (array)($stored['videos'] ?? []);
                     self::settle($consumptionId, $settleVideos, self::requestId($response), $taskId, $response);
+                    if (\app\common\service\app\aigc_micro_video\MicroVideoSubmission::applies($c->toArray())) return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
                     return ['status' => 'success', 'provider_task_id' => $taskId, 'videos' => $settleVideos];
                 }
                 $stored = self::arrayValue($c['response_summary'] ?? []);
                 $storedVideos = (array)($stored['videos'] ?? []);
                 if ($storedVideos !== []) {
+                    if (\app\common\service\app\aigc_micro_video\MicroVideoSubmission::applies($c->toArray())) return self::response(AiConsumptionLog::findOrEmpty($consumptionId)->toArray());
                     return ['status' => 'success', 'provider_task_id' => $taskId, 'videos' => $storedVideos];
                 }
             }
@@ -670,7 +677,34 @@ class MarketVideoRuntimeService
 
     private static function settle(int $consumptionId, array $videos, string $requestId, string $taskId, array $response): void
     {
-        Db::transaction(function () use ($consumptionId, $videos, $requestId, $taskId, $response) {
+        // Some providers return completed videos and points_cost, but no seconds.
+        // Probe the actual output outside the wallet transaction; requested duration
+        // and the upstream charge cannot establish our frozen SKU's measured usage.
+        $measuredDuration = 0.0;
+        $measurementError = '';
+        $before = self::context($consumptionId, false);
+        if ($before !== null) {
+            $c = $before['consumption'];
+            $snapshot = self::arrayValue($c['price_snapshot'] ?? []);
+            if (\app\common\service\app\aigc_micro_video\MicroVideoSubmission::applies($c->toArray())
+                && in_array((string)$c['billing_status'], ['reserved', 'pending_usage'], true)
+                && !empty($snapshot['requires_actual_duration']) && !self::isTokenSnapshot($snapshot)
+                && (self::openPlatformSettlementQuantity($snapshot, $response) ?? 0) <= 0 && $videos !== []) {
+                try {
+                    $seconds = 0.0;
+                    foreach ($videos as $video) {
+                        $seconds += \app\common\service\app\aigc_micro_video\MicroVideoMedia::measureDuration(
+                            (int)$c['tenant_id'], (int)$c['user_id'], (string)($video['video_uri'] ?? '')
+                        );
+                    }
+                    if (!is_finite($seconds) || $seconds <= 0) throw new Exception('生成视频实际时长无效');
+                    $measuredDuration = $seconds;
+                } catch (\Throwable $e) {
+                    $measurementError = mb_substr($e->getMessage(), 0, 1000);
+                }
+            }
+        }
+        Db::transaction(function () use ($consumptionId, $videos, $requestId, $taskId, $response, $measuredDuration, $measurementError) {
             $ctx = self::context($consumptionId, true); if ($ctx === null) return;
             $c = $ctx['consumption']; $task = $ctx['app_task']; if (!in_array((string)$c['billing_status'], ['reserved', 'pending_usage'], true)) return;
             $snapshot = self::arrayValue($c['price_snapshot'] ?? []);
@@ -679,17 +713,26 @@ class MarketVideoRuntimeService
             if (self::isTokenSnapshot($snapshot)) {
                 $usage['actual_quantity'] = MarketUsageSettlementService::tokenUsage($response);
             }
+            if ((float)($usage['actual_quantity'] ?? 0) <= 0 && $measuredDuration > 0) {
+                $usage['actual_quantity'] = $measuredDuration;
+                $usage['duration_source'] = 'generated_video_file';
+            }
             if ((self::isTokenSnapshot($snapshot) || !empty($snapshot['requires_actual_duration'])) && (float)($usage['actual_quantity'] ?? 0) <= 0) {
                 $now = time();
                 $usage['settlement_basis'] = 'awaiting_actual_usage';
-                $c->save(self::clearRefreshDiagnostics([
+                $state = self::clearRefreshDiagnostics([
                     'run_status' => 'success', 'billing_status' => !empty($snapshot['requires_actual_duration']) ? 'reserved' : 'pending_usage',
                     'upstream_request_id' => $requestId ?: (string)$c['upstream_request_id'],
                     'upstream_task_id' => $taskId ?: (string)$c['upstream_task_id'],
                     'usage_snapshot' => $usage,
-                    'response_summary' => ['video_count' => count($videos), 'videos' => $videos],
+                    'response_summary' => array_replace(self::arrayValue($c['response_summary']), ['video_count' => count($videos), 'videos' => $videos]),
                     'update_time' => $now,
-                ]));
+                ]);
+                if ($measurementError !== '') {
+                    $state['error_code'] = 'output_duration_retrying';
+                    $state['error_message'] = $measurementError;
+                }
+                $c->save($state);
                 $task->save(['status' => 'success', 'progress' => 100, 'finish_time' => $now, 'update_time' => $now]);
                 self::event((int)$c['id'], 'await_usage', 'pending', ['video_count' => count($videos)]);
                 return;
