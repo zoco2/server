@@ -92,7 +92,7 @@ final class MicroVideoContentPlanning
         if($contract['source_timeline']&&($contract['preserve_source_clocks']??true)){
             $boundaries=[0.];$offset=0.;
             foreach($segments as $segment){
-                preg_match_all('/^\h*(?:[-*#]+\h*)?[\[【]?-?\d+(?:\.\d+)?\h*(?:秒|s)?\h*[-–—~～至]\h*(\d+(?:\.\d+)?)/imu',$segment['prompt'],$ends);
+                preg_match_all('/^\h*(?:-+\h+|[*#]+\h*)?[\[【]?-?\d+(?:\.\d+)?\h*(?:秒|s)?\h*[-–—~～至]\h*(\d+(?:\.\d+)?)/imu',MicroVideoTimeline::normalize($segment['prompt']),$ends);
                 foreach($ends[1] as $end)$boundaries[]=$offset+(float)$end;
                 $offset+=$segment['duration'];$boundaries[]=$offset;
             }
@@ -102,15 +102,15 @@ final class MicroVideoContentPlanning
 
     private static function timing(string $prompt): array
     {
-        $text=str_replace(["\r\n","\r"],"\n",trim($prompt));
+        $text=MicroVideoTimeline::normalize($prompt);
         // Only explicit whole-work declarations, never prop numbers or a segment's own duration.
         $whole=preg_replace('/(?:本|该|每|上(?:一)?|下(?:一)?|第[0-9一二三四五六七八九十]+)段\h*(?:视频)?(?:总时长|时长|共)?\h*(?:为|是|：|:)?\h*\d+(?:\.\d+)?\h*(?:秒|s)/iu','',$text);
         preg_match_all('/(?:整片(?:总时长|时长)?|全片(?:总时长|时长)?|整体(?:总时长|时长)?|视频(?:总时长|时长)|总时长|整片共|全片共)\h*(?:为|是|：|:)?\h*(\d+(?:\.\d+)?)\h*(?:秒|s)/iu',$whole,$declared);
         preg_match_all('/(\d+(?:\.\d+)?)\h*秒(?:的)?(?:剧情)?(?:带货|商品|宣传|电商|口播)?(?:微视频|视频|短片|广告|宣传片)/u',$whole,$natural);
         $values=array_values(array_unique(array_map('floatval',array_merge($declared[1]??[],$natural[1]??[]))));
         if(count($values)>1)throw new InvalidArgumentException('提示词中整片总时长不一致，请先调整');
-        preg_match_all('/^\h*(?:[-*#]+\h*)?[\[【]?(?<start>-?\d+(?:\.\d+)?)\h*(?:秒|s)?\h*[-–—~～至]\h*(?<end>-?\d+(?:\.\d+)?)\h*(?:秒|s)[\]】]?\h*[:：]\h*(?<body>[^\r\n]*)$/imu',$text,$rows,PREG_SET_ORDER);
-        preg_match_all('/^\h*(?:[-*#]+\h*)?[\[【]?-?\d+(?:\.\d+)?\h*(?:秒|s)?\h*[-–—~～至]\h*-?\d+(?:\.\d+)?/imu',$text,$candidates);
+        preg_match_all('/^\h*(?:-+\h+|[*#]+\h*)?[\[【]?(?<start>-?\d+(?:\.\d+)?)\h*(?:秒|s)?\h*[-–—~～至]\h*(?<end>-?\d+(?:\.\d+)?)\h*(?:秒|s)[\]】]?\h*[:：]\h*(?<body>[^\r\n]*)$/imu',$text,$rows,PREG_SET_ORDER);
+        preg_match_all('/^\h*(?:-+\h+|[*#]+\h*)?[\[【]?-?\d+(?:\.\d+)?\h*(?:秒|s)?\h*[-–—~～至]\h*-?\d+(?:\.\d+)?/imu',$text,$candidates);
         if(count($rows)!==count($candidates[0]))throw new InvalidArgumentException('提示词时间轴格式不完整，请先调整镜头时间');
         $end=0.;$offset=0.;$shots=[];
         foreach($rows as $row){
