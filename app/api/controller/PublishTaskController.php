@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\api\controller;
 
+use app\common\service\publish_task\PublishTaskPublicLink;
 use app\common\service\publish_task\PublishTaskService;
 use InvalidArgumentException;
 use think\facade\Log;
@@ -12,6 +13,21 @@ use Throwable;
 /** 提供当前登录用户的任务发布和查询接口，由框架默认路由分发。 */
 final class PublishTaskController extends BaseApiController
 {
+    public array $notNeedLogin = ['detail'];
+
+    /** GET /api/publish_task/detail：打开员工收到的任务。 */
+    public function detail()
+    {
+        if ($this->request->method(true) !== 'GET') {
+            return $this->fail('请使用 GET 请求');
+        }
+        $token = $this->request->get('token');
+        $detail = is_string($token)
+            ? PublishTaskPublicLink::detail($token, (int)$this->request->tenantId) : null;
+        $response = $detail === null ? $this->fail('任务链接无效或已不可用') : $this->data($detail);
+        return $response->header(['Cache-Control' => 'private, no-store']);
+    }
+
     /** POST /api/publish_task/create：保存任务和首次执行时间。 */
     public function create()
     {

@@ -19,6 +19,7 @@ namespace app\common\http\middleware;
 use app\common\model\merchant\MerchantStore;
 use app\common\model\tenant\Tenant;
 use app\common\service\JsonService;
+use app\common\service\publish_task\PublishTaskPublicLink;
 use app\common\service\tenant\TenantContractService;
 use app\common\service\tenant\TenantDomainAliasService;
 use app\common\service\tenant\TenantUrlService;
@@ -211,6 +212,10 @@ class LikeAdminAllowMiddleware
         if (!$tenantId && in_array($domain, TenantUrlService::platformHosts(), true)) {
             $tenantId = $this->findPublicStorefrontTenantId($request);
             $resolveMode = 'public_storefront';
+            if (!$tenantId) {
+                $tenantId = $this->findPublicTaskTenantId($request);
+                $resolveMode = 'public_publish_task';
+            }
         }
 
         if ($tenantId) {
@@ -255,6 +260,22 @@ class LikeAdminAllowMiddleware
 
         // 门店表以 ID 为主键，查询发生在租户上下文建立之前。
         return (int)MerchantStore::where('id', $storeId)->where('status', 1)->value('tenant_id');
+    }
+
+    /** 共享域名的任务页和只读接口通过通知链接识别租户。 */
+    private function findPublicTaskTenantId($request): int
+    {
+        $path = trim((string)$request->baseUrl(), '/');
+        $method = $request->method(true);
+        if (in_array($method, ['GET', 'HEAD'], true)
+            && preg_match('#^publish-task/(' . PublishTaskPublicLink::TOKEN_PATTERN . ')$#D', $path, $matches)) {
+            return PublishTaskPublicLink::tenantId($matches[1]);
+        }
+        if ($method === 'GET' && preg_match('#^(?:index\.php/)?api/publish_task/detail$#iD', $path)) {
+            $token = $request->get('token');
+            return is_string($token) ? PublishTaskPublicLink::tenantId($token) : 0;
+        }
+        return 0;
     }
 
     private function resolveTenantFromPayload(Tenant $tenantModel, $request): void

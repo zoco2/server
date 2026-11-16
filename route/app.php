@@ -117,6 +117,12 @@ Route::get('t/:tenant_id/wechat/callback', function () use ($tenantFrontendRedir
     return $tenantFrontendRedirect('', 'wechat/callback');
 })->pattern(['tenant_id' => '\d+'])->completeMatch();
 
+// 员工任务链接只在独立页面处理，避免把链接带到外部平台。
+Route::rule('publish-task/:token', function () {
+    return view(app()->getRootPath() . 'public/pc/index.html')
+        ->header(['Cache-Control' => 'private, no-store', 'Referrer-Policy' => 'no-referrer']);
+}, 'GET|HEAD')->pattern(['token' => \app\common\service\publish_task\PublishTaskPublicLink::TOKEN_PATTERN])->completeMatch();
+
 // Shared root and tenant-prefix PC routes; API/admin/callback routes stay separate.
 $pcFrontendPath = '(ai|app|account|user|page|policy|products|scenes|cases|pricing|official|join-opc|docs|storefront|merchant)(/.*)?';
 

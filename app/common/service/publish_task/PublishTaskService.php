@@ -149,6 +149,10 @@ final class PublishTaskService
             }
             // 接收人按员工 ID 索引，键 0 表示创建计划的用户。
             $results = json_decode($run['recipient_results'] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+            foreach ($results as &$recipient) {
+                unset($recipient['public_link_hash']);
+            }
+            unset($recipient);
             $run['recipient_results'] = (object)$results;
             $staffIds = array_merge($staffIds, array_keys($results));
         }
@@ -299,7 +303,8 @@ final class PublishTaskService
             // 中断时只有正在发送的员工结果未知，已记录的结果继续保留。
             foreach ($results as &$recipient) {
                 if ($recipient['last_run_status'] === 'sending') {
-                    $recipient = ['last_run_status' => 'unknown', 'last_error' => '发送进程中断，无法确认微信是否接收'];
+                    $recipient['last_run_status'] = 'unknown';
+                    $recipient['last_error'] = '发送进程中断，无法确认微信是否接收';
                 }
             }
             unset($recipient);
@@ -313,7 +318,7 @@ final class PublishTaskService
                 $result = ['last_run_status' => 'sent', 'last_error' => ''];
                 foreach ($results as $recipient) {
                     if ($recipient['last_run_status'] !== 'sent') {
-                        $result = $recipient;
+                        $result = ['last_run_status' => $recipient['last_run_status'], 'last_error' => $recipient['last_error']];
                         if ($result['last_run_status'] === 'unknown') {
                             break;
                         }
@@ -348,18 +353,18 @@ final class PublishTaskService
     /** 同一轮逐个发送，重试时继续处理没有发送记录的人。 */
     private static function sendRun(array $runWhere, array $task, int $tenantId, int $userId, array $results): array
     {
-        $storeOrigin = '';
+        $siteOrigin = '';
         if (isset($task['staff_ids'])) {
             $staffIds = json_decode($task['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
-                ->column('openid,appid,store_id', 'id');
+                ->column('openid,appid', 'id');
             // Job 没有 HTTP 请求域名，从租户配置的访问地址取域名。
             $tenant = Tenant::where('id', $tenantId)->findOrEmpty();
             if (!$tenant->isEmpty()) {
                 $pcUrl = TenantUrlService::links($tenant->getData())['current']['pc'];
                 $host = TenantUrlService::normalizeHost($pcUrl);
                 if ($host !== '' && !str_ends_with($host, '.') && filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) {
-                    $storeOrigin = 'https://' . $host;
+                    $siteOrigin = 'https://' . $host;
                 }
             }
         } else {
@@ -378,14 +383,18 @@ final class PublishTaskService
             }
             $openid = trim((string)($staff[$staffId]['openid'] ?? ''));
             $appId = $staffId === 0 ? null : trim((string)($staff[$staffId]['appid'] ?? ''));
-            $storeId = (int)($staff[$staffId]['store_id'] ?? 0);
-            $storeUrl = $storeId > 0 && $storeOrigin !== ''
-                ? $storeOrigin . '/storefront/' . $storeId : null;
+            $taskUrl = null;
+            $link = [];
+            if ($staffId !== 0 && $openid !== '' && $appId !== '' && $siteOrigin !== '') {
+                [$token, $hash] = PublishTaskPublicLink::create($tenantId, (int)$runWhere['id'], $staffId, $appId, $openid);
+                $taskUrl = $siteOrigin . '/publish-task/' . $token;
+                $link = ['public_link_hash' => $hash];
+            }
 
-            // 发送前保存状态，进程中断后可以识别可能已发送的通知。
-            $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''];
+            // 在发送前保存链接校验值和发送状态，员工收到通知后即可打开。
+            $results[$staffId] = ['last_run_status' => 'sending', 'last_error' => ''] + $link;
             self::saveRecipientResults($runWhere, $results);
-            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId, $storeUrl);
+            $results[$staffId] = self::notify($task, $tenantId, $userId, $openid, $appId, $taskUrl) + $link;
             self::saveRecipientResults($runWhere, $results);
         }
         return $results;
@@ -405,7 +414,7 @@ final class PublishTaskService
      *
      * @return array{last_run_status: string, last_error: string}
      */
-    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId, ?string $storeUrl): array
+    private static function notify(array $task, int $tenantId, int $userId, string $openid, ?string $appId, ?string $taskUrl): array
     {
         if ($openid === '' || $appId === '') {
             return [
@@ -413,11 +422,11 @@ final class PublishTaskService
                 'last_error' => $appId === null ? '用户未绑定服务号' : '员工已删除或未绑定服务号',
             ];
         }
-        if ($appId !== null && $storeUrl === null) {
-            return ['last_run_status' => 'failed', 'last_error' => '无法生成门店链接，请检查员工所属门店和租户访问域名'];
+        if ($appId !== null && $taskUrl === null) {
+            return ['last_run_status' => 'failed', 'last_error' => '无法生成任务链接，请检查租户访问域名'];
         }
         try {
-            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content'], $storeUrl);
+            StaffWechatBindingLogic::sendTaskNotice($tenantId, $openid, $appId, (string)$task['content'], $taskUrl);
             return ['last_run_status' => 'sent', 'last_error' => ''];
         } catch (Throwable $e) {
             // 请求异常可能包含带 access_token 的 URL，只记录异常类型和错误码。
