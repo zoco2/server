@@ -1,7 +1,7 @@
 -- 第二阶段：平台将已有 NFC 码牌分配给指定租户。
 -- 先执行第一阶段建表脚本；默认表前缀 la_，手动执行时按站点配置替换。
 -- 逐项检测缺失字段及索引，允许重复执行，并保留全部已有编号和批次。
--- 本阶段不添加 user_id，后续通过门店绑定建立商家关系。
+-- 预留 store_id 记录门店绑定，不添加 user_id；绑定接口后续单独提交。
 
 -- NULL 表示仍在平台库存，非空表示归属于该租户。
 SET @nfc_alter = IF(
@@ -9,6 +9,18 @@ SET @nfc_alter = IF(
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_merchant_nfc_code' AND COLUMN_NAME = 'tenant_id'),
   'SELECT 1',
   'ALTER TABLE `la_merchant_nfc_code` ADD COLUMN `tenant_id` int unsigned DEFAULT NULL COMMENT ''所属租户，NULL 表示未分配'' AFTER `batch_no`'
+);
+PREPARE nfc_statement FROM @nfc_alter;
+EXECUTE nfc_statement;
+DEALLOCATE PREPARE nfc_statement;
+
+-- 门店尚未绑定时保持 NULL，绑定后记录 merchant_store 的主键。
+-- 不能设为唯一字段：同一门店允许绑定多块码牌。
+SET @nfc_alter = IF(
+  EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_merchant_nfc_code' AND COLUMN_NAME = 'store_id'),
+  'SELECT 1',
+  'ALTER TABLE `la_merchant_nfc_code` ADD COLUMN `store_id` bigint unsigned DEFAULT NULL COMMENT ''绑定门店 ID，NULL 表示未绑定'' AFTER `tenant_id`'
 );
 PREPARE nfc_statement FROM @nfc_alter;
 EXECUTE nfc_statement;
@@ -42,6 +54,18 @@ SET @nfc_alter = IF(
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_merchant_nfc_code' AND INDEX_NAME = 'idx_nfc_tenant'),
   'SELECT 1',
   'ALTER TABLE `la_merchant_nfc_code` ADD KEY `idx_nfc_tenant` (`tenant_id`, `id`)'
+);
+PREPARE nfc_statement FROM @nfc_alter;
+EXECUTE nfc_statement;
+DEALLOCATE PREPARE nfc_statement;
+
+-- 按“当前租户 + 门店”读取绑定记录，支持分表租户出现相同门店主键的情况。
+-- 使用普通复合索引，不限制一个门店可以关联的码牌数量。
+SET @nfc_alter = IF(
+  EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'la_merchant_nfc_code' AND INDEX_NAME = 'idx_nfc_store'),
+  'SELECT 1',
+  'ALTER TABLE `la_merchant_nfc_code` ADD KEY `idx_nfc_store` (`tenant_id`, `store_id`, `id`)'
 );
 PREPARE nfc_statement FROM @nfc_alter;
 EXECUTE nfc_statement;

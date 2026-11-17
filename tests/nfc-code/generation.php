@@ -62,12 +62,15 @@ namespace {
         code TEXT NOT NULL UNIQUE,
         batch_no TEXT NOT NULL,
         tenant_id INTEGER DEFAULT NULL,
+        store_id INTEGER DEFAULT NULL,
         created_admin_id INTEGER NOT NULL,
         tenant_assigned_admin_id INTEGER DEFAULT NULL,
         tenant_assigned_at INTEGER DEFAULT NULL,
         create_time INTEGER NOT NULL,
         update_time INTEGER NOT NULL
     )');
+    // 与 MySQL 结构一致使用普通索引，允许同一租户、同一门店对应多条库存记录。
+    $connection->execute('CREATE INDEX idx_nfc_store ON la_merchant_nfc_code (tenant_id, store_id, id)');
     // 每个数值是服务字符表中的下标，下面的碰撞用例会填充确定的序列。
     $GLOBALS['nfc_random_values'] = [];
 
@@ -124,6 +127,7 @@ namespace {
     foreach ($rows as $row) {
         same(1, preg_match('/\A(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{6}\z/', $row['code']), 'Code format');
         same(8, (int)$row['created_admin_id'], 'Creating administrator retained');
+        same(null, $row['store_id'], 'Generated stock starts without a store binding');
     }
 
     // 通过小批次验证“总数先过滤再分页”、主键倒序及 create_time 整数类型。

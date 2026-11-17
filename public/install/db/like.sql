@@ -14820,6 +14820,8 @@ CREATE TABLE IF NOT EXISTS `la_merchant_nfc_code` (
   `batch_no` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   -- 未分配时为空；分配后记录目标租户，不单独记录用户 ID。
   `tenant_id` int unsigned DEFAULT NULL COMMENT '所属租户，NULL 表示未分配',
+  -- 门店绑定预留字段，未绑定时为空；一店多码，不对门店 ID 加唯一约束。
+  `store_id` bigint unsigned DEFAULT NULL COMMENT '绑定门店 ID，NULL 表示未绑定',
   -- 取自平台登录态中的管理员 ID，追溯生成来源，不接受客户端指定。
   `created_admin_id` int unsigned NOT NULL,
   -- 记录租户分配的操作管理员及 Unix 秒时间，便于平台审计。
@@ -14834,7 +14836,9 @@ CREATE TABLE IF NOT EXISTS `la_merchant_nfc_code` (
   -- 支持按批次过滤后按主键顺序分页，不将批次号本身设为唯一键。
   KEY `idx_batch` (`batch_no`, `id`),
   -- 一个租户可拥有多块码牌，索引不设置唯一约束。
-  KEY `idx_nfc_tenant` (`tenant_id`, `id`)
+  KEY `idx_nfc_tenant` (`tenant_id`, `id`),
+  -- 同时限定租户与门店，避免跨租户门店主键重复造成关联混淆。
+  KEY `idx_nfc_store` (`tenant_id`, `store_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家 NFC 码牌';
 
 -- 在平台现有“租户管理”根目录下增加 NFC 列表菜单，C 表示页面菜单。

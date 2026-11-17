@@ -54,6 +54,7 @@ same(array_column($before, 'batch_no'), array_column($assigned, 'batch_no'), 'As
 foreach ($assigned as $row) {
     same(1, (int)$row['tenant_id'], 'Selected stock belongs to the target tenant');
     same(7, (int)$row['tenant_assigned_admin_id'], 'Assignment administrator is recorded');
+    same(null, $row['store_id'], 'Tenant assignment does not bind a store');
     same(true, (int)$row['tenant_assigned_at'] > 0, 'Assignment timestamp is recorded');
 }
 same($assigned[0]['tenant_assigned_at'], $assigned[1]['tenant_assigned_at'], 'One assignment shares one timestamp');
@@ -81,5 +82,10 @@ $history = NfcCodeService::adminLists(['status' => 'assigned']);
 same(2, $history['count'], 'Deleting tenant preserves stock history');
 same('', $history['lists'][0]['tenant_name'], 'Deleted tenant name is hidden');
 same(1, (int)$history['lists'][0]['tenant_id'], 'Historical tenant ID is retained');
+
+// 仅通过模型写入测试夹具，验证表结构支持同一门店关联多块码牌。
+// 此处不是门店激活接口测试，门店所属用户和租户的绑定校验留待下一阶段实现。
+NfcCode::whereIn('id', [$ids[0], $ids[1]])->update(['store_id' => 88]);
+same(2, NfcCode::where(['tenant_id' => 1, 'store_id' => 88])->count(), 'One store can be linked to multiple codes');
 
 echo "PASS NFC tenant choices, assignment validation, audit, ownership, filtering and atomic rollback\n";
