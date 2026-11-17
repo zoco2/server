@@ -34,9 +34,7 @@ class BaseModel extends Model
     private static bool $hasTenantId = false;
 
     // 不需要检查分表的范围
-    // merchant_nfc_code 是平台统一库存，所有编号在同一张表内判重，不按租户追加分表后缀。
-    // 此名单只跳过分表判断，后续表若有 tenant_id，仍会执行下方的租户条件过滤。
-    private static $notCheckTables = ['tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config', 'hot_search', 'operation_log', 'pc_feedback', 'merchant_nfc_code'];
+    private static $notCheckTables = ['tenant', 'recharge_order', 'refund_record', 'official_account_reply', 'config', 'hot_search', 'operation_log', 'pc_feedback'];
 
     /**
      * @notes 公共处理图片，补全路径

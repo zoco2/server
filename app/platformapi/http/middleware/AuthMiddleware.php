@@ -57,17 +57,13 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
-        // NFC 控制器在此处表现为 merchant.NfcCode，转小写后匹配 merchant.nfccode/。
-        // 库存接口必须检查当前管理员权限，即使菜单未同步或权限缓存缺少该 URI，
-        // 也不能落入下方“未登记 URI 默认放行”的兼容逻辑。
-        $nfcCodeAction = str_starts_with($accessUri, 'merchant.nfccode/');
         $marketPricingAction = in_array($accessUri, ['power.market/pricingrules', 'power.market/previewpricing', 'power.market/applypricing'], true);
         if ($marketPricingAction) $accessUri = 'power.market/saveprices';
         // 全部路由
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$nfcCodeAction && !$marketPricingAction && !in_array($accessUri, $allUri)) {
+        if (!$marketPricingAction && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
