@@ -3,8 +3,10 @@
 namespace app\platformapi\controller\merchant;
 
 use app\common\service\merchant\NfcCodeService;
+use app\common\cache\AdminAuthCache;
 use app\platformapi\controller\BaseAdminController;
 use DomainException;
+use think\helper\Str;
 
 /**
  * 平台后台的 NFC 码牌入口，负责请求和响应，业务校验及库存操作由服务处理。
@@ -34,7 +36,8 @@ class NfcCodeController extends BaseAdminController
     /**
      * POST /platformapi/merchant.nfc_code/generate
      *
-     * 请求 quantity 为 1 至 1000 的整数；成功返回 batch_no 和实际生成数量 quantity。
+     * quantity 为 1 至 1000 的整数，tenant_id 可选，选择时生成并直接分配。
+     * 成功返回 batch_no、quantity 和实际归属 tenant_id（未分配时为 NULL）。
      * 使用当前登录态中的 adminId 记录来源，保留 quantity 原始类型交给服务严格校验。
      *
      * @return \think\response\Json
@@ -46,8 +49,18 @@ class NfcCodeController extends BaseAdminController
             return $this->fail('请使用 POST 请求');
         }
         try {
+            $tenantId = $this->request->post('tenant_id');
+            // 生成接口原本只要求生成权限；选择租户时还需具备既有分配权限。
+            // 此检查只约束 NFC 业务入口，不更改公共权限中间件。
+            if ($tenantId !== null && $tenantId !== '' && (int)($this->adminInfo['root'] ?? 0) !== 1) {
+                $uris = (new AdminAuthCache($this->adminId))->getAdminUri() ?? [];
+                $normalized = array_map(static fn ($uri) => strtolower(Str::camel((string)$uri)), $uris);
+                if (!in_array('merchant.nfccode/assigntenant', $normalized, true)) {
+                    return $this->fail('权限不足，无法分配给租户');
+                }
+            }
             // 平台请求层会解包响应中的 data，前端可直接读取 batch_no 和 quantity。
-            return $this->success('生成成功', NfcCodeService::generate($this->adminId, $this->request->post('quantity')));
+            return $this->success('生成成功', NfcCodeService::generate($this->adminId, $this->request->post('quantity'), $tenantId));
         } catch (DomainException $error) {
             return $this->fail($error->getMessage());
         }

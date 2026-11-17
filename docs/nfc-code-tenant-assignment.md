@@ -2,6 +2,8 @@
 
 平台在 NFC 列表中勾选未分配码牌，点击“分配给租户”，按名称或 ID 搜索有效租户并确认。列表展示分配状态、所属租户和分配时间。已经分配的码牌不能再次勾选；翻页或重新查询会清空勾选，弹窗打开时固定本次待分配 ID。
 
+批量生成时也可选择租户。该项可清空，不选时生成平台库存；选择后在生成事务内校验并锁定租户，直接写入归属和分配审计。任一写入分块失败会回滚整个批次，不会留下“已生成但分配失败”的半成品。选择租户需要既有的分配权限；只具备生成权限的管理员仍可生成平台库存。
+
 ## 数据及校验
 
 码牌表在第一阶段基础上新增 `tenant_id`、`store_id`、`tenant_assigned_admin_id` 和 `tenant_assigned_at`。`tenant_id IS NULL` 表示平台库存，非空表示已分配。`store_id` 为可空的无符号 bigint，记录绑定的门店 ID，尚未绑定时为 NULL。普通复合索引 `idx_nfc_store (tenant_id, store_id, id)` 支持一店多码，不对门店 ID 添加唯一约束。
@@ -19,6 +21,7 @@
 - `GET /platformapi/merchant.nfc_code/lists`：保留原查询，新增 `status=unassigned|assigned` 筛选，记录增加 `tenant_id`、`tenant_name`、`tenant_assigned_at`。
 - `GET /platformapi/merchant.nfc_code/tenantChoices?keyword=名称或ID`：最多返回 30 个有效租户，仅包含 `id` 和 `name`。需要权限 `merchant.nfc_code/tenantChoices`。
 - `POST /platformapi/merchant.nfc_code/assignTenant`：请求 `{ "ids": [1, 2], "tenant_id": 3 }`，成功返回 `{ "quantity": 2 }`。需要权限 `merchant.nfc_code/assignTenant`。
+- `POST /platformapi/merchant.nfc_code/generate`：请求 `{ "quantity": 100, "tenant_id": 3 }` 可生成并分配；不传 `tenant_id`、传 NULL 或空字符串时不分配。响应增加实际归属 `tenant_id`（未分配为 NULL）。选择租户时额外校验 `merchant.nfc_code/assignTenant` 权限。
 
 操作管理员从登录态获取，不能由客户端指定。租户选项和分配分别登记菜单权限，管理员角色需要同时勾选“分配给租户”和“租户选项查询”。
 
@@ -29,3 +32,5 @@
 安装 Composer 依赖并启用 `pdo_sqlite` 后，运行 `php tests/nfc-code/tenant-assignment.php`。测试在内存库中覆盖生成回归、选择参数校验、有效租户搜索、软删除、分配审计、重复分配、整批冲突回滚和列表筛选。真实 MySQL 的并发竞争和迁移执行需在目标环境联调。
 
 平台作用域回归运行 `php tests/nfc-code/platform-scope.php`，覆盖携带目标租户上下文时的分配、跨租户库存查询、分表目标以及租户端/用户端仍受隔离。
+
+可选租户生成回归运行 `php tests/nfc-code/generate-with-tenant.php`，覆盖空选择、有效及无效目标租户、分配审计和跨分块失败时的整批回滚。此功能复用已有字段，无需新增数据库迁移。
