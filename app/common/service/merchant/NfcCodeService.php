@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace app\common\service\merchant;
 
 use app\common\model\merchant\NfcCode;
+use app\common\model\tenant\Tenant;
 use DomainException;
 use think\db\exception\PDOException;
 
 /**
- * 第一阶段的平台 NFC 库存服务。
+ * 平台 NFC 库存服务，负责生成、查询和分配给指定租户。
  *
  * 编号生成沿用项目 SN 的“先查库判重”思路；批内集合去重减少无效写入，
  * 唯一索引处理查库后到写入前的并发竞争。所有库存操作通过 NfcCode 模型完成。
@@ -125,9 +126,9 @@ final class NfcCodeService
     }
 
     /**
-     * 平台库存分页，编号和批次都采用精确匹配，未填写的条件不参与查询。
+     * 平台库存分页，支持编号、批次和租户分配状态筛选。
      *
-     * @param array $input 请求查询参数：code、batch_no、page_no、page_size
+     * @param array $input 请求查询参数：code、batch_no、status、page_no、page_size
      * @return array{count: int, lists: array, page_no: int, page_size: int}
      * @throws DomainException 编号格式、页码或每页数量无效
      */
@@ -142,18 +143,118 @@ final class NfcCodeService
         if ($batch !== '') {
             $query->where('batch_no', $batch);
         }
+        // 状态由 tenant_id 是否为空推导，避免另存状态字段后与实际归属不一致。
+        $status = $input['status'] ?? '';
+        if ($status === 'unassigned') {
+            $query->whereNull('tenant_id');
+        } elseif ($status === 'assigned') {
+            $query->whereNotNull('tenant_id');
+        } elseif ($status !== '') {
+            throw new DomainException('分配状态无效');
+        }
         // 限制分页边界，单页最多 100 条，默认从第一页读取 20 条。
         $page = min(1000000, self::positiveId($input['page_no'] ?? 1, '页码无效'));
         $size = min(100, self::positiveId($input['page_size'] ?? 20, '每页数量无效'));
-        return [
+        $result = [
             // 克隆查询分别执行总数和分页，保证统计不带分页限制并复用同一组筛选条件。
             'count' => (clone $query)->count(),
-            // 主键倒序展示最新生成记录，只返回第一阶段的库存字段。
-            'lists' => $query->field('id,code,batch_no,created_admin_id,create_time')
+            // 主键倒序展示最新记录，分配时间和归属供平台核对分配结果。
+            'lists' => $query->field('id,code,batch_no,created_admin_id,create_time,tenant_id,tenant_assigned_at')
                 ->order('id', 'desc')->page($page, $size)->select()->toArray(),
             'page_no' => $page,
             'page_size' => $size,
         ];
+        // 一次查询本页关联的租户名称，避免每行单独访问租户表。
+        // 已删除租户不再提供名称，但保留库存上的租户 ID，防止历史归属丢失。
+        $tenantIds = array_values(array_unique(array_filter(array_column($result['lists'], 'tenant_id'))));
+        $names = $tenantIds === [] ? [] : Tenant::whereIn('id', $tenantIds)->column('name', 'id');
+        foreach ($result['lists'] as &$row) {
+            $row['tenant_name'] = $names[$row['tenant_id']] ?? '';
+        }
+        unset($row);
+        return $result;
+    }
+
+    /**
+     * 批量把未分配码牌交给指定租户，整批操作成功或整批回滚。
+     *
+     * @param int $adminId 当前平台管理员，来自登录态
+     * @param array $input ids 为 1 至 1000 个码牌主键，tenant_id 为目标租户
+     * @return array{quantity: int} 本次实际分配的码牌数量，重复 ID 合并计算
+     * @throws DomainException 参数无效、租户不可用，或任一码牌已被分配/不存在
+     */
+    public static function assignTenant(int $adminId, array $input): array
+    {
+        self::positiveId($adminId, '缺少平台管理员');
+        $ids = self::selectedIds($input['ids'] ?? null);
+        $tenantId = self::positiveId($input['tenant_id'] ?? null, '请选择租户');
+        $connection = NfcCode::query()->getConnection();
+
+        return $connection->transaction(static function () use ($adminId, $ids, $tenantId): array {
+            // 使用现有租户模型，沿用软删除过滤；行锁防止校验后租户被同时停用或删除。
+            $tenant = Tenant::where(['id' => $tenantId, 'disable' => 0])->lock(true)->findOrEmpty();
+            if ($tenant->isEmpty()) {
+                throw new DomainException('租户不存在、已停用或已删除');
+            }
+
+            $now = time();
+            // 条件更新同时检查“未分配”，并发请求不能覆盖先前成功写入的租户归属。
+            // 若请求包含无效/已分配 ID，可能只更新部分行，下方数量检查会回滚全部修改。
+            $updated = NfcCode::whereIn('id', $ids)->whereNull('tenant_id')->update([
+                'tenant_id' => $tenantId,
+                'tenant_assigned_admin_id' => $adminId,
+                'tenant_assigned_at' => $now,
+                'update_time' => $now,
+            ]);
+            if ($updated !== count($ids)) {
+                throw new DomainException('部分码牌不存在或已分配，请刷新后重试');
+            }
+            return ['quantity' => $updated];
+        });
+    }
+
+    /**
+     * 查询分配弹窗中的有效租户选项，仅返回 ID 和名称。
+     *
+     * @param string $keyword 租户名称；纯正整数还会按租户 ID 匹配
+     * @return array 最多 30 个选项，更多租户可通过输入名称或 ID 搜索
+     */
+    public static function tenantChoices(string $keyword = ''): array
+    {
+        $keyword = trim($keyword);
+        $query = Tenant::where('disable', 0);
+        if ($keyword !== '') {
+            $query->where(static function ($search) use ($keyword): void {
+                $search->whereLike('name', '%' . $keyword . '%');
+                // 只把有效整数加入 ID 分支，不对任意字符串执行隐式数值转换。
+                $id = filter_var($keyword, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                if ($id !== false) {
+                    $search->whereOr('id', $id);
+                }
+            });
+        }
+        return $query->field('id,name')->order('id', 'desc')->limit(30)->select()->toArray();
+    }
+
+    /**
+     * 校验分配操作中的码牌列表，拒绝非列表输入和无效 ID，合并重复选择。
+     * 排序后执行批量更新，减少并发操作以不同顺序竞争库存记录的情况。
+     *
+     * @param mixed $values 客户端提交的库存主键列表，不接收任意查询条件
+     * @return list<int> 不重复且升序的库存主键
+     * @throws DomainException 未选择、超过上限或包含非法 ID
+     */
+    private static function selectedIds(mixed $values): array
+    {
+        if (!is_array($values) || !array_is_list($values) || $values === [] || count($values) > self::MAX_BATCH_SIZE) {
+            throw new DomainException('请选择 1 至 1000 块码牌');
+        }
+        $ids = array_values(array_unique(array_map(
+            static fn (mixed $value): int => self::positiveId($value, '码牌 ID 无效'),
+            $values
+        )));
+        sort($ids, SORT_NUMERIC);
+        return $ids;
     }
 
     /**

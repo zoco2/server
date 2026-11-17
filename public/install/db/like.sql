@@ -14806,9 +14806,9 @@ CREATE TABLE IF NOT EXISTS `la_merchant_copy` (
   KEY `idx_owner` (`tenant_id`, `user_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家文案库';
 
--- 第一阶段：平台统一生成 NFC 码牌库存。
+-- 平台统一生成 NFC 码牌库存，并可分配给指定租户。
 -- 默认表前缀为 la_，手动执行时需与目标站点配置一致。
--- 此处只建平台库存，不提前引入租户归属、分配和激活字段；后续阶段需增量迁移。
+-- 新装站点包含租户分配字段；已有第一阶段表需执行第二阶段的增量迁移。
 -- IF NOT EXISTS 让重复执行跳过已有表，但不会修复或修改一个已有表的字段。
 CREATE TABLE IF NOT EXISTS `la_merchant_nfc_code` (
   -- 内部自增主键，供库存排序与后续关联使用，不是面向商家的六位 code。
@@ -14818,8 +14818,15 @@ CREATE TABLE IF NOT EXISTS `la_merchant_nfc_code` (
   `code` char(6) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   -- 同一次生成共用的批次号：NFC + 日期时间 + 随机后缀，便于整批查询与核对。
   `batch_no` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  -- 未分配时为空；分配后记录目标租户，不单独记录用户 ID。
+  `tenant_id` int unsigned DEFAULT NULL COMMENT '所属租户，NULL 表示未分配',
+  -- 门店绑定预留字段，未绑定时为空；一店多码，不对门店 ID 加唯一约束。
+  `store_id` bigint unsigned DEFAULT NULL COMMENT '绑定门店 ID，NULL 表示未绑定',
   -- 取自平台登录态中的管理员 ID，追溯生成来源，不接受客户端指定。
   `created_admin_id` int unsigned NOT NULL,
+  -- 记录租户分配的操作管理员及 Unix 秒时间，便于平台审计。
+  `tenant_assigned_admin_id` int unsigned DEFAULT NULL COMMENT '执行租户分配的平台管理员',
+  `tenant_assigned_at` int unsigned DEFAULT NULL COMMENT '分配时间，Unix 秒',
   -- 时间统一存 Unix 秒；同批写入使用同一时刻，前端显示时换算为毫秒。
   `create_time` int unsigned NOT NULL,
   `update_time` int unsigned NOT NULL,
@@ -14827,7 +14834,11 @@ CREATE TABLE IF NOT EXISTS `la_merchant_nfc_code` (
   -- 即使两个请求查库时都认为编号可用，也只能有一个成功插入，防止并发重复。
   UNIQUE KEY `uk_merchant_nfc_code` (`code`),
   -- 支持按批次过滤后按主键顺序分页，不将批次号本身设为唯一键。
-  KEY `idx_batch` (`batch_no`, `id`)
+  KEY `idx_batch` (`batch_no`, `id`),
+  -- 一个租户可拥有多块码牌，索引不设置唯一约束。
+  KEY `idx_nfc_tenant` (`tenant_id`, `id`),
+  -- 同时限定租户与门店，避免跨租户门店主键重复造成关联混淆。
+  KEY `idx_nfc_store` (`tenant_id`, `store_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商家 NFC 码牌';
 
 -- 在平台现有“租户管理”根目录下增加 NFC 列表菜单，C 表示页面菜单。
@@ -14850,3 +14861,13 @@ SELECT p.id,'A','批量生成','',0,'merchant.nfc_code/generate','','','','',0,0
 FROM `la_system_menu` p
 WHERE p.source_menu_key='core_platform_merchant_nfc_code'
   AND NOT EXISTS (SELECT 1 FROM `la_system_menu` e WHERE e.perms='merchant.nfc_code/generate');
+
+-- 分配接口和租户选项查询都登记为现有 NFC 页面下的操作权限。
+-- 角色需同时授权这两项；无需修改公共中间件来映射或特判接口。
+INSERT INTO `la_system_menu`
+  (pid,type,name,icon,sort,perms,paths,component,selected,params,is_cache,is_show,is_disable,app_code,source,source_menu_key,is_core,create_time,update_time)
+SELECT p.id,'A',a.label,'',0,CONCAT('merchant.nfc_code/',a.action_name),'','','','',0,0,0,'','core',CONCAT('core_platform_merchant_nfc_code_',a.action_name),1,UNIX_TIMESTAMP(),UNIX_TIMESTAMP()
+FROM `la_system_menu` p
+CROSS JOIN (SELECT 'assignTenant' AS action_name, '分配给租户' AS label UNION ALL SELECT 'tenantChoices','租户选项查询') a
+WHERE p.source_menu_key='core_platform_merchant_nfc_code'
+  AND NOT EXISTS (SELECT 1 FROM `la_system_menu` e WHERE e.perms=CONCAT('merchant.nfc_code/',a.action_name));
