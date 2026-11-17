@@ -11,7 +11,7 @@ use app\common\enum\AdminTerminalEnum;
  * 平台统一生成的 NFC 码牌库存，支持查询及分配给指定租户。
  *
  * 沿用 BaseModel 的模型连接和查询入口，在平台请求上下文中访问统一库存。
- * 平台端访问统一库存；其他终端继续沿用公共基类的租户作用域，不修改核心规则。
+ * 平台端访问统一库存；用户端仅访问当前租户已获分配的码牌，不修改核心规则。
  * 码牌记录租户归属，预留 store_id 用于门店绑定，不在库存中重复保存用户 ID。
  *
  * @property int $id 库存记录主键，与面向商家使用的六位 code 不同
@@ -39,7 +39,8 @@ final class NfcCode extends BaseModel
      * 公共中间件会把请求 tenant_id 解析到 request()->tenantId，即使来源是平台端。
      * 平台需要查询所有租户及未分配库存，因此仅在本 NFC 模型的平台查询中跳过租户范围；
      * 否则分配更新会同时要求 tenant_id 等于目标租户且为空，造成零行更新。
-     * 租户端和用户端仍调用父类，保留现有租户隔离及分表行为。
+     * 码牌由平台统一生成，始终存放在共享库存表，不按租户追加表名后缀。
+     * 非平台端明确限制当前 tenant_id；缺少有效租户时使用 0，无法匹配任何合法归属。
      *
      * @param \think\db\Query $query 模型查询对象，沿用继承的 tenantId 全局作用域入口
      */
@@ -48,6 +49,6 @@ final class NfcCode extends BaseModel
         if (AdminTerminalEnum::isPlatform()) {
             return;
         }
-        parent::scopeTenantId($query);
+        $query->where($query->getTable() . '.tenant_id', max(0, (int)(request()->tenantId ?? 0)));
     }
 }

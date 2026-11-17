@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\common\service\merchant;
 
 use app\common\model\merchant\NfcCode;
+use app\common\model\merchant\MerchantStore;
 use app\common\model\tenant\Tenant;
 use DomainException;
 use think\db\exception\PDOException;
@@ -257,6 +258,108 @@ final class NfcCodeService
             });
         }
         return $query->field('id,name')->order('id', 'desc')->limit(30)->select()->toArray();
+    }
+
+    /**
+     * 用户将当前租户的一块码牌绑定到自己名下的门店。
+     *
+     * @param int $tenantId 当前登录租户，来自认证上下文
+     * @param int $userId 当前登录用户，来自认证上下文，不从请求体读取
+     * @param array $input store_id 为本人门店，code 为六位码牌编号
+     * @return array{id: int, code: string, store_id: int, activated_at: int}
+     * @throws DomainException 未登录、无门店权限、码牌不可用或已绑定其他门店
+     */
+    public static function activate(int $tenantId, int $userId, array $input): array
+    {
+        self::requireStoreOwner($tenantId, $userId);
+        $storeId = self::positiveId($input['store_id'] ?? null, '请选择门店');
+        $code = self::normalizeCode($input['code'] ?? null);
+
+        return NfcCode::query()->getConnection()->transaction(static function () use ($tenantId, $userId, $storeId, $code): array {
+            // 沿用门店模型及软删除过滤，先核对当前租户和用户，锁定门店防止同时删除。
+            if (self::ownedStore($tenantId, $userId, $storeId)->lock(true)->findOrEmpty()->isEmpty()) {
+                throw new DomainException('门店不存在或无权限');
+            }
+
+            // 只查当前租户已获分配的码牌；未分配库存及其他租户的编号均不可使用。
+            $record = NfcCode::where(['tenant_id' => $tenantId, 'code' => $code])
+                ->field('id,code,store_id,update_time')->lock(true)->findOrEmpty();
+            if ($record->isEmpty()) {
+                throw new DomainException('码牌不存在或尚未分配给当前租户');
+            }
+            $row = $record->getData();
+            if ($row['store_id'] !== null) {
+                if ((int)$row['store_id'] !== $storeId) {
+                    throw new DomainException('该码牌已绑定其他门店');
+                }
+                // 同一门店重复提交返回原绑定结果，不重复写入，也不修改绑定时间。
+                return self::presentStoreCode($row);
+            }
+
+            $now = time();
+            $updated = NfcCode::where(['id' => $row['id'], 'tenant_id' => $tenantId])
+                ->whereNull('store_id')->update(['store_id' => $storeId, 'update_time' => $now]);
+            if ($updated !== 1) {
+                throw new DomainException('码牌已被绑定，请刷新后重试');
+            }
+            return self::presentStoreCode(array_replace($row, ['store_id' => $storeId, 'update_time' => $now]));
+        });
+    }
+
+    /**
+     * 查询本人门店已经绑定的码牌，门店可关联任意多条记录，通过分页逐页返回。
+     *
+     * @param int $tenantId 当前登录租户
+     * @param int $userId 当前登录用户
+     * @param array $input store_id、page_no（默认 1）、page_size（默认 10，最多 100）
+     * @return array{count: int, lists: array, page_no: int, page_size: int}
+     * @throws DomainException 租户/用户缺失、分页参数无效或门店不属于当前用户
+     */
+    public static function storeLists(int $tenantId, int $userId, array $input): array
+    {
+        self::requireStoreOwner($tenantId, $userId);
+        $storeId = self::positiveId($input['store_id'] ?? null, '请选择门店');
+        if (self::ownedStore($tenantId, $userId, $storeId)->findOrEmpty()->isEmpty()) {
+            throw new DomainException('门店不存在或无权限');
+        }
+        $page = min(1000000, self::positiveId($input['page_no'] ?? 1, '页码无效'));
+        $size = min(100, self::positiveId($input['page_size'] ?? 10, '每页数量无效'));
+        $query = NfcCode::where(['tenant_id' => $tenantId, 'store_id' => $storeId]);
+        return [
+            'count' => (clone $query)->count(),
+            'lists' => array_map(self::presentStoreCode(...), $query->field('id,code,store_id,update_time')
+                ->order('id', 'desc')->page($page, $size)->select()->toArray()),
+            'page_no' => $page,
+            'page_size' => $size,
+        ];
+    }
+
+    /** 认证标识必须由调用方提供，禁止以空租户或匿名用户查询和绑定。 */
+    private static function requireStoreOwner(int $tenantId, int $userId): void
+    {
+        if ($tenantId <= 0 || $userId <= 0 || $tenantId !== (int)(request()->tenantId ?? 0)) {
+            throw new DomainException('缺少有效的租户或登录用户');
+        }
+    }
+
+    /** 门店模型保留原有租户表策略和软删除作用域，同时明确限定当前用户。 */
+    private static function ownedStore(int $tenantId, int $userId, int $storeId): \think\db\Query
+    {
+        return MerchantStore::where(['tenant_id' => $tenantId, 'user_id' => $userId, 'id' => $storeId])->field('id');
+    }
+
+    /**
+     * 仅返回门店码牌信息，不暴露平台分配管理员、生成批次等库存管理字段。
+     * 复用已有 update_time 记录首次绑定时刻，以 activated_at 兼容前端接口；不新增表字段。
+     */
+    private static function presentStoreCode(array $row): array
+    {
+        return [
+            'id' => (int)$row['id'],
+            'code' => (string)$row['code'],
+            'store_id' => (int)$row['store_id'],
+            'activated_at' => (int)$row['update_time'],
+        ];
     }
 
     /**
