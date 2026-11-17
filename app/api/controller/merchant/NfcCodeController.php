@@ -8,7 +8,7 @@ use app\api\controller\BaseApiController;
 use app\common\service\merchant\NfcCodeService;
 use DomainException;
 
-/** 用户门店 NFC 入口，沿用 API 登录校验，租户和用户标识均来自认证上下文。 */
+/** 用户门店 NFC 入口，租户沿用中间件和模型全局作用域，不手动传入业务查询。 */
 class NfcCodeController extends BaseApiController
 {
     /**
@@ -19,7 +19,7 @@ class NfcCodeController extends BaseApiController
     {
         try {
             return $this->data(NfcCodeService::storeLists(
-                (int)($this->request->tenantId ?? 0), $this->userId, $this->request->get()
+                $this->userId, $this->request->get()
             ));
         } catch (DomainException $error) {
             return $this->fail($error->getMessage());
@@ -37,7 +37,7 @@ class NfcCodeController extends BaseApiController
         }
         try {
             return $this->success('激活成功', NfcCodeService::activate(
-                (int)($this->request->tenantId ?? 0), $this->userId, $this->request->post()
+                $this->userId, $this->request->post()
             ));
         } catch (DomainException $error) {
             return $this->fail($error->getMessage());
