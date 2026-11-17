@@ -5,7 +5,7 @@
 ## 接口
 
 - `GET /platformapi/merchant.nfc_code/lists`：`page_no`、`page_size`，可按 `code`、`batch_no` 查询。返回 `count`、`lists`、`page_no`、`page_size`，记录包含 `id`、`code`、`batch_no`、`created_admin_id`、`create_time`（Unix 秒）。
-- `POST /platformapi/merchant.nfc_code/generate`：`quantity` 为 1 至 1000 的整数，返回 `batch_no` 和 `quantity`。
+- `POST /platformapi/merchant.nfc_code/generate`：`quantity` 为 1 至 1000 的整数，`tenant_id` 可选。返回 `batch_no`、`quantity` 和实际归属 `tenant_id`；未选租户时为 NULL。
 
 接口使用平台登录及菜单权限，分别为 `merchant.nfc_code/lists`、`merchant.nfc_code/generate`。库存通过继承 `BaseModel` 的 `NfcCode` 模型访问，使用共享表，不按租户分表。
 
@@ -15,6 +15,8 @@
 2. 服务生成一次请求共用的批次号，再收集六位随机编号。批内通过集合去重，按每组 250 个查询已有库存，只补足差额；补码最多二十轮，避免极端情况下无限循环。
 3. 候选编号按字符排序后写入，每次最多 250 条，所有分块共享模型连接的同一个事务。分块失败会回滚整批；MySQL 唯一键冲突（1062）或死锁（1213）会重新生成并重试，总共最多五次。其他存储异常直接向上抛出。
 4. 成功响应返回批次号和生成数量。平台页面清除旧编号条件，并按本批次从第一页重新查询，方便核对生成结果；失败则保留弹窗数量供管理员重试。
+
+生成弹窗支持可选租户。选择时会在同一生成事务内校验租户并写入归属，不选时保持平台库存；详细权限和行为见 [租户分配](nfc-code-tenant-assignment.md)。
 
 库存查询对编号及批次使用精确匹配。编号先去除两端空白并转大写，批次去除两端空白。每页最多 100 条，按主键倒序显示，总数和列表使用相同的筛选条件。记录时间以 Unix 秒返回，前端换算成毫秒后展示。
 

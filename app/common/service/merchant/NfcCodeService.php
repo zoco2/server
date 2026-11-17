@@ -31,11 +31,12 @@ final class NfcCodeService
      *
      * @param int $adminId 当前登录的平台管理员 ID，由控制器提供
      * @param mixed $quantity 生成数量，允许整数或表单中的整数字符串，范围 1 至 1000
-     * @return array{batch_no: string, quantity: int} 已成功落库的批次和数量
+     * @param mixed $tenantId 可选目标租户，未传、NULL 或空字符串时保留为平台库存
+     * @return array{batch_no: string, quantity: int, tenant_id: int|null} 批次、数量及实际租户归属
      * @throws DomainException 参数无效，或有限次数内仍无法生成成功
      * @throws PDOException 非唯一键冲突、非死锁的数据库异常，交由上层统一处理
      */
-    public static function generate(int $adminId, mixed $quantity): array
+    public static function generate(int $adminId, mixed $quantity, mixed $tenantId = null): array
     {
         // 写库前完成参数校验，避免非法请求创建空批次或留下部分库存。
         self::positiveId($adminId, '缺少平台管理员');
@@ -43,6 +44,8 @@ final class NfcCodeService
         if ($count > self::MAX_BATCH_SIZE) {
             throw new DomainException('请输入 1 至 1000 的整数');
         }
+        // 只把未填写视为不分配，零、负数及其他非法类型仍返回参数错误。
+        $tenantId = $tenantId === null || $tenantId === '' ? null : self::positiveId($tenantId, '请选择有效租户');
 
         // 批次号由 NFC + 当前日期时间 + 16 位随机十六进制字符组成，总长 33 位。
         // 同一次调用的重试继续使用此批次号，前端成功后可据此查询本次生成结果。
@@ -56,23 +59,32 @@ final class NfcCodeService
             sort($codes, SORT_STRING);
             // 同批记录共享管理员和时间信息，方便追溯生成来源。
             $now = time();
+            // 归属与生成记录一起写入，避免先生成、后分配失败留下半成品。
+            $assignment = $tenantId === null ? [] : [
+                'tenant_id' => $tenantId,
+                'tenant_assigned_admin_id' => $adminId,
+                'tenant_assigned_at' => $now,
+            ];
             $rows = array_map(static fn (string $code): array => [
                 'code' => $code,
                 'batch_no' => $batchNo,
                 'created_admin_id' => $adminId,
                 'create_time' => $now,
                 'update_time' => $now,
-            ], $codes);
+            ] + $assignment, $codes);
 
             try {
-                $connection->transaction(static function () use ($rows): void {
+                $connection->transaction(static function () use ($rows, $tenantId): void {
+                    if ($tenantId !== null) {
+                        self::lockAssignableTenant($tenantId);
+                    }
                     foreach (array_chunk($rows, self::QUERY_CHUNK_SIZE) as $chunk) {
                         // 分块降低单条 SQL 的体积；strict 防止表结构不匹配时静默忽略字段。
                         // 所有分块都在外层事务内，只有全部插入完成才算生成成功。
                         NfcCode::query()->strict(true)->insertAll($chunk);
                     }
                 });
-                return ['batch_no' => $batchNo, 'quantity' => $count];
+                return ['batch_no' => $batchNo, 'quantity' => $count, 'tenant_id' => $tenantId];
             } catch (PDOException $error) {
                 // 查库与插入之间存在并发窗口：1062 表示唯一键冲突，1213 表示死锁。
                 // 事务已回滚，仅对这两类可重试异常重新生成，最多尝试五次。
@@ -191,11 +203,7 @@ final class NfcCodeService
         $connection = NfcCode::query()->getConnection();
 
         return $connection->transaction(static function () use ($adminId, $ids, $tenantId): array {
-            // 使用现有租户模型，沿用软删除过滤；行锁防止校验后租户被同时停用或删除。
-            $tenant = Tenant::where(['id' => $tenantId, 'disable' => 0])->lock(true)->findOrEmpty();
-            if ($tenant->isEmpty()) {
-                throw new DomainException('租户不存在、已停用或已删除');
-            }
+            self::lockAssignableTenant($tenantId);
 
             $now = time();
             // 条件更新同时检查“未分配”，并发请求不能覆盖先前成功写入的租户归属。
@@ -211,6 +219,21 @@ final class NfcCodeService
             }
             return ['quantity' => $updated];
         });
+    }
+
+    /**
+     * 在调用方事务中锁定有效目标租户，两种分配入口使用同一校验。
+     * 沿用 Tenant 模型的软删除过滤，行锁防止校验后租户被同时停用或删除。
+     *
+     * @param int $tenantId 已校验为正整数的目标租户 ID
+     * @throws DomainException 租户不存在、停用或已软删除，调用方事务会回滚
+     */
+    private static function lockAssignableTenant(int $tenantId): void
+    {
+        $tenant = Tenant::where(['id' => $tenantId, 'disable' => 0])->lock(true)->findOrEmpty();
+        if ($tenant->isEmpty()) {
+            throw new DomainException('租户不存在、已停用或已删除');
+        }
     }
 
     /**
