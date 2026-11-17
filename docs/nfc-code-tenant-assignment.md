@@ -12,6 +12,8 @@
 
 本阶段只开放平台接口，沿用平台登录及现有菜单权限机制，公共中间件、公共模型和登录请求方式均不改动。
 
+平台请求中的 `tenant_id` 是业务上的分配目标。公共中间件仍可能把它写入 `request()->tenantId`，因此 NFC 模型在 `source=PLATFORM` 时查询统一库存，不附加租户条件或分表后缀；其他终端继续调用 `BaseModel` 原有作用域。接口参数和数据库字段都保留 `tenant_id`，无需变更表结构。
+
 ## 接口和权限
 
 - `GET /platformapi/merchant.nfc_code/lists`：保留原查询，新增 `status=unassigned|assigned` 筛选，记录增加 `tenant_id`、`tenant_name`、`tenant_assigned_at`。
@@ -25,3 +27,5 @@
 第一阶段已部署的站点执行 `upgrade/20261117_merchant_nfc_code_tenant_assignment.sql`，然后一起发布服务端和 platform 页面。脚本逐项检测字段、索引和权限，支持重复执行，保留已有数据。此前已经执行过不含 `store_id` 的旧版第二阶段脚本，也可重新执行最新版补齐门店字段和索引。全新站点使用更新后的安装 SQL；尚未建表的旧站点先执行第一阶段 `20261117_merchant_nfc_code_generation.sql`，再执行本阶段迁移。
 
 安装 Composer 依赖并启用 `pdo_sqlite` 后，运行 `php tests/nfc-code/tenant-assignment.php`。测试在内存库中覆盖生成回归、选择参数校验、有效租户搜索、软删除、分配审计、重复分配、整批冲突回滚和列表筛选。真实 MySQL 的并发竞争和迁移执行需在目标环境联调。
+
+平台作用域回归运行 `php tests/nfc-code/platform-scope.php`，覆盖携带目标租户上下文时的分配、跨租户库存查询、分表目标以及租户端/用户端仍受隔离。

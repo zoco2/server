@@ -14,6 +14,8 @@ require __DIR__ . '/generation.php';
 $connection->execute('CREATE TABLE la_tenant (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
+    sn TEXT NOT NULL DEFAULT \'test\',
+    tactics INTEGER NOT NULL DEFAULT 0,
     disable INTEGER NOT NULL DEFAULT 0,
     delete_time INTEGER DEFAULT NULL
 )');
