@@ -61,7 +61,10 @@ namespace {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT NOT NULL UNIQUE,
         batch_no TEXT NOT NULL,
+        tenant_id INTEGER DEFAULT NULL,
         created_admin_id INTEGER NOT NULL,
+        tenant_assigned_admin_id INTEGER DEFAULT NULL,
+        tenant_assigned_at INTEGER DEFAULT NULL,
         create_time INTEGER NOT NULL,
         update_time INTEGER NOT NULL
     )');
