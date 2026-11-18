@@ -38,6 +38,133 @@ class SmartEditTimelineBuilder
     /** 成片高度未知时的标题顶部像素值（1080 高度下的近似 8%） */
     private const TITLE_TOP_FALLBACK_PX = 86;
 
+    /** PC 转场标识对应的 IMS 子类型与默认秒数。闪白使用普通 VFX。 */
+    private const TRANSITIONS = [
+        'diag' => ['directional', 0.45],
+        'swirl' => ['displacement', 0.45],
+        'grid' => ['windowslice', 0.45],
+        'vbow' => ['bowTieVertical', 0.45],
+        'hbow' => ['bowTieHorizontal', 0.45],
+        'zoom-out' => ['simplezoom', 0.45],
+        'lblur' => ['linearblur', 0.45],
+        'drop' => ['waterdrop', 0.45],
+        'blind' => ['windowblinds', 0.45],
+        'flash' => ['white', 0.3],
+        'dissolve' => ['fade', 0.45],
+        'push' => ['swap', 0.6],
+        'zoom' => ['simplezoom', 0.5],
+        'slide' => ['swap', 0.4],
+    ];
+
+    /** 数组第 i 项描述第 i 段视频与下一段的接缝。空数组兼容旧请求。 */
+    public static function normalizeTransitions(mixed $raw, int $boundaryCount): array
+    {
+        if ($raw === []) {
+            return [];
+        }
+        if (!is_array($raw) || !array_is_list($raw) || count($raw) !== $boundaryCount) {
+            throw new Exception('转场数量必须与相邻镜头的接缝数量一致');
+        }
+        foreach ($raw as $index => $key) {
+            if (!is_string($key) || ($key !== 'none' && !isset(self::TRANSITIONS[$key]))) {
+                throw new Exception('第 ' . ($index + 1) . ' 处转场不受支持');
+            }
+        }
+        return $raw;
+    }
+
+    /** @return array{candidates: list<string>, overrides: list<string|null>, seed: string} */
+    public static function normalizeTransitionPolicy(mixed $raw, int $boundaryCount): array
+    {
+        if (!is_array($raw) || !is_bool($raw['random'] ?? null)) {
+            throw new Exception('转场抽取模式不正确');
+        }
+        $selected = $raw['selected'] ?? null;
+        if (!is_array($selected) || count($selected) > count(self::TRANSITIONS) + 1) {
+            throw new Exception('转场候选格式不正确');
+        }
+        $selected = self::normalizeTransitions($selected, count($selected));
+
+        $overrides = $raw['overrides'] ?? null;
+        if (!is_array($overrides) || !array_is_list($overrides) || count($overrides) !== $boundaryCount) {
+            throw new Exception('转场数量必须与相邻镜头的接缝数量一致');
+        }
+        self::normalizeTransitions(array_map(static fn($key) => $key ?? 'none', $overrides), $boundaryCount);
+
+        $candidates = $raw['random']
+            ? array_diff(array_keys(self::TRANSITIONS), ['zoom', 'slide'])
+            : array_unique($selected);
+        return [
+            'candidates' => array_values($candidates),
+            'overrides' => $overrides,
+            'seed' => bin2hex(random_bytes(16)),
+        ];
+    }
+
+    /** 按组合和接缝分别抽取。批次种子随组配置持久化，重试时结果相同。 */
+    public static function transitionsForCombo(array $policy, int $comboIndex): array
+    {
+        $candidates = $policy['candidates'];
+        $count = count($candidates);
+        $keys = [];
+        foreach ($policy['overrides'] as $index => $override) {
+            if ($override !== null || $count === 0) {
+                $keys[] = $override ?? 'none';
+                continue;
+            }
+            $digest = hash_hmac('sha256', $comboIndex . ':' . $index, $policy['seed']);
+            $keys[] = $candidates[hexdec(substr($digest, 0, 7)) % $count];
+        }
+        return $keys;
+    }
+
+    /**
+     * 按当前组合的截取时长安排转场，同时计算贴纸、字幕和配音使用的正片时长。
+     * 旧任务未提交截取终点时，duration 为 0 表示正片时长未知。
+     *
+     * @return array{duration: float, clip_effects: array, effect_track: array}
+     */
+    public static function planTransitions(array $items, array $keys, bool $hasCover): array
+    {
+        $lengths = array_map(static function (array $item): float {
+            return max(0.0, round((float)($item['out'] ?? 0), 4) - round((float)($item['in'] ?? 0), 4));
+        }, $items);
+        $end = $hasCover ? self::COVER_SECONDS : 0.0;
+        $clipEffects = [];
+        $effectTrack = [];
+        foreach ($lengths as $index => $length) {
+            $end += $length;
+            $key = $keys[$index] ?? 'none';
+            if ($key === 'none') {
+                continue;
+            }
+            [$subType, $seconds] = self::TRANSITIONS[$key];
+            // 短素材缩短转场，给同时有入场和出场的镜头留出可独立播放的画面。
+            $duration = round(min($seconds, $length / 3, $lengths[$index + 1] / 3), 4);
+            if ($duration < 0.04) {
+                // 极短区间不足以辨认转场时，保留硬切。
+                continue;
+            }
+            if ($key === 'flash') {
+                $effectTrack[] = [
+                    'Type' => 'VFX',
+                    'SubType' => $subType,
+                    'TimelineIn' => round($end - $duration / 2, 4),
+                    'TimelineOut' => round($end + $duration / 2, 4),
+                ];
+                continue;
+            }
+            $clipEffects[$index] = ['Type' => 'Transition', 'SubType' => $subType, 'Duration' => $duration];
+            $end -= $duration;
+        }
+
+        return [
+            'duration' => in_array(0.0, $lengths, true) ? 0.0 : round($end, 4),
+            'clip_effects' => $clipEffects,
+            'effect_track' => $effectTrack,
+        ];
+    }
+
     /**
      * 多视频合并，并按需叠加贴纸、背景音乐、字幕与配音。
      *
@@ -49,6 +176,7 @@ class SmartEditTimelineBuilder
      * @param array  $audioClips   背景音乐片段，元素见 audioClip()
      * @param array  $subtitles    字幕片段，元素见 subtitleClip()（已排好时间轴）
      * @param array  $dubbingClips 配音片段，元素见 dubbingClip()（已排好时间轴）
+     * @param array  $transitionPlan planTransitions() 的结果
      */
     public static function buildMerge(
         array $items,
@@ -58,10 +186,11 @@ class SmartEditTimelineBuilder
         array $stickers = [],
         array $audioClips = [],
         array $subtitles = [],
-        array $dubbingClips = []
+        array $dubbingClips = [],
+        array $transitionPlan = []
     ): array {
         $clips = [];
-        foreach ($items as $item) {
+        foreach ($items as $index => $item) {
             $url = (string)($item['media_url'] ?? '');
             if ($url === '') {
                 throw new Exception('素材地址缺失');
@@ -83,6 +212,9 @@ class SmartEditTimelineBuilder
                     ['Type' => 'Volume', 'Gain' => 0],
                 ];
             }
+            if (isset($transitionPlan['clip_effects'][$index])) {
+                $clip['Effects'][] = $transitionPlan['clip_effects'][$index];
+            }
             $clips[] = $clip;
         }
         if (count($clips) < 2) {
@@ -102,6 +234,13 @@ class SmartEditTimelineBuilder
                 ['VideoTrackClips' => $clips],
             ],
         ];
+        if (!empty($transitionPlan['clip_effects'])) {
+            // 以重叠后的正片为准，防止音乐或标题比画面更长时拖出黑尾。
+            $timeline['VideoTracks'][0]['MainTrack'] = true;
+        }
+        if (!empty($transitionPlan['effect_track'])) {
+            $timeline['EffectTracks'] = [['EffectTrackItems' => $transitionPlan['effect_track']]];
+        }
 
         // 贴纸独占一条图片轨：VideoTracks 数组顺序即叠放顺序（先底后顶），
         // 放在正片轨之后就能压在画面之上，不需要逐帧计算。
