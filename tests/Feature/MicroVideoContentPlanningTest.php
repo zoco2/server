@@ -25,6 +25,29 @@ final class MicroVideoContentPlanningTest extends TestCase
         self::assertNull($c['required_total_duration']);self::assertIsInt($c['output_schema']['segments'][0]['duration']);
         self::assertStringContainsString('内容',$c['requirements']);self::assertStringContainsString('静止',$c['requirements']);
     }
+    public function testWorkbenchKeepsTwoAuthoredEightSecondSegmentsWhileAiPlanningStillPrefersOne(): void
+    {
+        $params=$this->params("片段1\n0-2秒：发现。\n2-8秒：拿起。\n片段2\n0-2秒：展示。\n2-8秒：收尾。",16);
+        $contract=P::workbenchContract($params,range(2,30),24);
+        self::assertSame([8,8],array_column(P::validate($this->parsed([8,8]),$contract,1,10,true),'duration'));
+        self::assertSame([16],P::contract($params,range(2,30),24)['segment_durations']);
+    }
+    /** @dataProvider invalidWorkbenchPlans */
+    public function testWorkbenchStillRejectsInvalidAuthoredPlans(array $durations,int $target,array $supported,int $max): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        P::validate($this->parsed($durations),P::workbenchContract($this->params('', $target),$supported,$max),1,10,true);
+    }
+    public static function invalidWorkbenchPlans(): array
+    {
+        return [
+            'short total'=>[[8,8],20,range(2,30),24],
+            'long total'=>[[8,8],15,range(2,30),24],
+            'unsupported segment'=>[[7,9],16,[8,16],24],
+            'too many segments'=>[[8,8],16,range(2,30),1],
+            'over global limit'=>[array_fill(0,21,30),630,range(2,30),24],
+        ];
+    }
     public function testContentCanChooseOneSegmentOrUnequalSegmentsForTheSameExplicitBrief(): void
     {
         $c=P::contract($this->params('整片总时长15秒，人物发现礼物后拿起展示。'),range(4,15),24,1);

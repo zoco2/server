@@ -52,6 +52,19 @@ final class MicroVideoContentPlanning
             ]], 'requirements'=>self::instructions($version)];
     }
 
+    /** A saved editor plan already has authored boundaries; validate them instead of repartitioning. */
+    public static function workbenchContract(array $params,array $supported,int $max): array
+    {
+        $contract=self::contract($params,$supported,$max,2);
+        $target=(int)$params['target_duration'];
+        $contract['required_total_duration']=$target;
+        $contract['minimum_total_duration']=$target;
+        $contract['max_total_duration']=$target;
+        $contract['allowed_total_durations']=[$target];
+        $contract['preferred_total_duration']=$target;
+        return $contract;
+    }
+
     public static function instructions(int $version=3): string
     {
         $partition=$version>=3?'本次采用模型单段最大时长优先的少分段策略。segment_durations已经根据目标时长、模型最长最短秒数和真实可调用规格计算，按其数量、顺序和每项秒数生成视频段，不得自行增加视频段或拆成许多短段。模型最大秒数是上限，不能把不足一段的内容一律写成最长时长：如规划10秒且模型上限15秒，只有一段10秒；整片25秒时按15秒加10秒，不把尾段拉成15秒。末段不足模型最低秒数时才上调到最小可调用规格，围绕主题补充必要且有意义的动作。每个视频段内部安排多个紧凑镜头，不把每个镜头、每句对白都拆成独立视频。先理解主题、创作方向、图片和叙事内容，再把完整剧情合理分配到这些视频段。'
