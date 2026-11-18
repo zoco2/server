@@ -7,6 +7,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         $PHPIZE_DEPS \
         ffmpeg \
+        fonts-noto-cjk \
         gosu \
         libfreetype6-dev \
         libicu-dev \

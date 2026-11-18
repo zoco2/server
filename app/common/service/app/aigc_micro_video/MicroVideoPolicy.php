@@ -72,6 +72,8 @@ final class MicroVideoPolicy
     }
     public static function stableParams(array $params): array
     {
+        // Post-processing is bound by the execution quote, not the creative draft's idempotency key.
+        unset($params['subtitles_enabled']);
         foreach($params['images']??[] as $i=>$image){unset($image['url']);$params['images'][$i]=$image;}return $params;
     }
 }

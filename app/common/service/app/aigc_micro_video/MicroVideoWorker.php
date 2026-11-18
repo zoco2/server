@@ -83,7 +83,7 @@ final class MicroVideoWorker
         if($blocked){MicroVideoStore::update((int)$task['id'],['status'=>'waiting_continue','error'=>$blocked[0]['error']?:'部分片段未完成，请核对后继续']);return;}
         MicroVideoStore::update((int)$task['id'],['status'=>'merging','merge_status'=>'running']);
         try{
-            $result=MicroVideoMedia::merge($task,$segments);
+            $result=MicroVideoSubtitles::enabled($task)?MicroVideoSubtitles::process($task,$segments):MicroVideoMedia::merge($task,$segments);
             MicroVideoStore::update((int)$task['id'],['status'=>'success','merge_status'=>'success','result_uri'=>$result['uri'],'cover_uri'=>$result['cover_uri']??'','actual_duration'=>$result['duration'],'storage_scope'=>$result['storage_scope'],'storage_engine'=>$result['storage_engine'],'storage_domain'=>$result['storage_domain'],'error'=>'']);
         }catch(\Throwable $e){MicroVideoStore::update((int)$task['id'],['merge_status'=>'failed']);throw $e;}
     }
