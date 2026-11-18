@@ -25,7 +25,7 @@ final class MicroVideoService
     {
         self::available($tenant);$config=MicroVideoSettings::get($tenant);$id=(string)($p['model_id']??$config['default_model_id']);MicroVideoPolicy::allowedModel($id,$config['video_model_ids']);$model=MicroVideoCatalog::model($tenant,$id,false,'reference');
         $quality=(string)($p['quality']??$config['default_quality']);$ratio=(string)($p['ratio']??$config['default_ratio']);MicroVideoCatalog::specs($model,$quality,$ratio);
-        $target=(int)($p['target_duration']??30);if(!in_array($target,$config['target_duration_options'],true)&&!in_array($target,$allowedTargetDurations,true))throw new InvalidArgumentException('请选择开放的目标时长');
+        $target=(int)($p['target_duration']??30);$modelDurations=array_column(MicroVideoCatalog::specs($model,$quality,$ratio),'duration');if(!in_array($target,$config['target_duration_options'],true)&&!in_array($target,$allowedTargetDurations,true)&&!in_array($target,$modelDurations,true))throw new InvalidArgumentException('请选择开放的目标时长');
         $mode=(string)($p['mode']??'theme');if(!in_array($mode,['theme','prompt'],true))throw new InvalidArgumentException('创作模式无效');
         $theme=trim((string)($p['theme']??''));$prompt=trim((string)($p['prompt']??''));
         if($imagesRequired&&($mode==='theme'?$theme==='':$prompt===''))throw new InvalidArgumentException($mode==='theme'?'请输入一句话主题':'请输入完整提示词');
@@ -133,6 +133,43 @@ final class MicroVideoService
     public static function estimate(int $tenant,int $user,array $p,bool $admin=false): array
     {
         self::available($tenant);
+        // Draft-only price preview: no task, quote token, model call or persisted project change.
+        if(array_key_exists('preview_body',$p)){
+            if(!empty($p['id'])||!is_array($p['preview_body'])||strlen(MicroVideoStore::encode($p['preview_body']))>1000000)throw new InvalidArgumentException('视频费用预览资料无效');
+            $body=$p['preview_body'];
+            $trusted=[];
+            if(!empty($p['project_id'])){
+                $project=MicroVideoWorkbenchRecords::owned($tenant,$user,'project',(int)$p['project_id']);
+                $trusted=MicroVideoStore::json($project['body_json']);
+            }
+            $form=self::form($tenant,$user,[
+                'model_id'=>$body['model_id']??'', 'quality'=>$body['quality']??'', 'ratio'=>$body['ratio']??'',
+                'target_duration'=>$body['target_duration']??$body['brief']['target_duration']??30,
+                'mode'=>'prompt'
+            ],false,self::workbenchTargetDurations($trusted));
+            $params=$form['params'];$model=$form['model'];$limit=(int)$form['config']['max_segments'];
+            MicroVideoCatalog::assertWorkbenchSelection($model,$body);
+            $segments=$body['script']['segments']??[];
+            if(!is_array($segments)||count($segments)>$limit)throw new InvalidArgumentException('片段数量超出限制');
+            $durations=[];
+            foreach($segments as $segment){
+                $raw=$segment['duration']??null;
+                $duration=(is_int($raw)||is_string($raw))?filter_var($raw,FILTER_VALIDATE_INT):false;
+                if($duration===false||$duration<1||$duration>120)throw new InvalidArgumentException('片段时长无效');
+                $durations[]=$duration;
+            }
+            if(!$durations){
+                $specs=MicroVideoCatalog::specs($model,$params['quality'],$params['ratio']);
+                $contract=MicroVideoContentPlanning::contract($params,array_column($specs,'duration'),$limit,3);
+                $durations=$contract['segment_durations'];
+            }
+            $sum=0.;
+            foreach($durations as $duration){
+                $quote=MicroVideoCatalog::quote($tenant,MicroVideoCatalog::spec($model,$params['quality'],$params['ratio'],$duration),$params['model_id']);
+                $sum+=$quote['user_charge_points'];
+            }
+            return ['user_charge_points'=>round($sum,4),'approximate'=>true,'planned_duration'=>array_sum($durations)];
+        }
         if(empty($p['id'])){
             $form=self::form($tenant,$user,$p,false);$params=$form['params'];$specs=MicroVideoCatalog::specs($form['model'],$params['quality'],$params['ratio']);$contract=MicroVideoContentPlanning::contract($params,array_column($specs,'duration'),$form['config']['max_segments']);
             // This partition is only a provisional price calculation, never the planning model's input.

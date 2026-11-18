@@ -6,6 +6,7 @@ use app\common\service\app\aigc_micro_video\MicroVideoWorkbench as W;
 use app\common\service\app\aigc_micro_video\MicroVideoWorkbenchJobs as J;
 use app\common\service\app\aigc_micro_video\MicroVideoWorkbenchPolicy as P;
 use app\common\service\app\aigc_micro_video\MicroVideoService;
+use app\common\service\app\aigc_micro_video\MicroVideoSettings;
 class WorkbenchController extends BaseApiController
 {
     public function lists()
@@ -15,6 +16,26 @@ class WorkbenchController extends BaseApiController
     public function detail()
     {
         try {$tenant=(int)$this->request->tenantId;$user=(int)$this->userId;$admin=false;MicroVideoService::available($tenant);$p=$this->request->get();return $this->success("操作成功",R::dto(R::owned($tenant,$user,(string)($p['kind']??'project'),(int)($p['id']??0),$admin)));}catch(\Throwable $e){return $this->fail(MicroVideoService::friendly($e));}
+    }
+    public function libraryImage()
+    {
+        try { return $this->success("操作成功", \app\common\service\app\aigc_micro_video\MicroVideoLibraryGeneration::create((int)$this->request->tenantId, (int)$this->userId, $this->request->post())); }
+        catch(\Throwable $e) { return $this->fail(MicroVideoService::friendly($e)); }
+    }
+    public function voiceConfig()
+    {
+        try { return $this->success("操作成功", \app\common\service\app\aigc_micro_video\MicroVideoSeedVoice::config((int)$this->request->tenantId,(int)$this->userId)); }
+        catch(\Throwable $e) { return $this->fail(MicroVideoService::friendly($e)); }
+    }
+    public function voiceEstimate()
+    {
+        try { return $this->success("操作成功", \app\common\service\app\aigc_micro_video\MicroVideoSeedVoice::quote((int)$this->request->tenantId,(int)$this->userId)); }
+        catch(\Throwable $e) { return $this->fail(MicroVideoService::friendly($e)); }
+    }
+    public function libraryVoice()
+    {
+        try { return $this->success("操作成功", \app\common\service\app\aigc_micro_video\MicroVideoLibraryVoice::create((int)$this->request->tenantId,(int)$this->userId,$this->request->post())); }
+        catch(\Throwable $e) { return $this->fail(MicroVideoService::friendly($e)); }
     }
     public function save()
     {
@@ -42,7 +63,7 @@ class WorkbenchController extends BaseApiController
     }
     public function capabilities()
     {
-        try {$tenant=(int)$this->request->tenantId;$user=(int)$this->userId;$admin=false;MicroVideoService::available($tenant);$p=$this->request->get();return $this->success("操作成功",W::capabilities($tenant));}catch(\Throwable $e){return $this->fail(MicroVideoService::friendly($e));}
+        try {$tenant=(int)$this->request->tenantId;$user=(int)$this->userId;$admin=false;MicroVideoService::available($tenant);$p=$this->request->get();$out=W::capabilities($tenant);if(!empty($p['compact']))$out['config']=MicroVideoSettings::compact($out['config']);return $this->success("操作成功",$out);}catch(\Throwable $e){return $this->fail(MicroVideoService::friendly($e));}
     }
     public function jobs()
     {
