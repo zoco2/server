@@ -211,7 +211,9 @@ class SmartEditService
             (array)($shared['subtitle_groups'][0] ?? [])
         );
 
-        $mainTrackDuration = self::mainTrackDuration($items, $coverUrl !== '');
+        $transitionKeys = $shared['transitions'] ?? [];
+        $transitionPlan = SmartEditTimelineBuilder::planTransitions($items, $transitionKeys, $coverUrl !== '');
+        $mainTrackDuration = $transitionPlan['duration'];
 
         // 贴纸是图片，没有自身时长；未指定区间时铺满正片，跨出正片的也裁到正片以内，
         // 否则 IMS 会按贴纸轨的结束点决定成片时长，正片之后留下一段黑屏。
@@ -244,7 +246,8 @@ class SmartEditService
             $stickers,
             $audios,
             $subtitles,
-            $dubbingClips
+            $dubbingClips,
+            $transitionPlan
         );
 
         $task = SmartEditTask::create([
@@ -261,6 +264,7 @@ class SmartEditService
                 'clips' => $clips,
                 'cover_uri' => $coverUri,
                 'aspect_ratio' => $aspectRatio,
+                'transitions' => $transitionKeys,
                 'title_text' => implode(' / ', array_column($titleConfig, 'text')),
                 'title_overlay' => $titleConfig,
                 'title_group_index' => (int)($shared['title_group_index'] ?? 0),
@@ -944,6 +948,10 @@ class SmartEditService
      */
     public static function sharedForCombo(array $shared, int $comboIndex): array
     {
+        if (isset($shared['transition_policy'])) {
+            $shared['transitions'] = SmartEditTimelineBuilder::transitionsForCombo($shared['transition_policy'], $comboIndex);
+        }
+
         // 封面：多张时按 combo 序号循环取用，与标题组各自独立
         $coverUris = $shared['cover_uris'] ?? null;
         if (is_array($coverUris) && $coverUris !== []) {
@@ -1437,32 +1445,6 @@ class SmartEditService
     }
 
     /**
-     * 正片（含封面）在成片里占用的总时长。
-     *
-     * 合并是顺序拼接，所以等于各片段截取长度之和再加封面固定长度。
-     * 前端提交的每个片段都带结束时间；拿不到有效区间说明参数不合预期，
-     * 直接报错，不用写死的秒数把成片拉长。
-     *
-     * @param array $items    片段列表（in/out 已归一化）
-     * @param bool  $hasCover 是否加了封面
-     */
-    private static function mainTrackDuration(array $items, bool $hasCover): float
-    {
-        $total = $hasCover ? SmartEditTimelineBuilder::COVER_SECONDS : 0.0;
-        foreach ($items as $item) {
-            $in = (float)($item['in'] ?? 0);
-            $out = (float)($item['out'] ?? 0);
-            // 推不出来就返回 0 表示未知：贴纸场景会据此报错，字幕场景则降级处理，
-            // 不能因为没配贴纸也把正常任务卡死。
-            if ($out <= $in) {
-                return 0.0;
-            }
-            $total += $out - $in;
-        }
-        return round($total, 4);
-    }
-
-    /**
      * 背景音乐片段归一化。
      *
      * 音量统一折算成 0~1 的 gain；传 >1 的值按百分比理解（如 60 -> 0.6），
@@ -1536,7 +1518,8 @@ class SmartEditService
         array $stickers = [],
         array $audios = [],
         array $subtitles = [],
-        array $dubbingClips = []
+        array $dubbingClips = [],
+        array $transitionPlan = []
     ): array {
         return match ($editType) {
             SmartEditTask::TYPE_MERGE => SmartEditTimelineBuilder::buildMerge(
@@ -1547,7 +1530,8 @@ class SmartEditService
                 $stickers,
                 $audios,
                 $subtitles,
-                $dubbingClips
+                $dubbingClips,
+                $transitionPlan
             ),
             default => throw new Exception('暂不支持的剪辑类型：' . $editType),
         };
