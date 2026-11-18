@@ -141,12 +141,18 @@ final class MicroVideoService
             return ['user_charge_points'=>round($sum,4),'approximate'=>true,'planned_duration'=>array_sum($durations),'planning_points'=>0,'planning_notice'=>'图片理解和提示词规划按模型实际用量单独计费'];
         }
         $id=(int)$p['id'];$row=MicroVideoStore::owned($tenant,$admin?0:$user,$id);$revision=(int)($p['plan_revision']??$row['plan_revision']);if($revision!==(int)$row['plan_revision'])throw new InvalidArgumentException('方案版本已变化，请刷新');
-        $quote=self::quoteTask($row);
+        $enabled=MicroVideoSubtitles::enabled($row);
+        if(array_key_exists('subtitles_enabled',$p)){
+            if(!in_array($p['subtitles_enabled'],[true,false,0,1,'0','1'],true))throw new InvalidArgumentException('字幕选项无效');
+            $enabled=(bool)$p['subtitles_enabled'];
+            if($row['status']!=='awaiting_confirmation'&&$enabled!==MicroVideoSubtitles::enabled($row))throw new InvalidArgumentException('已提交任务不能修改字幕选项');
+        }
+        $quote=self::quoteTask($row,$enabled);
         $token=bin2hex(random_bytes(24));$expires=time()+600;
         Db::transaction(function()use($tenant,$user,$admin,$id,$revision,$quote,$token,$expires){$row=MicroVideoStore::owned($tenant,$admin?0:$user,$id,true);if((int)$row['plan_revision']!==$revision)throw new InvalidArgumentException('方案已修改，请重新估价');MicroVideoStore::update($id,['quote_json'=>MicroVideoStore::encode($quote),'quote_token'=>$token,'quote_expires'=>$expires]);});
-        return ['user_charge_points'=>$quote['user_charge_points'],'planning_points'=>self::planningPoints($id),'approximate'=>false,'quote_token'=>$token,'plan_revision'=>$revision,'expires_at'=>$expires];
+        return ['user_charge_points'=>$quote['user_charge_points'],'video_points'=>$quote['video_points'],'subtitle_points'=>$quote['subtitle_points'],'subtitles_enabled'=>$quote['subtitles_enabled'],'planning_points'=>self::planningPoints($id),'approximate'=>false,'quote_token'=>$token,'plan_revision'=>$revision,'expires_at'=>$expires];
     }
-    public static function quoteTask(array $row): array
+    public static function quoteTask(array $row,?bool $subtitlesEnabled=null): array
     {
         $params=MicroVideoStore::json($row['params_json']);$config=MicroVideoSettings::get((int)$row['tenant_id']);$legacy=empty(MicroVideoStore::json($row['config_snapshot'])['frame_feature_version']);if(!$legacy)MicroVideoPolicy::allowedModel($params['model_id'],$config['video_model_ids']);$model=MicroVideoCatalog::model((int)$row['tenant_id'],$params['model_id'],$legacy,'reference');$model=$legacy?MicroVideoStore::json($row['model_snapshot']):$model;$mode=$row['generation_mode']??'reference';$frames=$mode==='start_end'?MicroVideoFrames::ready($row):[];
         $rows=MicroVideoStore::segments((int)$row['id']);$quotes=[];$user=0.;$tenant=0.;
@@ -154,7 +160,9 @@ final class MicroVideoService
             if(!in_array($segment['status'],['pending','failed'],true))continue;
             $spec=MicroVideoCatalog::spec($model,$params['quality'],$params['ratio'],(int)$segment['duration'],$mode);$q=MicroVideoCatalog::quote((int)$row['tenant_id'],$spec,$params['model_id']);$quotes[(string)$segment['id']]=$q;$user+=$q['user_charge_points'];$tenant+=$q['tenant_cost_points'];
         }
-        return ['generation_mode'=>$mode,'frame_identity'=>MicroVideoFramePolicy::identity($row,$frames),'frames_revision'=>(int)($row['frames_revision']??0),'plan_revision'=>(int)$row['plan_revision'],'plan_hash'=>self::planHash($row,$rows),'segments'=>$quotes,'user_charge_points'=>round($user,4),'tenant_cost_points'=>round($tenant,4)];
+        $subtitlesEnabled??=MicroVideoSubtitles::enabled($row);
+        $subtitles=MicroVideoSubtitles::quote($row,$subtitlesEnabled);
+        return ['generation_mode'=>$mode,'frame_identity'=>MicroVideoFramePolicy::identity($row,$frames),'frames_revision'=>(int)($row['frames_revision']??0),'plan_revision'=>(int)$row['plan_revision'],'plan_hash'=>self::planHash($row,$rows),'segments'=>$quotes,'subtitles_enabled'=>$subtitlesEnabled,'subtitles'=>$subtitles,'video_points'=>round($user,4),'subtitle_points'=>$subtitles['user']??0,'user_charge_points'=>round($user+($subtitles['user']??0),4),'tenant_cost_points'=>round($tenant+($subtitles['tenant']??0),4)];
     }
     private static function planHash(array $row,array $rows): string
     {
@@ -164,9 +172,10 @@ final class MicroVideoService
     {
         self::available($tenant);$id=(int)($p['id']??0);$key=self::key($p);$row=MicroVideoStore::owned($tenant,$user,$id);
         if($row['submit_key']===$key&&$row['submit_key']!=='')return self::detail($tenant,$user,$id);
-        $current=self::quoteTask($row);self::validateQuote($row,$p,$current);$params=MicroVideoStore::json($row['params_json']);MicroVideoMedia::validateImages($tenant,$user,$params['images'],15);
+        $current=self::quoteTask($row,(bool)(MicroVideoStore::json($row['quote_json'])['subtitles_enabled']??false));self::validateQuote($row,$p,$current);$params=MicroVideoStore::json($row['params_json']);MicroVideoMedia::validateImages($tenant,$user,$params['images'],15);
+        if($current['subtitles_enabled'])MicroVideoMedia::subtitlePreflight();
         PointService::assertCanConsumeAmounts($tenant,$user,$current['tenant_cost_points'],$current['user_charge_points']);
-        Db::transaction(function()use($tenant,$user,$p,$id,$key,$current){$row=MicroVideoStore::owned($tenant,$user,$id,true);if($row['submit_key']===$key)return;if($row['status']!=='awaiting_confirmation')throw new InvalidArgumentException('作品已提交或仍在规划，请刷新状态');self::validateQuote($row,$p,$current);if(($row['generation_mode']??'reference')==='start_end'){MicroVideoFramePolicy::ready($row,MicroVideoFrames::rows($id),count(MicroVideoStore::segments($id)));if($current['frame_identity']!==MicroVideoFramePolicy::identity($row,MicroVideoFrames::rows($id)))throw new InvalidArgumentException('首尾帧已变化，请重新估价');}MicroVideoStore::update($id,['status'=>'running','confirmed_quote'=>MicroVideoStore::encode($current),'submit_key'=>$key,'error'=>'','next_run_at'=>time()]);});
+        Db::transaction(function()use($tenant,$user,$p,$id,$key,$current){$row=MicroVideoStore::owned($tenant,$user,$id,true);if($row['submit_key']===$key)return;if($row['status']!=='awaiting_confirmation')throw new InvalidArgumentException('作品已提交或仍在规划，请刷新状态');self::validateQuote($row,$p,$current);if(($row['generation_mode']??'reference')==='start_end'){MicroVideoFramePolicy::ready($row,MicroVideoFrames::rows($id),count(MicroVideoStore::segments($id)));if($current['frame_identity']!==MicroVideoFramePolicy::identity($row,MicroVideoFrames::rows($id)))throw new InvalidArgumentException('首尾帧已变化，请重新估价');}$params=MicroVideoStore::json($row['params_json']);$params['subtitles_enabled']=$current['subtitles_enabled'];MicroVideoStore::update($id,['params_json'=>MicroVideoStore::encode($params),'status'=>'running','confirmed_quote'=>MicroVideoStore::encode($current),'submit_key'=>$key,'error'=>'','next_run_at'=>time()]);});
         return self::detail($tenant,$user,$id);
     }
     private static function validateQuote(array $row,array $p,array $quote): void
@@ -189,6 +198,7 @@ final class MicroVideoService
             if($ids)MicroVideoStore::table('segment')->whereIn('id',$ids)->update(['status'=>'pending','error'=>'','update_time'=>time()]);
             $unknown=MicroVideoStore::table('attempt')->where('task_id',$id)->whereIn('status',['submitting','unknown'])->count();if(!$segments&&$unknown)throw new InvalidArgumentException('模型调用状态待核对，已保留进度');
             if(!$segments)MicroVideoStore::table('attempt')->where('task_id',$id)->where('status','validation_failed')->where('kind','<>','video')->update(['status'=>'failed','update_time'=>time()]);
+            MicroVideoSubtitles::retry($row);
             MicroVideoStore::update($id,['status'=>$segments?'running':'planning','resume_key'=>$key,'confirmed_quote'=>MicroVideoStore::encode($quote),'error'=>'','next_run_at'=>time(),'merge_status'=>'pending']);
         });return self::detail($tenant,$admin?0:$user,$id,$admin);
     }
@@ -200,6 +210,8 @@ final class MicroVideoService
         $state=MicroVideoPolicy::publicState($row['status'],(string)($row['frame_status']??'off'));unset($state['can_show_error']);
         $out=$state+['id'=>(int)$row['id'],'title'=>$row['title'],'params'=>$params,'prompt'=>$row['prompt'],'analysis'=>$row['analysis'],'continuity'=>$row['continuity'],'plan_revision'=>(int)$row['plan_revision'],'segments'=>[],'estimate'=>['user_charge_points'=>(float)(MicroVideoStore::json($row['quote_json'])['user_charge_points']??0),'planning_points'=>self::planningPoints($id)],'result_url'=>self::fileUrl($row['result_uri'],$row),'cover_url'=>self::fileUrl($row['cover_uri'],$row),'actual_duration'=>(float)$row['actual_duration'],'create_time'=>(int)$row['create_time'],'update_time'=>(int)$row['update_time']];
         $out+=MicroVideoFrames::dto($row,$admin);
+        $out['subtitles']=MicroVideoSubtitles::dto($row);
+        if($row['status']==='merging'&&$out['subtitles']['enabled'])$out['status_text']=match($out['subtitles']['status']){'extracting'=>'正在提取音轨','transcribing'=>'正在识别字幕','rendering'=>'正在合成字幕',default=>$out['status_text']};
         if($row['status']==='awaiting_confirmation'||$admin){
             foreach(MicroVideoStore::segments($id) as $segment){$s=MicroVideoStore::segmentData($segment);if($admin){$s+=array_intersect_key($segment,array_flip(['status','actual_duration','video_uri','error','attempt_no']));$s['can_retry']=$segment['status']==='failed';$s['attempts']=MicroVideoStore::table('attempt')->where('segment_id',$segment['id'])->order('attempt_no')->select()->toArray();}$out['segments'][]=$s;}
         }

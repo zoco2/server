@@ -137,9 +137,65 @@ final class MicroVideoMedia
             return [
                 'uri' => $stored['uri'], 'url' => self::managedUrl($stored['uri'], $stored, $tenant),
                 'cover_uri' => $cover['uri'], 'cover_url' => self::managedUrl($cover['uri'], $cover, $tenant),
-                'duration' => $merged['duration'], 'width' => $merged['width'], 'height' => $merged['height'],
+                'duration' => $merged['duration'], 'width' => $merged['width'], 'height' => $merged['height'], 'has_audio' => $merged['source_has_audio'],
             ] + self::storageFields($stored);
         } finally { self::cleanup($workspace); }
+    }
+
+    public static function subtitlePreflight(): void
+    {
+        self::binary('ffprobe'); self::subtitleFont();
+        if (!preg_match('/\bsubtitles\s+V->V/', self::run([self::binary('ffmpeg'), '-hide_banner', '-filters'], 15))) {
+            throw new RuntimeException('视频处理程序缺少字幕滤镜，请安装支持 libass 的 FFmpeg');
+        }
+    }
+
+    private static function subtitleFont(): string
+    {
+        $font = getenv('MICRO_VIDEO_SUBTITLE_FONT') ?: '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
+        if (!is_file($font) || !is_readable($font)) throw new RuntimeException('未找到中文字幕字体，请安装 fonts-noto-cjk');
+        return $font;
+    }
+
+    public static function subtitleMovie(array $task, array $original, callable $recognize, callable $finished, bool $extractAudio = true): array
+    {
+        self::subtitlePreflight();
+        $tenant=(int)$task['tenant_id'];$user=(int)$task['user_id'];$workspace=self::workspace();
+        try {
+            $uri=self::canonicalUri($original['uri']);$file=self::ownedFile($tenant,$user,$uri,FileEnum::VIDEO_TYPE);$storage=self::storage($file,$tenant);
+            $input=$workspace.'/original.mp4';
+            self::materialize($storage['storage_engine']==='local'?$uri:self::managedUrl($uri,$storage,$tenant),$input,$tenant,$user);
+            $probe=self::probe($input);$audio=$workspace.'/speech.wav';
+            if($extractAudio)self::extractSubtitleAudio($input,$audio);
+            $cues=$recognize($audio);
+            $result=$original;
+            if($cues){
+                $path=self::burnSubtitles($input,$workspace,$cues,$probe);
+                $stored=self::persistVideo($path,$tenant,$user);
+                $result=array_replace($original,['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant)],self::storageFields($stored));
+            }
+            $finished($result);return $result;
+        } finally { self::cleanup($workspace); }
+    }
+
+    private static function extractSubtitleAudio(string $input,string $output): void
+    {
+        self::run([self::binary('ffmpeg'),'-v','error','-nostdin','-y','-protocol_whitelist','file','-i',$input,'-vn','-map','0:a:0','-ac','1','-ar','16000','-c:a','pcm_s16le','-threads','1',$output],180);
+        if(!is_file($output)||filesize($output)<=44||filesize($output)>100*1024*1024)throw new RuntimeException('字幕音轨提取失败或超过大小限制');
+    }
+
+    private static function burnSubtitles(string $input,string $workspace,array $cues,array $probe): string
+    {
+        $font=self::subtitleFont();$family=getenv('MICRO_VIDEO_SUBTITLE_FONT_FAMILY')?:'Noto Sans CJK SC';
+        if(preg_match('/[,\r\n]/',$family))throw new RuntimeException('字幕字体名称无效');
+        if(!copy($font,$workspace.'/subtitle-font.'.pathinfo($font,PATHINFO_EXTENSION)))throw new RuntimeException('字幕字体读取失败');
+        $ass=MicroVideoSubtitles::ass($cues,$probe['width'],$probe['height'],$family);
+        if(file_put_contents($workspace.'/subtitles.ass',$ass)===false)throw new RuntimeException('字幕文件写入失败');
+        $output=$workspace.'/subtitled.mp4';
+        self::run([self::binary('ffmpeg'),'-v','error','-nostdin','-y','-protocol_whitelist','file','-i',$input,'-map','0:v:0','-map','0:a:0?','-vf','subtitles=filename=subtitles.ass:fontsdir=.','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','-c:a','copy','-movflags','+faststart',$output],900,$workspace);
+        $final=self::probe($output);
+        if(abs($final['duration']-$probe['duration'])>0.3||$final['width']!==$probe['width']||$final['height']!==$probe['height'])throw new RuntimeException('字幕成片校验失败');
+        return $output;
     }
 
     private static function canonicalUri(string $input): string
@@ -279,9 +335,10 @@ final class MicroVideoMedia
     private static function concatLocal(array $inputs, string $workspace, array $sharedBoundaries = []): array
     {
         if (!$inputs) throw new RuntimeException('没有可合并的视频片段');
-        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $width = 0; $height = 0;
+        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $width = 0; $height = 0; $sourceHasAudio = false;
         foreach ($inputs as $index => $input) {
             $probe = self::probe($input);
+            $sourceHasAudio = $sourceHasAudio || $probe['has_audio'];
             $trimFrames = $index > 0 && !empty($sharedBoundaries[$index]) ? self::repeatedBoundaryFrames($inputs[$index - 1], $input) : 0;
             $trimSeconds = $trimFrames / 30; $removed += $trimSeconds; $expected += $probe['duration'] - $trimSeconds;
             if ($index === 0) { $width = max(2, (int)(round($probe['width'] / 2) * 2)); $height = max(2, (int)(round($probe['height'] / 2) * 2)); }
@@ -308,7 +365,7 @@ final class MicroVideoMedia
         if (!str_contains($final['format'], 'mp4') || abs($final['duration'] - $expected) > max(0.3, count($inputs) * 0.12)) throw new RuntimeException('合并视频时长校验失败');
         $path = $workspace . '/merged.mp4';
         if (!rename($partial, $path)) throw new RuntimeException('合并视频发布失败');
-        return ['path' => $path, 'deduplicated_duration' => $removed] + $final;
+        return ['path' => $path, 'deduplicated_duration' => $removed, 'source_has_audio' => $sourceHasAudio] + $final;
     }
 
     private static function repeatedBoundaryFrames(string $previous, string $next): int
@@ -353,9 +410,9 @@ final class MicroVideoMedia
         throw new RuntimeException('未找到视频处理程序：' . $name);
     }
 
-    private static function run(array $command, int $timeout): string
+    private static function run(array $command, int $timeout, ?string $cwd = null): string
     {
-        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, null, ['bypass_shell' => true]);
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd, null, ['bypass_shell' => true]);
         if (!is_resource($process)) throw new RuntimeException('视频处理程序启动失败');
         fclose($pipes[0]); stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);
         $started = microtime(true); $output = ''; $error = ''; $code = -1;

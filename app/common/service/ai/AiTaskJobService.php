@@ -308,6 +308,8 @@ class AiTaskJobService
     {
         $consumption = AiConsumptionLog::findOrEmpty($consumptionId);
         if ($consumption->isEmpty()) return true;
+        // Micro-video's worker replays its synchronous STT receipt; generic polling must not settle it.
+        if($consumption['app_code']==='aigc_micro_video'&&$consumption['action_code']==='micro_subtitle')return true;
         if($consumption['app_code']==='aigc_llm'&&$consumption['action_code']==='agent_speech'){
             \app\common\service\app\aigc_llm\agent\AgentSpeechTool::reconcile($consumptionId,(int)$consumption['tenant_id']);
             return true;
