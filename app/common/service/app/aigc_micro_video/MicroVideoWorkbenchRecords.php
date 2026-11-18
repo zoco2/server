@@ -18,7 +18,7 @@ final class MicroVideoWorkbenchRecords
         $q=self::query($tenant,$user,$kind,$admin,$write)->where('id',$id);if($lock)$q->lock(true);$r=$q->find();if(!$r)throw new InvalidArgumentException('资料不存在或无权访问');return $r;
     }
     public static function dto(array $r): array
-    {return ['id'=>(int)$r['id'],'kind'=>$r['kind'],'title'=>$r['title'],'user_id'=>(int)$r['user_id'],'revision'=>(int)$r['revision'],'status'=>(int)$r['status'],'visibility'=>$r['visibility'],'body'=>self::publicBody(MicroVideoStore::json($r['body_json'])),'create_time'=>(int)$r['create_time'],'update_time'=>(int)$r['update_time']];}
+    {return ['id'=>(int)$r['id'],'kind'=>$r['kind'],'title'=>$r['title'],'user_id'=>(int)$r['user_id'],'revision'=>(int)$r['revision'],'status'=>(int)$r['status'],'visibility'=>$r['visibility'],'body'=>self::publicBody(MicroVideoLibraryGeneration::decorate($r,MicroVideoStore::json($r['body_json']))),'create_time'=>(int)$r['create_time'],'update_time'=>(int)$r['update_time']];}
     /** Public images preserve usable storage references but never expose private receipt/owner identities. */
     public static function publicAsset(array $image): array
     {return array_intersect_key($image,array_flip(['id','uri','url','name','role','storage_scope','storage_engine','storage_domain']));}

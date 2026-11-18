@@ -198,6 +198,68 @@ final class MicroVideoMedia
         return $output;
     }
 
+    public static function extractRoleVoice(int $tenant,int $user,string $uri): array
+    {
+        $workspace=self::workspace();
+        try {
+            $source=$workspace.'/voice-source.mp4';self::materialize($uri,$source,$tenant,$user);
+            $media=self::probe($source);
+            if(!$media['has_audio']||$media['duration']<1||$media['duration']>16)throw new RuntimeException('NO_AUDIO');
+            $target=$workspace.'/voice.wav';
+            self::run([self::binary('ffmpeg'),'-v','error','-y','-protocol_whitelist','file','-i',$source,'-map','0:a:0','-vn','-ac','1','-ar','24000','-c:a','pcm_s16le',$target],90);
+            $audio=self::compactRoleVoice((string)file_get_contents($target));$bytes=$audio['bytes'];
+            $stored=\app\common\service\app\aigc_music\AigcMusicAssetService::persistGeneratedAudio('data:audio/wav;base64,'.base64_encode($bytes),$tenant,$user);
+            if(empty($stored['stored'])||empty($stored['uri']))throw new RuntimeException('角色声音保存失败');
+            return ['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant),'duration'=>$audio['duration']];
+        } finally {self::cleanup($workspace);}
+    }
+
+    /** Evaluate the native model result: validate metadata only and persist the exact returned bytes. */
+    public static function persistRoleAudition(int $tenant,int $user,string $wav): array
+    {
+        if(strlen($wav)>30*1024*1024||substr($wav,0,4)!=='RIFF'||substr($wav,8,4)!=='WAVE')throw new RuntimeException('NO_AUDIO');
+        $workspace=self::workspace();
+        try {
+            $source=$workspace.'/raw.wav';
+            file_put_contents($source,$wav);
+            $info=json_decode(self::run([self::binary('ffprobe'),'-v','error','-protocol_whitelist','file','-format_whitelist','wav','-show_streams','-show_format','-of','json',$source],30),true,512,JSON_THROW_ON_ERROR);
+            $duration=(float)($info['format']['duration']??0);
+            if(!is_finite($duration)||$duration<=0||!array_filter($info['streams']??[],static fn($s)=>($s['codec_type']??'')==='audio'))throw new RuntimeException('NO_AUDIO');
+            // Do not trim silence, normalize, change channels, resample, or stretch the generated audio.
+            $stored=\app\common\service\app\aigc_music\AigcMusicAssetService::persistGeneratedAudio('data:audio/wav;base64,'.base64_encode($wav),$tenant,$user);
+            if(empty($stored['stored'])||empty($stored['uri']))throw new RuntimeException('角色声音保存失败');
+            return ['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant),'duration'=>$duration,'audio_sha256'=>hash('sha256',$wav)];
+        } finally {self::cleanup($workspace);}
+    }
+
+    /** Keep the complete spoken interval, including pauses, with a small lead-in and natural tail. */
+    private static function compactRoleVoice(string $wav): array
+    {
+        if(strlen($wav)<44||strlen($wav)>15*1024*1024||substr($wav,0,4)!=='RIFF'||substr($wav,8,4)!=='WAVE')throw new RuntimeException('NO_AUDIO');
+        $pcm='';$format=null;
+        for($offset=12;$offset+8<=strlen($wav);){
+            $kind=substr($wav,$offset,4);$size=unpack('V',substr($wav,$offset+4,4))[1];$offset+=8;
+            if($offset+$size>strlen($wav))throw new RuntimeException('NO_AUDIO');
+            if($kind==='fmt '&&$size>=16)$format=unpack('vencoding/vchannels/Vrate/VbytesPerSecond/vblock/vbits',substr($wav,$offset,16));
+            if($kind==='data')$pcm=substr($wav,$offset,$size);
+            $offset+=$size+($size%2);
+        }
+        if(!$format||$format['encoding']!==1||$format['channels']!==1||$format['rate']!==24000||$format['bits']!==16||strlen($pcm)%2)throw new RuntimeException('NO_AUDIO');
+        $frames=intdiv(strlen($pcm),2);$first=null;$last=null;
+        for($i=0;$i<$frames;$i++){
+            $sample=ord($pcm[$i*2])|(ord($pcm[$i*2+1])<<8);if($sample>32767)$sample-=65536;
+            if(abs($sample)>=32){$first??=$i;$last=$i;}
+        }
+        if($first===null)throw new RuntimeException('NO_AUDIO');
+        $start=max(0,$first-3600);$end=min($frames,$last+1+6000);
+        // Downstream voice references require at least one second. Never remove sentence-internal pauses.
+        if($end-$start<24000){$end=min($frames,$start+24000);$start=max(0,$end-24000);}
+        $pcm=substr($pcm,$start*2,($end-$start)*2);$size=strlen($pcm);
+        if(($end-$start)/24000>15.1)throw new RuntimeException('试音超过15秒，请缩短台词');
+        $bytes='RIFF'.pack('V',36+$size).'WAVEfmt '.pack('VvvVVvv',16,1,1,24000,48000,2,16).'data'.pack('V',$size).$pcm;
+        return ['bytes'=>$bytes,'duration'=>($end-$start)/24000];
+    }
+
     private static function canonicalUri(string $input): string
     {
         if ($input === '' || str_contains($input, '\\') || preg_match('/[\x00-\x20\x7f]/', $input)) throw new RuntimeException('素材路径无效');

@@ -39,7 +39,7 @@ final class MicroVideoSettings
     }
     public static function detail(int $tenant,bool $admin=false,bool $summary=false): array
     {
-        $config=self::get($tenant);$summary=$admin&&$summary;
+        $revision=MicroVideoCatalogVersion::current($tenant);$config=self::get($tenant);$summary=$admin&&$summary;
         $all=MicroVideoCatalog::models($tenant,false,'reference',$admin?null:(array)$config['video_model_ids'],$summary);
         if($summary&&$config['default_model_id']!==''){
             $full=MicroVideoCatalog::models($tenant,false,'reference',[(string)$config['default_model_id']]);
@@ -48,7 +48,7 @@ final class MicroVideoSettings
         $models=array_values(array_filter($all,fn($m)=>in_array($m['id'],$config['video_model_ids'],true)));
         $out=array_intersect_key($config,array_flip(['status','default_model_id','default_quality','default_ratio','target_duration_options','max_images','max_segments']));
         $frameModels=MicroVideoFrameCatalog::models($tenant);$out+=['frames_enabled'=>(int)$config['frames_enabled'],'frame_models'=>array_values(array_filter($frameModels,fn($m)=>in_array($m['id'],$config['frame_model_ids'],true))),'default_frame_model_id'=>$config['default_frame_model_id'],'default_frame_quality'=>$config['default_frame_quality']];
-        $out+=['models'=>$models,'directions'=>self::directions($tenant,false),'duration_notice'=>self::NOTICE];
+        $out+=['models'=>$models,'directions'=>self::directions($tenant,false),'duration_notice'=>self::NOTICE,'pricing_revision'=>$revision];
         if($admin)$out+=['available_frame_models'=>$frameModels,'available_models'=>$all,'text_models'=>MarketTextModelRuntimeService::modelGroups($tenant),'config'=>$config];return $out;
     }
     public static function directions(int $tenant,bool $admin=false): array
@@ -56,6 +56,28 @@ final class MicroVideoSettings
         self::seed($tenant);$q=MicroVideoStore::table('direction')->where(['tenant_id'=>$tenant,'delete_time'=>0]);if(!$admin)$q->where('status',1);
         $rows=$q->order(['sort'=>'desc','id'=>'asc'])->select()->toArray();
         foreach($rows as &$row){$row['cover_url']=$row['cover_image']!==''?FileService::getFileUrl($row['cover_image']):'';if(!$admin)unset($row['prompt'],$row['continuity_prompt'],$row['tenant_id']);}return $rows;
+    }
+    /** Optional PC wire format: retain every callable tuple and its authoritative first-SKU price. */
+    public static function compact(array $config): array
+    {
+        foreach($config['models'] as &$model){
+            $pairs=[];$seen=[];
+            foreach($model['specs'] as $spec){
+                $tuple=MicroVideoStore::encode([$spec['quality'],$spec['ratio'],$spec['duration']]);
+                if(isset($seen[$tuple]))continue;$seen[$tuple]=true;
+                $key=MicroVideoStore::encode([$spec['quality'],$spec['ratio']]);
+                if(!isset($pairs[$key]))$pairs[$key]=['quality'=>$spec['quality'],'ratio'=>$spec['ratio'],'prices'=>[]];
+                $pairs[$key]['prices'][]=[(int)$spec['duration'],(float)$spec['user_charge_points']];
+            }
+            $groups=[];
+            foreach($pairs as $pair){
+                $key=MicroVideoStore::encode([$pair['quality'],$pair['prices']]);
+                if(!isset($groups[$key]))$groups[$key]=[$pair['quality'],[],$pair['prices']];
+                $groups[$key][1][]=$pair['ratio'];
+            }
+            unset($model['specs'],$model['start_end_specs']);$model['spec_groups']=array_values($groups);
+        }
+        unset($model);return $config;
     }
     public static function direction(int $tenant,int $id): array
     {

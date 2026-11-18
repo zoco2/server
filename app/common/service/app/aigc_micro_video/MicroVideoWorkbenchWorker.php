@@ -38,6 +38,7 @@ final class MicroVideoWorkbenchWorker
     }
     private static function run(array $row,bool $reconcileOnly=false): void
     {
+        if($row['action']===MicroVideoLibraryVoice::ACTION){MicroVideoLibraryVoice::run($row,$reconcileOnly);return;}
         $id=(int)$row['id'];$tenant=(int)$row['tenant_id'];$user=(int)$row['user_id'];$request=MicroVideoStore::json($row['request_json']);$image=str_ends_with($row['action'],'_image');
         try{
             $c=self::consumption($row);$receipt=MicroVideoStore::json($row['receipt_json']);
@@ -53,12 +54,12 @@ final class MicroVideoWorkbenchWorker
             if($row['status']!=='queued'||$reconcileOnly){self::write($id,['status'=>'unknown','error'=>'作业中断，需核对受理记录，不会自动重新付费','next_run_at'=>time()+30]);return;}
             MicroVideoService::available($tenant);
             // Revalidate selected price immediately before public runtime admission. No DB lock waits on I/O.
-            if($image){$freshQuote=MicroVideoFrameCatalog::quote($tenant,$request['selection']);$freshQuote['approximate']=false;}
+            if($image){$freshQuote=in_array($row['action'],[MicroVideoLibraryGeneration::ROLE_ACTION,MicroVideoLibraryGeneration::PRODUCT_ACTION],true)?MicroVideoLibraryGeneration::quote($tenant,$request):MicroVideoFrameCatalog::quote($tenant,$request['selection']);$freshQuote['approximate']=false;}
             else{$m=Text::resolveModel($tenant,$request['selection']['model_id']);$freshQuote=$request['quote'];$freshQuote['price_identity']=['model_id'=>$m['id'],'input'=>$m['input'],'output'=>$m['output']];}
             if(MicroVideoWorkbenchPolicy::hash($freshQuote)!==MicroVideoWorkbenchPolicy::hash($request['quote']))throw new InvalidArgumentException('模型价格已变化，请重新估价');
             self::write($id,['status'=>'running','error'=>'']);
             if($image){
-                $r=Db::transaction(function()use($id,$tenant,$user,$request){$job=MicroVideoWorkbenchJobs::table()->where('id',$id)->lock(true)->find();if((int)$job['consumption_id']>0)return ['consumption_id'=>$job['consumption_id']];$reserve=Image::reserve($tenant,$user,'workbench_'.$job['action'],(string)$id,$request['selection'],self::imageRequest($request),1,MicroVideoStore::APP,'aigc_micro_video_workbench_job');self::write($id,['consumption_id'=>$reserve['consumption_id'],'app_task_id'=>$reserve['app_task_id']]);return $reserve;});
+                $r=self::reserveImage($id,$tenant,$user,$request);
                 self::imageResult($row,Image::submit((int)$r['consumption_id'],self::imageRequest($request)));return;
             }
             $result=Text::generate($tenant,$user,['content'=>$request['content'],'system_prompt'=>$request['system'],'model_id'=>$request['selection']['model_id'],'source_app_code'=>MicroVideoStore::APP,'business_table'=>'aigc_micro_video_workbench_job','business_id'=>$id,'action_code'=>'workbench_'.$row['action'],'_disable_model_fallback'=>true,'_disable_transient_retry'=>true,'_disable_compatibility_retry'=>true,'_require_final_content'=>true,'_micro_video_preserve_uncertain'=>true,'_micro_video_native_transport'=>true,'request_timeout_seconds'=>180,'model_config'=>['max_tokens'=>8000],
@@ -71,6 +72,18 @@ final class MicroVideoWorkbenchWorker
             self::write($id,['status'=>$known?'failed':'unknown','error'=>mb_substr($e->getMessage(),0,1000),'next_run_at'=>time()+30,'user_charge_points'=>(float)($c['actual_user_price']??0)]);\think\facade\Log::warning('Micro workbench job '.$id.': '.get_class($e));
         }
     }
+    private static function reserveImage(int $id,int $tenant,int $user,array $request): array
+    {
+        return Db::transaction(function()use($id,$tenant,$user,$request){
+            $job=MicroVideoWorkbenchJobs::table()->where('id',$id)->lock(true)->find();
+            if((int)$job['consumption_id']>0)return ['consumption_id'=>$job['consumption_id']];
+            // SKU resolution and admission must see the same reference images as pricing.
+            $imageRequest=self::imageRequest($request);
+            $reserve=Image::reserve($tenant,$user,'workbench_'.$job['action'],(string)$id,$imageRequest,$imageRequest,1,MicroVideoStore::APP,'aigc_micro_video_workbench_job');
+            self::write($id,['consumption_id'=>$reserve['consumption_id'],'app_task_id'=>$reserve['app_task_id']]);
+            return $reserve;
+        });
+    }
     private static function imageRequest(array $r): array
     {return $r['selection']+['quantity'=>1,'prompt'=>$r['prompt'],'reference_images'=>MicroVideoMedia::visionInputs($r['images'])];}
     private static function imageResult(array $row,array $result): void
@@ -81,7 +94,7 @@ final class MicroVideoWorkbenchWorker
     }
     private static function finish(array $row,array $receipt,array $c): void
     {
-        $result=self::parse($row,$receipt);self::write((int)$row['id'],['status'=>'success','result_json'=>MicroVideoStore::encode($result),'user_charge_points'=>(float)$c['actual_user_price'],'error'=>'']);
+        $result=self::parse($row,$receipt);MicroVideoLibraryGeneration::complete($row,$result);self::write((int)$row['id'],['status'=>'success','result_json'=>MicroVideoStore::encode($result),'user_charge_points'=>(float)$c['actual_user_price'],'error'=>'']);
     }
     public static function parse(array $row,array $receipt): array
     {
