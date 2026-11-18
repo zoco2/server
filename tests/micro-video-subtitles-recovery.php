@@ -142,6 +142,8 @@ namespace {
         $with=$service::quoteTask($priced,true);$without=$service::quoteTask($priced,false);
         check($with['user_charge_points']===107.25 && $with['tenant_cost_points']===54.5,'Server combines video and STT amounts at both billing levels');
         check($without['user_charge_points']===100. && $without['subtitle_points']===0,'Unselected subtitle adds no fee');
+        $policy=app\common\service\app\aigc_micro_video\MicroVideoPolicy::class;
+        check($policy::stableParams(['model_id'=>'model','subtitles_enabled'=>true])===$policy::stableParams(['model_id'=>'model']),'Post-processing does not break creative draft idempotency');
         $priced+=['quote_json'=>Store::encode($with),'quote_token'=>'confirmed','quote_expires'=>time()+600];
         $validate=new \ReflectionMethod($service,'validateQuote');$request=['plan_revision'=>2,'quote_token'=>'confirmed'];
         $validate->invoke(null,$priced,$request,$with);check(true,'Unchanged combined quote validates');
