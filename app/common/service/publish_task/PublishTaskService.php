@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\common\service\publish_task;
 
 use app\api\logic\merchant\StaffWechatBindingLogic;
+use app\common\enum\FileEnum;
 use app\common\enum\user\UserTerminalEnum;
 use app\common\job\PublishTaskJob;
 use app\common\model\merchant\MerchantBrand;
@@ -14,7 +15,9 @@ use app\common\model\merchant\PublishTask;
 use app\common\model\merchant\PublishTaskRun;
 use app\common\model\tenant\Tenant;
 use app\common\model\user\UserAuth;
+use app\common\service\douyin\DouyinH5ShareService;
 use app\common\service\tenant\TenantUrlService;
+use app\common\service\WorkspaceAssetService;
 use InvalidArgumentException;
 use RuntimeException;
 use think\facade\Db;
@@ -49,6 +52,14 @@ final class PublishTaskService
         $staffIds = array_key_exists('staff_ids', $input) ? self::staffIds($input['staff_ids']) : null;
 
         self::requireOwner($tenantId, $userId);
+        $fileId = null;
+        if (isset($input['douyin_file_id'])) {
+            $fileId = filter_var($input['douyin_file_id'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if (!$fileId || !in_array('douyin', $platforms, true)) {
+                throw new InvalidArgumentException('请为抖音任务选择有效的素材');
+            }
+            self::douyinMedia($tenantId, $userId, $fileId);
+        }
         if ($staffIds !== null) {
             $staff = self::staffQuery($tenantId, $userId)->whereIn('id', $staffIds)
                 ->field('id,openid,appid')->select()->toArray();
@@ -80,6 +91,9 @@ final class PublishTaskService
             'create_time' => $now,
             'update_time' => $now,
         ];
+        if ($fileId !== null) {
+            $row['douyin_file_id'] = $fileId;
+        }
         $id = Db::transaction(static function () use ($tenantId, $row): int {
             // 模型保存会忽略缺失字段，先检查旧表是否具备完整的任务字段。
             $query = PublishTask::query();
@@ -171,6 +185,59 @@ final class PublishTaskService
     /** 员工打开通知链接后，只读取这个租户下的任务内容和发布平台。 */
     public static function publicDetail(string $token): ?array
     {
+        $context = self::noticeContext($token);
+        if ($context === null) {
+            return null;
+        }
+        [$task, $storeId] = $context;
+        $brandId = (int)MerchantStore::where(['id' => $storeId, 'user_id' => $task->user_id])->value('brand_id');
+        return [
+            'content' => (string)$task->content,
+            'platforms' => json_decode($task->platforms, true, flags: JSON_THROW_ON_ERROR),
+            'brand_name' => $brandId > 0
+                ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $task->user_id])->value('name') : '',
+        ];
+    }
+
+    public static function douyinShare(string $token): array
+    {
+        $context = self::noticeContext($token);
+        if ($context === null) {
+            throw new InvalidArgumentException('任务链接无效或已不可用');
+        }
+        [$task] = $context;
+        if (!in_array('douyin', json_decode($task->platforms, true, flags: JSON_THROW_ON_ERROR), true)) {
+            throw new InvalidArgumentException('此任务未选择抖音');
+        }
+        if (empty($task->douyin_file_id)) {
+            throw new InvalidArgumentException('此任务尚未指定抖音图片或视频');
+        }
+        $tenantId = (int)request()->tenantId;
+        $content = self::douyinMedia($tenantId, (int)$task->user_id, (int)$task->douyin_file_id);
+        $share = DouyinH5ShareService::forTenant($tenantId)->createShare($content);
+        return ['schema' => $share['schema']];
+    }
+
+    private static function douyinMedia(int $tenantId, int $userId, int $fileId): array
+    {
+        $asset = WorkspaceAssetService::visibleAsset($tenantId, $userId, 'upload:result:' . $fileId);
+        if ($asset === null) {
+            throw new InvalidArgumentException('任务素材已移除或不可访问');
+        }
+        $file = $asset['raw'];
+        $ext = strtolower(pathinfo((string)parse_url($file['uri'], PHP_URL_PATH), PATHINFO_EXTENSION));
+        if ($file['type'] === FileEnum::VIDEO_TYPE && in_array($ext, ['mp4', 'mov'], true)) {
+            $field = 'video_path';
+        } elseif ($file['type'] === FileEnum::IMAGE_TYPE && in_array($ext, ['jpg', 'jpeg', 'png', 'gif'], true)) {
+            $field = 'image_path';
+        } else {
+            throw new InvalidArgumentException('抖音任务需要 JPG、PNG、GIF 图片或 MP4、MOV 视频');
+        }
+        return [$field => $file['url']];
+    }
+
+    private static function noticeContext(string $token): ?array
+    {
         $tenantId = (int)(request()->tenantId ?? 0);
         if ($tenantId <= 0 || strlen($token) > 160) {
             return null;
@@ -203,18 +270,12 @@ final class PublishTaskService
         }
 
         $task = PublishTask::where(['id' => (int)$run->task_id, 'user_id' => $userId])
-            ->field('staff_ids,content,platforms')->findOrEmpty();
+            ->findOrEmpty();
         $staffIds = json_decode($task->staff_ids ?? '[]', true);
         if ($task->isEmpty() || !is_array($staffIds) || !in_array($staffId, $staffIds, true)) {
             return null;
         }
-        $brandId = (int)MerchantStore::where(['id' => (int)$employee->store_id, 'user_id' => $userId])->value('brand_id');
-        return [
-            'content' => (string)$task->content,
-            'platforms' => json_decode($task->platforms, true, flags: JSON_THROW_ON_ERROR),
-            'brand_name' => $brandId > 0
-                ? (string)MerchantBrand::where(['id' => $brandId, 'user_id' => $userId])->value('name') : '',
-        ];
+        return [$task, (int)$employee->store_id];
     }
 
     /** 暂停当前计划，或从现在重新计算恢复后的排期。 */

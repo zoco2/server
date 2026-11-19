@@ -183,8 +183,16 @@ final class WorkspaceAssetService
 
     public static function isVisible(int $tenant, int $user, string $ref): bool
     {
+        return self::visibleAsset($tenant, $user, $ref) !== null;
+    }
+
+    public static function visibleAsset(int $tenant, int $user, string $ref): ?array
+    {
         $state = Db::name(self::TABLE)->where(['tenant_id'=>$tenant,'user_id'=>$user,'asset_ref'=>$ref])->find();
-        return !($state['trashed_at'] ?? 0) && !($state['hidden_at'] ?? 0) && self::owned($tenant, $user, $ref) !== null;
+        if (($state['trashed_at'] ?? 0) || ($state['hidden_at'] ?? 0)) {
+            return null;
+        }
+        return self::owned($tenant, $user, $ref);
     }
 
     /** Repair legacy library-only tombstones; never delete files or cancel live jobs. */

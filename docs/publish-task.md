@@ -33,3 +33,7 @@
 Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结果写入 `recipient_results`。发送进度由独立连接提交，发送中断且无法确认结果时，该接收人标为 `unknown`，重试继续处理没有发送记录的人。本轮处理完记为 `completed`，超过结束日期记为 `skipped`，MNS 重试耗尽记为 `failed`。同时更新计划的 `next_run_at` 和 `tasksn`，没有下一轮时清空这两个字段。
 
 任务通知复用员工列表「测试发送」的服务号模板。员工点击通知进入 `/page/publish-task/{token}`，链接使用租户二级域名。页面用 `GET /api/publish_task/detail?token=…` 读取任务内容、平台和可查询到的品牌名称。链接根据本轮执行编号和员工当前绑定校验。仅通知创建人时，消息不带员工任务链接。
+
+勾选抖音时，商家可从素材库指定一张图片或一段视频。创建接口通过可选字段 `douyin_file_id` 接收本人的上传文件 ID。已有环境需运行升级脚本 `upgrade/20261119_publish_task_douyin_file.sql`。
+
+员工在通知页点「发抖音」时，页面将通知的 `token` 提交至 `POST /api/publish_task/douyinShare`。服务端校验员工链接和素材归属，使用当前租户的抖音应用凭据签名，返回 `data.schema`。手机可用该链接打开抖音，电脑端提供抖音扫码入口。员工在抖音内确认发布。纯文字任务仍可查看和复制，点击分享时会提示缺少素材。

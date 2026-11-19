@@ -1,6 +1,6 @@
 # 抖音 H5 分享服务
 
-后端入口：`app\common\service\douyin\DouyinH5ShareService::createShare()`（实例方法）。本次只接入 service；公开门店的 HTTP 接口、素材选择、前端按钮及二维码展示后续接入。
+员工可从服务号的任务通知页打开抖音投稿。任务接口使用 `DouyinH5ShareService::forTenant($tenantId)->createShare($content)` 生成唤起链接。接口及素材要求见[任务发布接口](publish-task.md)。
 
 ## 配置
 
