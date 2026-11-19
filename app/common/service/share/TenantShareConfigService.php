@@ -30,12 +30,17 @@ final class TenantShareConfigService
         $table = TenantConfigTable::forTenant($this->tenantId);
         $result = [];
         foreach (self::PLATFORMS as $platform => $fields) {
-            $result[$platform] = $this->publicConfig($this->read($table, $platform), $fields);
+            $value = $this->read($table, $platform);
+            $secret = $this->decryptSecret((string)($value[$fields['secret']] ?? ''));
+            $result[$platform] = $this->publicConfig($value, $fields) + [$fields['secret'] => $secret];
+            if ($secret === '') {
+                $result[$platform]['configured'] = false;
+            }
         }
         return $result;
     }
 
-    /** 一次只修改一个平台；空密钥保持原值，密钥永不返回前端。 */
+    /** 一次只修改一个平台。兼容旧版客户端留空保留原值的提交。 */
     public function save(array $params): array
     {
         $platform = $params['platform'] ?? null;
@@ -43,14 +48,10 @@ final class TenantShareConfigService
             throw new InvalidArgumentException('请选择抖音或小红书');
         }
         $fields = self::PLATFORMS[$platform];
-        $enabled = $params['enabled'] ?? null;
-        if (!in_array($enabled, [0, 1, '0', '1'], true)) {
-            throw new InvalidArgumentException('分享开关须为 0 或 1');
-        }
         $key = $this->credential($params[$fields['key']] ?? null, 128, '应用标识');
         $secret = $this->credential($params[$fields['secret']] ?? '', 256, '应用密钥');
 
-        return Db::transaction(function () use ($platform, $fields, $enabled, $key, $secret): array {
+        return Db::transaction(function () use ($platform, $fields, $key, $secret): array {
             // 锁住租户行，首次插入配置也可串行化，防止重复配置或覆盖另一个编辑者的密钥。
             $table = TenantConfigTable::forTenant($this->tenantId, true);
             $old = $this->read($table, $platform);
@@ -66,10 +67,10 @@ final class TenantShareConfigService
                 }
                 $encrypted = 'enc:v1:' . $cipher;
             }
-            if ((int)$enabled === 1 && ($key === '' || $encrypted === '')) {
-                throw new InvalidArgumentException('启用分享前请填写应用标识和密钥');
+            if ($key === '' || $encrypted === '') {
+                throw new InvalidArgumentException('请填写分享应用标识和密钥');
             }
-            $value = ['enabled' => (int)$enabled, $fields['key'] => $key, $fields['secret'] => $encrypted];
+            $value = ['enabled' => 1, $fields['key'] => $key, $fields['secret'] => $encrypted];
             $where = ['tenant_id' => $this->tenantId, 'type' => 'social_share', 'name' => $platform];
             $id = Db::name($table)->where($where)->value('id');
             $row = ['value' => json_encode($value, JSON_THROW_ON_ERROR), 'update_time' => time()];
@@ -82,7 +83,7 @@ final class TenantShareConfigService
         });
     }
 
-    /** 只供服务端使用；租户未配置/禁用时禁止回退到平台的环境凭据。 */
+    /** 用当前租户的凭据签名。 */
     public function runtime(string $platform): array
     {
         if (!isset(self::PLATFORMS[$platform])) {
@@ -90,13 +91,10 @@ final class TenantShareConfigService
         }
         $fields = self::PLATFORMS[$platform];
         $value = $this->read(TenantConfigTable::forTenant($this->tenantId), $platform);
-        if ((int)($value['enabled'] ?? 0) !== 1) {
-            throw new RuntimeException('当前租户未启用' . $fields['name'] . '分享');
-        }
         $cipher = (string)($value[$fields['secret']] ?? '');
-        $secret = str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';
+        $secret = $this->decryptSecret($cipher);
         if (empty($value[$fields['key']]) || $secret === '') {
-            throw new RuntimeException($fields['name'] . '分享凭据不可用，请在租户后台重新配置');
+            throw new ShareServiceException($fields['name'] . '分享凭据不可用，请管理员在「基础配置 → 分享配置」重新填写并保存应用标识和密钥');
         }
         return [
             $fields['key'] => $value[$fields['key']],
@@ -104,6 +102,11 @@ final class TenantShareConfigService
             // 缓存驱动由部署配置控制，不允许租户传入连接名。
             'cache_store' => (string)config($platform . '.cache_store', ''),
         ];
+    }
+
+    private function decryptSecret(string $cipher): string
+    {
+        return str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';
     }
 
     private function read(string $table, string $platform): array
@@ -126,7 +129,7 @@ final class TenantShareConfigService
         $key = (string)($value[$fields['key']] ?? '');
         $secretSet = (string)($value[$fields['secret']] ?? '') !== '';
         return [
-            'enabled' => (int)($value['enabled'] ?? 0),
+            'enabled' => 1, // 兼容旧版租户后台。
             $fields['key'] => $key,
             $fields['secret'] . '_set' => $secretSet,
             'configured' => $key !== '' && $secretSet,

@@ -29,6 +29,7 @@ Config::set(['default' => 'fixture', 'connections' => ['fixture' => [
     'type' => 'sqlite', 'database' => ':memory:', 'prefix' => 'test_', 'trigger_sql' => false,
 ]]], 'database');
 Config::set(['default' => 'file', 'stores' => ['file' => ['type' => 'File', 'path' => $cacheDir]]], 'cache');
+Config::set(['default' => 'mns', 'channels' => ['mns' => ['type' => 'file', 'path' => $cacheDir]]], 'log');
 Env::set(['database' => ['prefix' => 'test_'], 'wechat' => ['credential_key' => 'fixture-encryption-key']]);
 Model::setDb($app->make('db'));
 $request = new Request();
@@ -65,7 +66,13 @@ $expectError = static function (string $message) use ($call): void {
     check($response['code'] === 0 && str_contains($response['msg'], $message), 'Expected error: ' . $message);
 };
 try {
+    $expectError('抖音分享凭据不可用');
     (new TenantShareConfigService(1))->save(['platform' => 'douyin', 'enabled' => 1, 'client_key' => 'test-key', 'client_secret' => 'test-secret']);
+    // 旧数据可能仍保存 enabled=0，凭据完整的通知应当可以生成分享链接。
+    $config = Db::name('tenant_config')->where(['tenant_id' => 1, 'type' => 'social_share', 'name' => 'douyin']);
+    $legacy = json_decode($config->value('value'), true, flags: JSON_THROW_ON_ERROR);
+    $legacy['enabled'] = 0;
+    $config->update(['value' => json_encode($legacy, JSON_THROW_ON_ERROR)]);
     // 使用测试票据运行真实签名逻辑，无需平台账号或网络请求。
     (new DouyinCredentialCache(Cache::store(), 'test-key', 'test-secret'))->set('open_ticket', ['value' => 'test-ticket', 'expires_at' => time() + 300]);
     check($controller->isNotNeedLogin(), 'Notification authorizes the employee without an account session');
@@ -80,6 +87,11 @@ try {
         check($params['signature'] === DouyinH5ShareService::signature($params['nonce_str'], 'test-ticket', $params['timestamp']), 'Valid signature');
         check(!isset($params['title']), 'Employee instructions are not the post caption');
     }
+    Db::execute('ALTER TABLE test_user_asset_state RENAME TO test_unavailable_state');
+    $failure = $call();
+    check($failure['code'] === 0 && preg_match('/排查编号 [a-f0-9]{12}$/u', $failure['msg']) === 1, 'Unexpected failures have a support reference');
+    check(!str_contains($failure['msg'], 'test_user_asset_state'), 'Database errors are never public');
+    Db::execute('ALTER TABLE test_unavailable_state RENAME TO test_user_asset_state');
     Db::name('user_asset_state')->insert(['tenant_id' => 1, 'user_id' => 2, 'asset_ref' => 'upload:result:4', 'hidden_at' => 100]);
     $expectError('素材已移除或不可访问');
     Db::name('user_asset_state')->where('id', 1)->update(['hidden_at' => 0]);

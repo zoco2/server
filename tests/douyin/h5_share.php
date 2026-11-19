@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use app\common\service\douyin\DouyinCredentialCache;
 use app\common\service\douyin\DouyinH5ShareService;
+use app\common\service\share\ShareServiceException;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -194,8 +195,16 @@ try {
     }
     $history = [];
     $denied = fixture($root . '/denied', [token(), response(['error_code' => 2190004, 'description' => 'server-token'])], $history);
-    fails(fn () => $denied->createShare($image), '2190004');
+    $error = fails(fn () => $denied->createShare($image), 'open.get.ticket', ShareServiceException::class);
+    same(2190004, $error->getCode(), 'Ticket permission error keeps the upstream code');
+    same(false, str_contains($error->getMessage(), 'server-token'), 'Ticket errors redact upstream descriptions');
     same(2, count($history), 'permission failures are not retried');
+
+    $history = [];
+    $invalidKey = fixture($root . '/invalid-key', [response(['error_code' => 10013, 'description' => 'private upstream detail'])], $history);
+    $error = fails(fn () => $invalidKey->createShare($image), 'Client Key', ShareServiceException::class);
+    same(10013, $error->getCode(), 'Rejected application credentials keep the upstream code');
+    same(false, str_contains($error->getMessage(), 'private upstream detail'), 'Credential errors redact upstream descriptions');
 
     $history = [];
     $badTicket = fixture($root . '/bad-ticket', [token(), ticket('', 7200)], $history);

@@ -81,14 +81,16 @@ try {
     $one = new TenantShareConfigService(1);
     $two = new TenantShareConfigService(2);
     $split = new TenantShareConfigService(3);
-    check($one->display()['douyin']['enabled'] === 0, 'New tenant defaults disabled');
+    foreach ($one->display() as $platform) {
+        check($platform['enabled'] === 1 && !$platform['configured'], 'New platform should await credentials');
+    }
     fails(fn () => new TenantShareConfigService(0), '租户');
     fails(fn () => (new TenantShareConfigService(99))->display(), '租户不存在');
-    $douyin = ['platform' => 'douyin', 'enabled' => 1, 'client_key' => 'tenant-one', 'client_secret' => 'one-secret'];
+    $douyin = ['platform' => 'douyin', 'client_key' => 'tenant-one', 'client_secret' => 'one-secret'];
     $one->save($douyin);
     $two->save(array_replace($douyin, ['client_key' => 'tenant-two', 'client_secret' => 'two-secret']));
     $split->save(array_replace($douyin, ['client_key' => 'tenant-split', 'client_secret' => 'split-secret']));
-    $xhs = ['platform' => 'xiaohongshu', 'enabled' => 1, 'app_key' => 'xhs-one', 'app_secret' => 'xhs-secret'];
+    $xhs = ['platform' => 'xiaohongshu', 'app_key' => 'xhs-one', 'app_secret' => 'xhs-secret'];
     $one->save($xhs);
     check($one->runtime('douyin')['client_secret'] === 'one-secret', 'Tenant one secret');
     check($two->runtime('douyin')['client_secret'] === 'two-secret', 'Tenant two secret');
@@ -97,21 +99,27 @@ try {
     $stored = Db::name('tenant_config')->where('tenant_id', 1)->where('name', 'douyin')->value('value');
     check(!str_contains($stored, 'one-secret') && str_contains($stored, 'enc:v1:'), 'Secret encrypted at rest');
     $display = $one->display();
-    check(!isset($display['douyin']['client_secret']) && !isset($display['xiaohongshu']['app_secret']), 'Secrets never returned');
+    check($display['douyin']['client_secret'] === 'one-secret' && $display['xiaohongshu']['app_secret'] === 'xhs-secret', 'Both saved secrets must be editable');
+    check($two->display()['douyin']['client_secret'] === 'two-secret' && $split->display()['douyin']['client_secret'] === 'split-secret', 'Form credentials are tenant scoped');
     check($display['douyin']['client_secret_set'] && $display['xiaohongshu']['configured'], 'Status returned');
-    $one->save(array_replace($douyin, ['client_secret' => '', 'enabled' => 0]));
-    fails(fn () => $one->runtime('douyin'), '未启用');
+    foreach (['douyin', 'xiaohongshu'] as $name) {
+        $query = Db::name('tenant_config')->where('tenant_id', 1)->where('name', $name);
+        $legacy = json_decode((clone $query)->value('value'), true);
+        $legacy['enabled'] = 0;
+        $query->update(['value' => json_encode($legacy)]);
+        check($one->display()[$name]['enabled'] === 1 && $one->runtime($name), 'Existing credentials must work without re-saving');
+    }
     $one->save(array_replace($douyin, ['client_secret' => '']));
     check($one->runtime('douyin')['client_secret'] === 'one-secret', 'Blank secret preserves original');
     check(Db::name('tenant_config')->where('tenant_id', 1)->where('name', 'douyin')->count() === 1, 'Save updates existing row');
     fails(fn () => $one->save(array_replace($douyin, ['client_key' => 'new-key', 'client_secret' => ''])), '对应的新密钥');
     check($one->runtime('douyin')['client_key'] === 'tenant-one', 'Rejected update leaves original intact');
-    foreach ([['enabled' => 2], ['enabled' => []], ['client_key' => []], ['client_secret' => ['bad']],
+    foreach ([['client_key' => []], ['client_secret' => ['bad']],
         ['client_key' => str_repeat('x', 129)], ['client_secret' => 'masked****'], ['client_secret' => "bad\nsecret"],
         ['platform' => 'kuaishou'], ['platform' => []]] as $invalid) {
         fails(fn () => $one->save(array_replace($douyin, $invalid)), '');
     }
-    fails(fn () => $two->save(['platform' => 'xiaohongshu', 'enabled' => 1, 'app_key' => '']), '启用分享前');
+    fails(fn () => $two->save(['platform' => 'xiaohongshu', 'app_key' => '']), '分享应用标识和密钥');
     check($one->runtime('xiaohongshu')['app_secret'] === 'xhs-secret', 'Other platform preserved');
 
     // Controller trusts the authenticated administrator, not request tenant_id or tenant context overrides.
@@ -123,7 +131,14 @@ try {
     check(requestFor($app, 'GET')->setConfig()->getData()['code'] === 0, 'GET cannot write credentials');
     check(requestFor($app, 'POST', [], 'getConfig')->getConfig()->getData()['code'] === 0, 'Read method constrained');
     $controller = requestFor($app, 'GET', [], 'getConfig');
-    check($controller->getConfig()->getData()['data']['douyin']['client_key'] === 'tenant-one', 'Read response');
+    $detail = $controller->getConfig();
+    check($detail->getData()['data']['douyin']['client_secret'] === 'rotated-secret', 'Rotated secret in read response');
+    Db::execute('CREATE TABLE test_operation_log (id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT,
+        action TEXT, account TEXT, url TEXT, type TEXT, params TEXT, ip TEXT, result TEXT, create_time INTEGER, update_time INTEGER)');
+    check((bool)(new \app\tenantapi\listener\OperationLog())->handle($detail), 'Share operation logged');
+    $log = json_decode(Db::name('operation_log')->where('admin_id', 10)->value('result'), true);
+    check(isset($log['data']['douyin']['client_key'], $log['data']['xiaohongshu']['app_key']), 'Platform identifiers are logged');
+    check(!isset($log['data']['douyin']['client_secret']) && !isset($log['data']['xiaohongshu']['app_secret']), 'Share secrets omitted from log');
 
     // 使用既有权限机制；独立升级 SQL 注册查看和保存权限。
     Db::name('tenant_system_menu')->insertAll([
@@ -151,11 +166,11 @@ try {
     check(json_decode((string)$history[0]['request']->getBody(), true)['client_secret'] === 'rotated-secret', 'Rotated secret used');
     $share = XiaohongshuH5ShareService::forTenant(1, $http)->createShare(['type' => 'normal', 'images' => ['https://cdn.example.com/a.jpg']]);
     check($share['verifyConfig']['appKey'] === 'xhs-one', 'XHS tenant key');
-    fails(fn () => XiaohongshuH5ShareService::forTenant(2, $http), '未启用');
+    fails(fn () => XiaohongshuH5ShareService::forTenant(2, $http), '分享凭据不可用');
     $two->save(array_replace($douyin, ['client_key' => 'tenant-two', 'client_secret' => '', 'enabled' => 0]));
     request()->tenantId = 2;
-    fails(fn () => new DouyinH5ShareService(), '未启用');
-    fails(fn () => new XiaohongshuH5ShareService(), '未启用');
+    check(new DouyinH5ShareService() instanceof DouyinH5ShareService, 'Legacy disable input cannot disable sharing');
+    fails(fn () => new XiaohongshuH5ShareService(), '分享凭据不可用');
     request()->tenantId = 1;
     check(new DouyinH5ShareService() instanceof DouyinH5ShareService, 'Default constructor uses request tenant');
     Db::name('tenant')->where('id', 2)->update(['delete_time' => time()]);

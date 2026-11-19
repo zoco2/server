@@ -18,7 +18,8 @@ class ShareSettingController extends BaseAdminController
             return $this->fail('请使用 GET 请求');
         }
         try {
-            return $this->data((new TenantShareConfigService($this->tenantId))->display());
+            return $this->data((new TenantShareConfigService($this->tenantId))->display())
+                ->header(['Cache-Control' => 'private, no-store']);
         } catch (Throwable) {
             return $this->fail('读取分享配置失败，请稍后重试');
         }
