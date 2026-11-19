@@ -17,7 +17,7 @@ class GeoArticleGenerationService
     private const TABLE = 'geo_article_generation';
     private const QUEUE_TTL = 1800;
     private const RUN_TTL = 600;
-    private const REQUEST_TIMEOUT_SECONDS = 180;
+    private const REQUEST_TIMEOUT_SECONDS = 600;
     private const MAX_TOOL_ROUNDS = 4;
     private const MAX_TOOL_CALLS = 8;
     private const MAX_OUTPUT_TOKENS = 8192;
