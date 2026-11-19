@@ -3,6 +3,7 @@
 namespace app\common\service\geo;
 
 use app\common\job\GeoArticleGenerationJob;
+use app\common\service\power\MarketTextModelProviderException;
 use app\common\service\power\TextSettlementPending;
 use app\common\service\user_task\UserTaskRunProgress;
 use InvalidArgumentException;
@@ -16,6 +17,7 @@ class GeoArticleGenerationService
     private const TABLE = 'geo_article_generation';
     private const QUEUE_TTL = 1800;
     private const RUN_TTL = 600;
+    private const REQUEST_TIMEOUT_SECONDS = 600;
     private const MAX_TOOL_ROUNDS = 4;
     private const MAX_TOOL_CALLS = 8;
     private const MAX_OUTPUT_TOKENS = 8192;
@@ -186,6 +188,11 @@ PROMPT;
 
         $toolCallsUsed = 0;
         for ($round = 0; $round <= self::MAX_TOOL_ROUNDS; $round++) {
+            $remaining = (int)$task['start_time'] + self::RUN_TTL - time();
+            // The text runtime rounds a shorter timeout up to ten seconds.
+            if ($remaining < 10) {
+                throw new InvalidArgumentException('生成超时，请稍后重试');
+            }
             $canRead = $tools !== [] && $round < self::MAX_TOOL_ROUNDS && $toolCallsUsed < self::MAX_TOOL_CALLS;
             $params = [
                 'content' => $prompt,
@@ -196,14 +203,14 @@ PROMPT;
                 'business_table' => self::TABLE,
                 'business_id' => (int)$task['id'],
                 'max_tokens' => self::MAX_OUTPUT_TOKENS,
-                'request_timeout_seconds' => 60,
+                'request_timeout_seconds' => min(self::REQUEST_TIMEOUT_SECONDS, $remaining),
                 '_agent_tool_history' => $tools !== [],
             ];
             if ($tools !== []) {
                 $params['tools'] = $tools;
                 $params['tool_choice'] = $canRead ? 'auto' : 'none';
             }
-            [$result, $model] = GeoTextModelService::generate($tenantId, $userId, $params, $candidates);
+            [$result, $model] = self::requestRound($task, $params, $candidates, $round + 1);
             // 工具结果必须交回发出调用的模型，续写时只保留已实际使用的模型。
             $candidates = [$model];
             $calls = (array)($result['tool_calls'] ?? []);
@@ -220,13 +227,6 @@ PROMPT;
             } catch (InvalidArgumentException $e) {
                 $content = (string)($result['content'] ?? '');
                 $source = (string)($result['content_source'] ?? 'content');
-                $reply = [];
-                if ($source === 'content') {
-                    // Keep the exact pre-parser bytes, including whitespace and invalid UTF-8.
-                    $reply = mb_check_encoding($content, 'UTF-8')
-                        ? ['response_content' => $content]
-                        : ['response_content_base64' => base64_encode($content)];
-                }
                 Log::warning('GEO 稿件回复校验失败 ' . self::encode([
                     'request_id' => (string)$task['request_id'],
                     'consumption_id' => (int)($result['consumption_id'] ?? 0),
@@ -236,7 +236,7 @@ PROMPT;
                     'content_source' => $source,
                     'content_bytes' => strlen($content),
                     'reason' => $e->getMessage(),
-                ] + $reply));
+                ] + ($source === 'content' ? self::responseLogFields($content) : [])));
                 throw $e;
             }
             if (!$canRead || $toolCallsUsed + count($calls) > self::MAX_TOOL_CALLS) {
@@ -258,6 +258,43 @@ PROMPT;
         }
 
         throw new RuntimeException('稿件生成未完成');
+    }
+
+    private static function requestRound(array $task, array $params, array $candidates, int $round): array
+    {
+        $consumptionId = 0;
+        $content = '';
+        $onEvent = static function (string $event, array $data) use (&$consumptionId, &$content): void {
+            if ($event === 'app_task') {
+                $consumptionId = (int)$data['consumption_id'];
+                $content = '';
+            } elseif ($event === 'delta') {
+                $content .= $data['delta'];
+            }
+        };
+        try {
+            return GeoTextModelService::generate((int)$task['tenant_id'], (int)$task['user_id'], $params, $candidates, $onEvent);
+        } catch (MarketTextModelProviderException | TextSettlementPending $e) {
+            $cause = $e instanceof TextSettlementPending ? $e->getPrevious() : $e;
+            if ($cause instanceof MarketTextModelProviderException) {
+                Log::warning('GEO 稿件模型请求中断 ' . self::encode([
+                    'request_id' => (string)$task['request_id'],
+                    'consumption_id' => $consumptionId,
+                    'round' => $round,
+                    'request_timeout_seconds' => $params['request_timeout_seconds'],
+                    'reason' => mb_scrub($cause->getMessage(), 'UTF-8'),
+                    'content_bytes' => strlen($content),
+                ] + self::responseLogFields($content)));
+            }
+            throw $e;
+        }
+    }
+
+    private static function responseLogFields(string $content): array
+    {
+        return mb_check_encoding($content, 'UTF-8')
+            ? ['response_content' => $content]
+            : ['response_content_base64' => base64_encode($content)];
     }
 
     private static function assistantToolMessage(array $result, array $calls): array

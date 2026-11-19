@@ -59,7 +59,7 @@ class GeoTextModelService
      * @param non-empty-list<array> $candidates
      * @return array{0: array, 1: array} 模型结果及实际使用的模型
      */
-    public static function generate(int $tenantId, int $userId, array $params, array $candidates): array
+    public static function generate(int $tenantId, int $userId, array $params, array $candidates, ?callable $onEvent = null): array
     {
         $inputTokens = MarketTextModelRuntimeService::estimateTokens(json_encode(
             [$params['messages'], $params['system_prompt'], $params['tools'] ?? []],
@@ -73,7 +73,7 @@ class GeoTextModelService
                 $result = MarketTextModelRuntimeService::generate($tenantId, $userId, $params + [
                     'model_selection' => (string)$model['id'],
                     '_disable_model_fallback' => true,
-                ]);
+                ], $onEvent);
                 return [$result, $model];
             } catch (MarketTextModelProviderException $e) {
                 if (!MarketTextModelRuntimeService::isExplicitModelUnavailable($e->getMessage())) {
