@@ -43,7 +43,7 @@ final class GeoRankingTaskConfig
         }
         try {
             $available = array_column(array_filter(
-                GeoDiagnosisService::platforms(),
+                GeoDiagnosisService::platforms($tenantId),
                 static fn (array $platform): bool => ($platform['upstreamConfigured'] ?? true) !== false
             ), 'id');
         } catch (Exception) {

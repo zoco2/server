@@ -28,7 +28,9 @@ namespace app\common\service\geo {
     class GeoDiagProvider {
         public static string $mode = 'rejected';
         public static int $calls = 0;
-        public static function createRun(array $request, string $key): array {
+        public function __construct(private int $tenantId) {}
+        public function createRun(array $request, string $key): array {
+            if ($this->tenantId !== 7) throw new \LogicException('Expected the brand owner tenant for GEO submission');
             self::$calls++;
             if (self::$mode === 'rejected') throw new GeoDiagProviderException('余额不足', 402);
             if (self::$mode === 'exception') throw new \RuntimeException('unexpected transport failure');

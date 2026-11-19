@@ -15,7 +15,7 @@ class DiagnosisController extends BaseApiController
     public function platforms()
     {
         try {
-            return $this->success('获取成功', GeoDiagnosisService::platforms());
+            return $this->success('获取成功', GeoDiagnosisService::platforms((int)$this->request->tenantId));
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
@@ -25,7 +25,7 @@ class DiagnosisController extends BaseApiController
     public function regions()
     {
         try {
-            return $this->success('获取成功', GeoDiagnosisService::regions());
+            return $this->success('获取成功', GeoDiagnosisService::regions((int)$this->request->tenantId));
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
@@ -35,7 +35,7 @@ class DiagnosisController extends BaseApiController
     public function usage()
     {
         try {
-            return $this->success('获取成功', GeoDiagnosisService::usage());
+            return $this->success('获取成功', GeoDiagnosisService::usage((int)$this->request->tenantId));
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
