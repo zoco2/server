@@ -1308,7 +1308,8 @@ class MarketTextModelRuntimeService
             },
             CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use (&$buffer, &$body, &$receivedEvent, &$receivedSseEvent, &$state, $onEvent, $key): int {
                 $body .= $chunk;
-                $buffer .= str_replace("\r\n", "\n", $chunk);
+                // A CRLF separator can span two cURL callbacks.
+                $buffer = str_replace("\r\n", "\n", $buffer . $chunk);
                 while (($pos = strpos($buffer, "\n\n")) !== false) {
                     $block = substr($buffer, 0, $pos);
                     $buffer = substr($buffer, $pos + 2);
@@ -1628,10 +1629,10 @@ class MarketTextModelRuntimeService
             return ['type' => 'delta', 'content' => $delta, 'usage' => $usage, 'provider_request_id' => $requestId, 'tool_calls' => $toolCalls, 'finish_reason' => $finishReason];
         }
         if ($reasoning !== '') {
-            return ['type' => 'delta', 'content' => $reasoning, 'reasoning' => true, 'usage' => $usage, 'provider_request_id' => $requestId, 'tool_calls' => $toolCalls];
+            return ['type' => 'delta', 'content' => $reasoning, 'reasoning' => true, 'usage' => $usage, 'provider_request_id' => $requestId, 'tool_calls' => $toolCalls, 'finish_reason' => $finishReason];
         }
         if (!empty($toolCalls)) {
-            return ['type' => 'tool_calls', 'tool_calls' => $toolCalls, 'usage' => $usage, 'provider_request_id' => $requestId];
+            return ['type' => 'tool_calls', 'tool_calls' => $toolCalls, 'usage' => $usage, 'provider_request_id' => $requestId, 'finish_reason' => $finishReason];
         }
         $terminal = $finishReason !== '' || in_array($eventType, [
             'done', 'finish', 'finished', 'complete', 'completed', 'message_stop', 'response.completed', 'response.failed',
