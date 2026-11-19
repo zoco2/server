@@ -9,9 +9,7 @@ use think\facade\Db;
 
 final class GeoDiagConfigService
 {
-    public const DEFAULTS = [
-        'api_key' => '', 'ssl_verify' => false,
-    ];
+    public const DEFAULTS = ['api_key' => ''];
 
     private static function query(int $tenantId, bool $lock = false)
     {
@@ -27,11 +25,10 @@ final class GeoDiagConfigService
             return self::DEFAULTS;
         }
         $data = json_decode($raw, true);
-        if (!is_array($data) || !is_string($data['api_key'] ?? null)
-            || !is_bool($data['ssl_verify'] ?? null)) {
+        if (!is_string($data['api_key'] ?? null)) {
             throw new RuntimeException('GEO 检测配置数据异常');
         }
-        return array_intersect_key($data, self::DEFAULTS);
+        return ['api_key' => $data['api_key']];
     }
 
     public static function save(int $tenantId, array $input, bool $onlyIfMissing = false): array
@@ -40,10 +37,7 @@ final class GeoDiagConfigService
         if ($key === '' || strlen($key) > 1024 || preg_match('/[\x00-\x20\x7f]/', $key)) {
             throw new InvalidArgumentException('请填写有效的 GEO 检测 API Key');
         }
-        if (!in_array($input['ssl_verify'] ?? null, [true, false, 1, 0, '1', '0'], true)) {
-            throw new InvalidArgumentException('请选择是否校验 HTTPS 证书');
-        }
-        $config = ['api_key' => $key, 'ssl_verify' => (bool)$input['ssl_verify']];
+        $config = ['api_key' => $key];
         return Db::transaction(function () use ($tenantId, $config, $onlyIfMissing) {
             $query = self::query($tenantId, true);
             $id = (clone $query)->value('id');

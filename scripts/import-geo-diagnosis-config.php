@@ -17,10 +17,7 @@ if ($key === '') {
     exit(1);
 }
 try {
-    GeoDiagConfigService::save((int)$argv[1], [
-        'api_key' => $key,
-        'ssl_verify' => filter_var(env('geo_diag.ssl_verify', false), FILTER_VALIDATE_BOOLEAN),
-    ], true);
+    GeoDiagConfigService::save((int)$argv[1], ['api_key' => $key], true);
     echo "该租户的 GEO 检测配置已导入。\n";
 } catch (InvalidArgumentException $e) {
     fwrite(STDERR, $e->getMessage() . PHP_EOL);

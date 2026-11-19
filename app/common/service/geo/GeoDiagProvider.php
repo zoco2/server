@@ -11,12 +11,12 @@ class GeoDiagProvider
 {
     public const BASE_URL = 'https://118.89.28.187/api/v1';
 
-    private array $config;
+    private string $apiKey;
 
     public function __construct(int $tenantId)
     {
-        $this->config = GeoDiagConfigService::get($tenantId);
-        if ($this->config['api_key'] === '') {
+        $this->apiKey = GeoDiagConfigService::get($tenantId)['api_key'];
+        if ($this->apiKey === '') {
             throw new Exception('请先在租户后台「基础配置 → GEO 检测」填写 API Key');
         }
     }
@@ -107,7 +107,7 @@ class GeoDiagProvider
     private function request(string $method, string $path, array $body = [], array $extraHeaders = []): array
     {
         $headers = array_merge([
-            'Authorization: Bearer ' . $this->config['api_key'],
+            'Authorization: Bearer ' . $this->apiKey,
             'Accept: application/json',
         ], $extraHeaders);
         $method = strtoupper($method);
@@ -122,8 +122,8 @@ class GeoDiagProvider
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_SSL_VERIFYPEER => $this->config['ssl_verify'],
-            CURLOPT_SSL_VERIFYHOST => $this->config['ssl_verify'] ? 2 : 0,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
         ];
         if ($method !== 'GET') {
             $headers[] = 'Content-Type: application/json';
