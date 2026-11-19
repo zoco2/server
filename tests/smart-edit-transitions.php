@@ -1,10 +1,14 @@
 <?php
 
+use app\api\controller\smart_edit\GroupController;
+use app\Request;
 use app\common\service\smart_edit\SmartEditGroupService;
 use app\common\service\smart_edit\SmartEditService;
 use app\common\service\smart_edit\SmartEditTimelineBuilder as Timeline;
+use think\App;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
+require dirname(__DIR__) . '/vendor/topthink/framework/src/helper.php';
 
 function checkTransitionResult(mixed $expected, mixed $actual): void
 {
@@ -127,4 +131,38 @@ foreach ([
     throw new RuntimeException('Invalid transition policy was accepted');
 }
 
-echo "PASS smart edit transition draws, retries, timeline, and backward compatibility\n";
+class SmartEditTransitionTestImsConfig
+{
+    public static function require(int $tenantId): array
+    {
+        throw new RuntimeException('Reached IMS configuration after request validation');
+    }
+}
+
+class_alias(SmartEditTransitionTestImsConfig::class, \app\common\service\smart_edit\SmartEditImsConfigService::class);
+$videos = [
+    ['uri' => 'uploads/video/a.mp4', 'in' => 0, 'out' => 3],
+    ['uri' => 'uploads/video/b.mp4', 'in' => 0, 'out' => 3],
+    ['uri' => 'uploads/video/c.mp4', 'in' => 0, 'out' => 3],
+];
+$payload = [
+    'edit_type' => 'merge',
+    'shots' => array_fill(0, 3, ['videos' => $videos]),
+    'transition_policy' => ['random' => false, 'selected' => [], 'overrides' => [null, null]],
+];
+$app = new App(dirname(__DIR__));
+foreach ([false, true, 'false'] as $random) {
+    $payload['transition_policy']['random'] = $random;
+    $request = (new Request())
+        ->withHeader(['Content-Type' => 'application/json'])
+        ->withInput(json_encode($payload, JSON_THROW_ON_ERROR));
+    $request->tenantId = 1;
+    $app->instance('request', $request);
+    $response = (new GroupController($app))->create()->getData();
+    checkTransitionResult(
+        is_bool($random) ? 'Reached IMS configuration after request validation' : '转场抽取模式不正确',
+        $response['msg']
+    );
+}
+
+echo "PASS smart edit transition draws, retries, timeline, backward compatibility, and group JSON requests\n";
