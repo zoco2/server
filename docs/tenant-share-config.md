@@ -12,12 +12,12 @@
 
 ```json
 {
-  "douyin": {"enabled": 1, "client_key": "", "client_secret_set": false, "configured": false},
-  "xiaohongshu": {"enabled": 1, "app_key": "", "app_secret_set": false, "configured": false}
+  "douyin": {"enabled": 1, "client_key": "", "client_secret": "", "client_secret_set": false, "configured": false},
+  "xiaohongshu": {"enabled": 1, "app_key": "", "app_secret": "", "app_secret_set": false, "configured": false}
 }
 ```
 
-`configured` 仅表示已保存应用标识和密钥，不代表平台已审核或真实调用成功。不返回密钥明文、密文或部分密钥字符。
+获授查看分享配置权限的管理员可以直接查看和编辑两个平台已保存的密钥。`configured` 表示已保存标识且密钥可读取。响应设置 `Cache-Control: private, no-store`，操作日志会过滤密钥。
 
 ### POST /tenantapi/channel.share_setting/setConfig
 
@@ -31,7 +31,7 @@
 {"platform":"xiaohongshu","app_key":"your-app-key","app_secret":"your-app-secret"}
 ```
 
-响应 `data` 为该平台最新的脱敏配置，结构与 GET 对应平台一致。密钥留空或省略表示保留；更换已有应用标识必须同时提供新密钥。读取结果中的 `enabled` 固定为 1，以兼容旧版客户端。两种平台都使用各自已保存的完整凭据。应用标识最多 128 字节、密钥最多 256 字节，不接受数组、空白字符或星号掩码。
+保存响应包含该平台的应用标识和配置状态。新版表单提交当前显示的完整凭据。旧客户端留空或省略密钥时，服务端保留原值；更换应用标识时需同时提交密钥。`enabled` 固定为 1，以兼容旧版客户端。应用标识最多 128 字节，密钥最多 256 字节。
 
 ## 存储、权限和部署
 

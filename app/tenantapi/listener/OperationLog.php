@@ -90,6 +90,9 @@ class OperationLog
         if ($credentialFields) {
             $result = json_decode($resultContent, true);
             if (is_array($result) && is_array($result['data'] ?? null)) {
+                if ($controller === 'channel.sharesetting') {
+                    unset($result['data']['douyin']['client_secret'], $result['data']['xiaohongshu']['app_secret']);
+                }
                 foreach ($credentialFields as $field) {
                     unset($result['data'][$field]);
                 }

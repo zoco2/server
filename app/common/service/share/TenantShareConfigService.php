@@ -30,12 +30,17 @@ final class TenantShareConfigService
         $table = TenantConfigTable::forTenant($this->tenantId);
         $result = [];
         foreach (self::PLATFORMS as $platform => $fields) {
-            $result[$platform] = $this->publicConfig($this->read($table, $platform), $fields);
+            $value = $this->read($table, $platform);
+            $secret = $this->decryptSecret((string)($value[$fields['secret']] ?? ''));
+            $result[$platform] = $this->publicConfig($value, $fields) + [$fields['secret'] => $secret];
+            if ($secret === '') {
+                $result[$platform]['configured'] = false;
+            }
         }
         return $result;
     }
 
-    /** 一次只修改一个平台；空密钥保持原值，密钥永不返回前端。 */
+    /** 一次只修改一个平台。兼容旧版客户端留空保留原值的提交。 */
     public function save(array $params): array
     {
         $platform = $params['platform'] ?? null;
@@ -87,7 +92,7 @@ final class TenantShareConfigService
         $fields = self::PLATFORMS[$platform];
         $value = $this->read(TenantConfigTable::forTenant($this->tenantId), $platform);
         $cipher = (string)($value[$fields['secret']] ?? '');
-        $secret = str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';
+        $secret = $this->decryptSecret($cipher);
         if (empty($value[$fields['key']]) || $secret === '') {
             throw new RuntimeException($fields['name'] . '分享凭据不可用，请在租户后台重新配置');
         }
@@ -97,6 +102,11 @@ final class TenantShareConfigService
             // 缓存驱动由部署配置控制，不允许租户传入连接名。
             'cache_store' => (string)config($platform . '.cache_store', ''),
         ];
+    }
+
+    private function decryptSecret(string $cipher): string
+    {
+        return str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';
     }
 
     private function read(string $table, string $platform): array

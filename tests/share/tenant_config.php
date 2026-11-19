@@ -99,7 +99,8 @@ try {
     $stored = Db::name('tenant_config')->where('tenant_id', 1)->where('name', 'douyin')->value('value');
     check(!str_contains($stored, 'one-secret') && str_contains($stored, 'enc:v1:'), 'Secret encrypted at rest');
     $display = $one->display();
-    check(!isset($display['douyin']['client_secret']) && !isset($display['xiaohongshu']['app_secret']), 'Secrets never returned');
+    check($display['douyin']['client_secret'] === 'one-secret' && $display['xiaohongshu']['app_secret'] === 'xhs-secret', 'Both saved secrets must be editable');
+    check($two->display()['douyin']['client_secret'] === 'two-secret' && $split->display()['douyin']['client_secret'] === 'split-secret', 'Form credentials are tenant scoped');
     check($display['douyin']['client_secret_set'] && $display['xiaohongshu']['configured'], 'Status returned');
     foreach (['douyin', 'xiaohongshu'] as $name) {
         $query = Db::name('tenant_config')->where('tenant_id', 1)->where('name', $name);
@@ -130,7 +131,14 @@ try {
     check(requestFor($app, 'GET')->setConfig()->getData()['code'] === 0, 'GET cannot write credentials');
     check(requestFor($app, 'POST', [], 'getConfig')->getConfig()->getData()['code'] === 0, 'Read method constrained');
     $controller = requestFor($app, 'GET', [], 'getConfig');
-    check($controller->getConfig()->getData()['data']['douyin']['client_key'] === 'tenant-one', 'Read response');
+    $detail = $controller->getConfig();
+    check($detail->getData()['data']['douyin']['client_secret'] === 'rotated-secret', 'Rotated secret in read response');
+    Db::execute('CREATE TABLE test_operation_log (id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT,
+        action TEXT, account TEXT, url TEXT, type TEXT, params TEXT, ip TEXT, result TEXT, create_time INTEGER, update_time INTEGER)');
+    check((bool)(new \app\tenantapi\listener\OperationLog())->handle($detail), 'Share operation logged');
+    $log = json_decode(Db::name('operation_log')->where('admin_id', 10)->value('result'), true);
+    check(isset($log['data']['douyin']['client_key'], $log['data']['xiaohongshu']['app_key']), 'Platform identifiers are logged');
+    check(!isset($log['data']['douyin']['client_secret']) && !isset($log['data']['xiaohongshu']['app_secret']), 'Share secrets omitted from log');
 
     // 使用既有权限机制；独立升级 SQL 注册查看和保存权限。
     Db::name('tenant_system_menu')->insertAll([
