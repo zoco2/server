@@ -1,6 +1,6 @@
 # 租户分享配置
 
-租户后台入口：**系统设置 → 基础配置 → 分享配置**（`tenant/src/views/channel/share_setting.vue`）。分别保存抖音和小红书的应用凭据及启用状态，默认关闭。页面只管理分享应用配置，公开门店的发布按钮、手机唤起和二维码入口仍需单独接入。
+租户后台入口：**系统设置 → 基础配置 → 分享配置**（`tenant/src/views/channel/share_setting.vue`）。抖音和小红书各自保存应用凭据，凭据完整后即可用于分享。页面只管理分享应用配置，公开门店的发布按钮、手机唤起和二维码入口仍需单独接入。
 
 ## 接口
 
@@ -12,8 +12,8 @@
 
 ```json
 {
-  "douyin": {"enabled": 0, "client_key": "", "client_secret_set": false, "configured": false},
-  "xiaohongshu": {"enabled": 0, "app_key": "", "app_secret_set": false, "configured": false}
+  "douyin": {"enabled": 1, "client_key": "", "client_secret_set": false, "configured": false},
+  "xiaohongshu": {"enabled": 1, "app_key": "", "app_secret_set": false, "configured": false}
 }
 ```
 
@@ -24,14 +24,14 @@
 一次保存一个平台，JSON 请求体示例：
 
 ```json
-{"platform":"douyin","enabled":1,"client_key":"your-client-key","client_secret":"your-client-secret"}
+{"platform":"douyin","client_key":"your-client-key","client_secret":"your-client-secret"}
 ```
 
 ```json
-{"platform":"xiaohongshu","enabled":1,"app_key":"your-app-key","app_secret":"your-app-secret"}
+{"platform":"xiaohongshu","app_key":"your-app-key","app_secret":"your-app-secret"}
 ```
 
-响应 `data` 为该平台最新的脱敏配置，结构与 GET 对应平台一致。密钥留空或省略表示保留；更换已有应用标识必须同时提供新密钥。启用必须具备完整凭据。关闭不会删除凭据，重新开启可继续使用。应用标识最多 128 字节、密钥最多 256 字节，不接受数组、空白字符或星号掩码。
+响应 `data` 为该平台最新的脱敏配置，结构与 GET 对应平台一致。密钥留空或省略表示保留；更换已有应用标识必须同时提供新密钥。读取结果中的 `enabled` 固定为 1，以兼容旧版客户端。两种平台都使用各自已保存的完整凭据。应用标识最多 128 字节、密钥最多 256 字节，不接受数组、空白字符或星号掩码。
 
 ## 存储、权限和部署
 
@@ -50,7 +50,7 @@ $douyin = \app\common\service\douyin\DouyinH5ShareService::forTenant($tenantId);
 $xiaohongshu = \app\common\service\xiaohongshu\XiaohongshuH5ShareService::forTenant($tenantId);
 ```
 
-已有无参构造在 `request()->tenantId > 0` 时自动读取当前租户配置。租户配置未启用、缺失或密钥解密失败时拒绝调用，**不回退到平台环境凭据**。无租户上下文的旧代码仍可使用环境配置；显式传入构造参数继续用于测试或受信任的服务端集成。业务层须先校验门店归属、公开状态及素材，不能直接信任客户端提交的租户 ID。
+已有无参构造在 `request()->tenantId > 0` 时自动读取当前租户配置。租户配置缺失或密钥解密失败时拒绝调用，**不回退到平台环境凭据**。无租户上下文的旧代码仍可使用环境配置；显式传入构造参数继续用于测试或受信任的服务端集成。业务层须先校验门店归属、公开状态及素材，不能直接信任客户端提交的租户 ID。
 
 平台申请、权限与媒体限制见 [抖音分享服务](douyin-h5-share.md) 和 [小红书分享服务](xiaohongshu-h5-share.md)。小红书 [JS SDK 文档](https://agora.xiaohongshu.com/doc/js)目前明确不支持自动填充标题、文案、话题；图片和视频不受影响。
 
@@ -62,4 +62,4 @@ php tests/douyin/h5_share.php
 php tests/xiaohongshu/h5_share.php
 ```
 
-租户配置测试使用 SQLite 内存数据库和模拟平台 HTTP，不读取业务 `.env`，需要 `pdo_sqlite`、`openssl`、`mbstring` 扩展。覆盖租户及分表隔离、凭据加密、更新/保留密钥、非法参数、伪造租户 ID、HTTP 方法、已有菜单权限机制、禁用后不回退及两家平台的签名服务调用。MySQL 行锁并发和真实平台唤起需在部署环境联调。
+租户配置测试使用 SQLite 内存数据库和模拟平台 HTTP，不读取业务 `.env`，需要 `pdo_sqlite`、`openssl`、`mbstring` 扩展。覆盖租户及分表隔离、凭据加密、更新/保留密钥、非法参数、伪造租户 ID、HTTP 方法、已有菜单权限机制、旧版关闭记录的凭据复用及两家平台的签名服务调用。MySQL 行锁并发和真实平台唤起需在部署环境联调。
