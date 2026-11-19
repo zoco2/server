@@ -14734,6 +14734,7 @@ CREATE TABLE IF NOT EXISTS `la_publish_task` (
   `user_id` int unsigned NOT NULL COMMENT '创建任务的用户 ID',
   `staff_ids` json DEFAULT NULL COMMENT '接收通知的员工 ID 数组，空表示通知创建人',
   `content` varchar(500) NOT NULL COMMENT '用户填写的任务内容',
+  `douyin_file_id` int unsigned DEFAULT NULL COMMENT '关联本租户任务创建人的抖音素材文件 ID',
   `platforms` varchar(64) NOT NULL COMMENT '发布平台编码的 JSON 数组',
   `notice_type` varchar(24) NOT NULL DEFAULT 'official_account' COMMENT '通知渠道，当前为服务号',
   `push_mode` varchar(16) NOT NULL COMMENT 'immediate 立即，scheduled 定时',

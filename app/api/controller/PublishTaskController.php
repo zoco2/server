@@ -12,7 +12,7 @@ use Throwable;
 /** 提供当前登录用户的任务发布和查询接口，由框架默认路由分发。 */
 final class PublishTaskController extends BaseApiController
 {
-    public array $notNeedLogin = ['detail'];
+    public array $notNeedLogin = ['detail', 'douyinShare'];
 
     /** GET /api/publish_task/detail：打开员工收到的任务。 */
     public function detail()
@@ -24,6 +24,24 @@ final class PublishTaskController extends BaseApiController
         $detail = is_string($token)
             ? PublishTaskService::publicDetail($token) : null;
         $response = $detail === null ? $this->fail('任务链接无效或已不可用') : $this->data($detail);
+        return $response->header(['Cache-Control' => 'private, no-store']);
+    }
+
+    /** 为员工通知中指定的素材签名。 */
+    public function douyinShare()
+    {
+        if (!$this->request->isPost()) {
+            return $this->fail('请使用 POST 请求');
+        }
+        $token = $this->request->post('token');
+        try {
+            $response = $this->data(PublishTaskService::douyinShare(is_string($token) ? $token : ''));
+        } catch (InvalidArgumentException $e) {
+            $response = $this->fail($e->getMessage());
+        } catch (Throwable $e) {
+            Log::channel('mns')->error('[publish_task] douyinShare failed: ' . get_class($e));
+            $response = $this->fail('暂时无法准备抖音分享，请检查租户分享配置或稍后重试');
+        }
         return $response->header(['Cache-Control' => 'private, no-store']);
     }
 
