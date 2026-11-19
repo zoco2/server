@@ -94,7 +94,7 @@ final class TenantShareConfigService
         $cipher = (string)($value[$fields['secret']] ?? '');
         $secret = $this->decryptSecret($cipher);
         if (empty($value[$fields['key']]) || $secret === '') {
-            throw new RuntimeException($fields['name'] . '分享凭据不可用，请在租户后台重新配置');
+            throw new ShareServiceException($fields['name'] . '分享凭据不可用，请管理员在「基础配置 → 分享配置」重新填写并保存应用标识和密钥');
         }
         return [
             $fields['key'] => $value[$fields['key']],

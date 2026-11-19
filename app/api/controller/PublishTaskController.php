@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\api\controller;
 
 use app\common\service\publish_task\PublishTaskService;
+use app\common\service\share\ShareServiceException;
 use InvalidArgumentException;
 use think\facade\Log;
 use Throwable;
@@ -38,9 +39,15 @@ final class PublishTaskController extends BaseApiController
             $response = $this->data(PublishTaskService::douyinShare(is_string($token) ? $token : ''));
         } catch (InvalidArgumentException $e) {
             $response = $this->fail($e->getMessage());
+        } catch (ShareServiceException $e) {
+            Log::channel('mns')->error(sprintf('[publish_task] douyinShare tenant=%d: %s',
+                (int)$this->request->tenantId, $e->getMessage()));
+            $response = $this->fail($e->getMessage());
         } catch (Throwable $e) {
-            Log::channel('mns')->error('[publish_task] douyinShare failed: ' . get_class($e));
-            $response = $this->fail('暂时无法准备抖音分享，请检查租户分享配置或稍后重试');
+            $reference = bin2hex(random_bytes(6));
+            Log::channel('mns')->error(sprintf('[publish_task] douyinShare ref=%s tenant=%d exception=%s at %s:%d',
+                $reference, (int)$this->request->tenantId, get_class($e), basename($e->getFile()), $e->getLine()));
+            $response = $this->fail('暂时无法准备抖音分享，请联系管理员并提供排查编号 ' . $reference);
         }
         return $response->header(['Cache-Control' => 'private, no-store']);
     }

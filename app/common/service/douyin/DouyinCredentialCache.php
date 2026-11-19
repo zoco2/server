@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace app\common\service\douyin;
 
+use app\common\service\share\ShareServiceException;
 use Closure;
-use RuntimeException;
 use think\cache\Driver;
 use think\cache\driver\File;
 use think\cache\driver\Redis;
@@ -34,10 +34,10 @@ final class DouyinCredentialCache
     {
         $ttl = $entry['expires_at'] - time();
         if ($ttl <= 0) {
-            throw new RuntimeException('抖音凭据有效期不足，请重试');
+            throw new ShareServiceException('抖音凭据有效期不足，请重试');
         }
         if (!$this->cache->set($this->prefix . $name, $entry, $ttl)) {
-            throw new RuntimeException('抖音凭据缓存写入失败');
+            throw new ShareServiceException('抖音凭据缓存写入失败');
         }
     }
 
@@ -77,11 +77,11 @@ final class DouyinCredentialCache
             $path = $this->cache->getCacheKey($this->lockName);
             $directory = dirname($path);
             if (!is_dir($directory) && !@mkdir($directory, 0770, true) && !is_dir($directory)) {
-                throw new RuntimeException('抖音凭据缓存目录不可写');
+                throw new ShareServiceException('抖音凭据缓存目录不可写');
             }
             $handle = @fopen($path . '.lock', 'c');
             if ($handle === false) {
-                throw new RuntimeException('抖音凭据刷新锁创建失败');
+                throw new ShareServiceException('抖音凭据刷新锁创建失败');
             }
             try {
                 $deadline = microtime(true) + 5;
@@ -100,8 +100,8 @@ final class DouyinCredentialCache
                 fclose($handle);
             }
         } else {
-            throw new RuntimeException('抖音凭据缓存仅支持 file 或 redis 驱动');
+            throw new ShareServiceException('抖音凭据缓存仅支持 file 或 redis 驱动');
         }
-        throw new RuntimeException('抖音凭据正在刷新，请稍后重试');
+        throw new ShareServiceException('抖音凭据正在刷新，请稍后重试');
     }
 }
