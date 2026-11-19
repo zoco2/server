@@ -2,7 +2,6 @@
 
 namespace app\common\service\geo;
 
-use app\common\service\open_platform\OpenSafeHttp;
 use Exception;
 
 /**
@@ -10,6 +9,8 @@ use Exception;
  */
 class GeoDiagProvider
 {
+    public const BASE_URL = 'https://118.89.28.187/api/v1';
+
     private array $config;
 
     public function __construct(int $tenantId)
@@ -110,11 +111,9 @@ class GeoDiagProvider
             'Accept: application/json',
         ], $extraHeaders);
         $method = strtoupper($method);
-        $url = $this->config['base_url'] . $path;
-        [$host, $ip] = OpenSafeHttp::resolve($url);
         $ch = curl_init();
         $options = [
-            CURLOPT_URL => $url,
+            CURLOPT_URL => self::BASE_URL . $path,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
             CURLOPT_CONNECTTIMEOUT => 10,
@@ -123,9 +122,6 @@ class GeoDiagProvider
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_RESOLVE => filter_var($host, FILTER_VALIDATE_IP) ? [] : [
-                $host . ':443:' . (str_contains($ip, ':') ? '[' . $ip . ']' : $ip),
-            ],
             CURLOPT_SSL_VERIFYPEER => $this->config['ssl_verify'],
             CURLOPT_SSL_VERIFYHOST => $this->config['ssl_verify'] ? 2 : 0,
         ];

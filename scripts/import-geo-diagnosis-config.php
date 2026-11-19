@@ -19,11 +19,10 @@ if ($key === '') {
 try {
     GeoDiagConfigService::save((int)$argv[1], [
         'api_key' => $key,
-        'base_url' => env('geo_diag.base_url', GeoDiagConfigService::DEFAULTS['base_url']),
         'ssl_verify' => filter_var(env('geo_diag.ssl_verify', false), FILTER_VALIDATE_BOOLEAN),
     ], true);
     echo "该租户的 GEO 检测配置已导入。\n";
-} catch (InvalidArgumentException | \app\common\service\open_platform\OpenException $e) {
+} catch (InvalidArgumentException $e) {
     fwrite(STDERR, $e->getMessage() . PHP_EOL);
     exit(1);
 } catch (Throwable $e) {

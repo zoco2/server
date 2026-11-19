@@ -2,7 +2,6 @@
 
 namespace app\common\service\geo;
 
-use app\common\service\open_platform\OpenSafeHttp;
 use app\common\service\TenantConfigTable;
 use InvalidArgumentException;
 use RuntimeException;
@@ -11,7 +10,7 @@ use think\facade\Db;
 final class GeoDiagConfigService
 {
     public const DEFAULTS = [
-        'api_key' => '', 'base_url' => 'https://118.89.28.187/api/v1', 'ssl_verify' => false,
+        'api_key' => '', 'ssl_verify' => false,
     ];
 
     private static function query(int $tenantId, bool $lock = false)
@@ -29,7 +28,7 @@ final class GeoDiagConfigService
         }
         $data = json_decode($raw, true);
         if (!is_array($data) || !is_string($data['api_key'] ?? null)
-            || !is_string($data['base_url'] ?? null) || !is_bool($data['ssl_verify'] ?? null)) {
+            || !is_bool($data['ssl_verify'] ?? null)) {
             throw new RuntimeException('GEO 检测配置数据异常');
         }
         return array_intersect_key($data, self::DEFAULTS);
@@ -41,16 +40,10 @@ final class GeoDiagConfigService
         if ($key === '' || strlen($key) > 1024 || preg_match('/[\x00-\x20\x7f]/', $key)) {
             throw new InvalidArgumentException('请填写有效的 GEO 检测 API Key');
         }
-        $url = is_string($input['base_url'] ?? null) ? rtrim(trim($input['base_url']), '/') : '';
-        if (strlen($url) > 2048 || !filter_var($url, FILTER_VALIDATE_URL)
-            || strpbrk($url, "?#\\") !== false || preg_match('/[\x00-\x20\x7f]/', $url)) {
-            throw new InvalidArgumentException('请填写有效的 GEO 检测接口地址');
-        }
-        OpenSafeHttp::resolve($url);
         if (!in_array($input['ssl_verify'] ?? null, [true, false, 1, 0, '1', '0'], true)) {
             throw new InvalidArgumentException('请选择是否校验 HTTPS 证书');
         }
-        $config = ['api_key' => $key, 'base_url' => $url, 'ssl_verify' => (bool)$input['ssl_verify']];
+        $config = ['api_key' => $key, 'ssl_verify' => (bool)$input['ssl_verify']];
         return Db::transaction(function () use ($tenantId, $config, $onlyIfMissing) {
             $query = self::query($tenantId, true);
             $id = (clone $query)->value('id');

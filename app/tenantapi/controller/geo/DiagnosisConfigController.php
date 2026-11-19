@@ -3,7 +3,6 @@
 namespace app\tenantapi\controller\geo;
 
 use app\common\service\geo\GeoDiagConfigService;
-use app\common\service\open_platform\OpenException;
 use app\tenantapi\controller\BaseAdminController;
 use InvalidArgumentException;
 use Throwable;
@@ -28,7 +27,7 @@ class DiagnosisConfigController extends BaseAdminController
         try {
             GeoDiagConfigService::save($this->tenantId, $this->request->post());
             return $this->success('GEO 检测配置已保存', [], 1, 1);
-        } catch (InvalidArgumentException | OpenException $e) {
+        } catch (InvalidArgumentException $e) {
             return $this->fail($e->getMessage());
         } catch (Throwable) {
             return $this->fail('保存 GEO 检测配置失败');
