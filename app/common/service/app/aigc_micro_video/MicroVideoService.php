@@ -90,7 +90,7 @@ final class MicroVideoService
     {
         $prepared=self::form($tenant,$user,$p,true,self::workbenchTargetDurations((array)($snapshot['body']??[])));$config=$prepared['config'];$model=$prepared['model'];$params=$prepared['params'];
         $allowed=array_column(MicroVideoCatalog::specs($model,$params['quality'],$params['ratio']),'duration');
-        $contract=MicroVideoContentPlanning::contract($params,$allowed,(int)$config['max_segments'],3);
+        $contract=MicroVideoContentPlanning::workbenchContract($params,$allowed,(int)$config['max_segments']);
         $normalized=MicroVideoContentPlanning::validate(['segments'=>$segments,'continuity'=>(string)($p['continuity']??'')],$contract,count($params['images']),(int)$model['max_reference_images'],true);
         return Db::transaction(function()use($tenant,$user,$p,$prepared,$normalized,$snapshot){
             $row=self::createDraft($tenant,$user,$prepared,'workbench:'.self::key($p),'awaiting_confirmation');
@@ -111,7 +111,7 @@ final class MicroVideoService
             MicroVideoMedia::validateImages($tenant,$user,$params['images'],$config['max_images']);
             $allowed=array_column(MicroVideoCatalog::specs($model,$params['quality'],$params['ratio']),'duration');
             $segments=MicroVideoPolicy::segments((array)($p['segments']??[]),$allowed,count($params['images']),(int)$model['max_reference_images'],(int)$config['max_segments'],MicroVideoTimeline::required($config));
-            if((int)($config['content_planning_version']??0)>=2){$contract=MicroVideoContentPlanning::contract($params,$allowed,(int)$config['max_segments'],(int)$config['content_planning_version']);$contract['preserve_source_clocks']=false;$segments=MicroVideoContentPlanning::validate(['segments'=>$segments,'continuity'=>$row['continuity']],$contract,count($params['images']),(int)$model['max_reference_images'],MicroVideoTimeline::required($config));}
+            if((int)($config['content_planning_version']??0)>=2){$contract=isset($config['workbench_snapshot'])?MicroVideoContentPlanning::workbenchContract($params,$allowed,(int)$config['max_segments']):MicroVideoContentPlanning::contract($params,$allowed,(int)$config['max_segments'],(int)$config['content_planning_version']);$contract['preserve_source_clocks']=false;$segments=MicroVideoContentPlanning::validate(['segments'=>$segments,'continuity'=>$row['continuity']],$contract,count($params['images']),(int)$model['max_reference_images'],MicroVideoTimeline::required($config));}
             self::replaceSegments($row,$segments);MicroVideoStore::update($id,['plan_revision'=>(int)$row['plan_revision']+1,'quote_token'=>'','quote_json'=>'{}']);
         });return self::detail($tenant,$user,$id);
     }
