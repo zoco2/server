@@ -22,6 +22,9 @@ final class MicroVideoFrames
         if(empty(MicroVideoStore::json($task['config_snapshot'])['frame_feature_version']))throw new InvalidArgumentException('历史作品保留原参考图生成方式');
         $values=['generation_mode'=>$mode,'frame_status'=>$mode==='reference'?'off':'idle'];$definitions=[];
         if($mode==='start_end'){
+            foreach ($params['shots'] ?? [] as $shot) {
+                if (!$shot['supports_start_end']) throw new InvalidArgumentException('部分分镜的模型或时长不支持首尾帧');
+            }
             if(empty($c['frames_enabled'])||empty($model['supports_first_last_frame'])||empty($model['start_end_specs']))throw new InvalidArgumentException('当前模型暂不支持首尾帧');
             $frameModel=(string)($p['frame_model_id']??$task['frame_model_id']?:$c['default_frame_model_id']);MicroVideoPolicy::allowedModel($frameModel,$c['frame_model_ids']);$m=MicroVideoFrameCatalog::model($tenant,$frameModel);
             $quality=(string)($p['frame_quality']??$task['frame_quality']?:$c['default_frame_quality']);MicroVideoFrameCatalog::selection($m,$quality,$params['ratio']);

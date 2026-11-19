@@ -126,7 +126,9 @@ final class MicroVideoMedia
                     $sharedBoundaries[$index] = $anchor > 0 && $anchor === (int)($segments[$index - 1]['last_frame_id'] ?? 0);
                 }
             }
-            $merged = self::concatLocal($inputs, $workspace, $sharedBoundaries);
+            $shots = MicroVideoStore::json($task['params_json'] ?? [])['shots'] ?? [];
+            $mixedQualities = count(array_unique(array_column($shots, 'quality'))) > 1;
+            $merged = self::concatLocal($inputs, $workspace, $sharedBoundaries, $mixedQualities);
             $poster = $workspace . '/poster.jpg';
             self::run([self::binary('ffmpeg'), '-hide_banner', '-loglevel', 'error', '-y', '-i', $merged['path'], '-frames:v', '1', '-q:v', '2', $poster], 90);
             if (!is_file($poster) || !@getimagesize($poster)) throw new RuntimeException('视频封面生成失败');
@@ -394,16 +396,28 @@ final class MicroVideoMedia
     }
 
     /** Only shared-anchor repeated prefixes may be removed. Never speed up or pad footage. */
-    private static function concatLocal(array $inputs, string $workspace, array $sharedBoundaries = []): array
+    private static function concatLocal(array $inputs, string $workspace, array $sharedBoundaries = [], bool $useLargestCanvas = false): array
     {
         if (!$inputs) throw new RuntimeException('没有可合并的视频片段');
-        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $width = 0; $height = 0; $sourceHasAudio = false;
+        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $sourceHasAudio = false;
+        $probes = array_map([self::class, 'probe'], $inputs);
+        $canvas = $probes[0];
+        if ($useLargestCanvas) {
+            foreach ($probes as $probe) {
+                if ($probe['width'] * $probe['height'] > $canvas['width'] * $canvas['height']) $canvas = $probe;
+            }
+        }
+        $width = max(2, (int)(round($canvas['width'] / 2) * 2));
+        $height = max(2, (int)(round($canvas['height'] / 2) * 2));
+        $scale = 'scale=' . $width . ':' . $height . ':flags=lanczos';
+        if ($useLargestCanvas) {
+            $scale .= ':force_original_aspect_ratio=decrease:force_divisible_by=2,pad=' . $width . ':' . $height . ':(ow-iw)/2:(oh-ih)/2';
+        }
         foreach ($inputs as $index => $input) {
-            $probe = self::probe($input);
+            $probe = $probes[$index];
             $sourceHasAudio = $sourceHasAudio || $probe['has_audio'];
             $trimFrames = $index > 0 && !empty($sharedBoundaries[$index]) ? self::repeatedBoundaryFrames($inputs[$index - 1], $input) : 0;
             $trimSeconds = $trimFrames / 30; $removed += $trimSeconds; $expected += $probe['duration'] - $trimSeconds;
-            if ($index === 0) { $width = max(2, (int)(round($probe['width'] / 2) * 2)); $height = max(2, (int)(round($probe['height'] / 2) * 2)); }
             $path = $workspace . '/normalized-' . $index . '.mp4';
             $command = [$ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', $input];
             if (!$probe['has_audio']) {
@@ -411,7 +425,7 @@ final class MicroVideoMedia
                 $command = array_merge($command, ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo:d=' . sprintf('%.9F', $probe['video_duration'])]);
             }
             $command = array_merge($command, ['-map', '0:v:0', '-map', $probe['has_audio'] ? '0:a:0' : '1:a:0',
-                '-vf', 'scale=' . $width . ':' . $height . ':flags=lanczos,setsar=1,fps=30' . ($trimFrames ? ',trim=start_frame=' . $trimFrames : '') . ',setpts=PTS-STARTPTS',
+                '-vf', $scale . ',setsar=1,fps=30' . ($trimFrames ? ',trim=start_frame=' . $trimFrames : '') . ',setpts=PTS-STARTPTS',
                 '-af', ($trimFrames ? 'atrim=start=' . sprintf('%.9F', $trimSeconds) . ',' : '') . 'aresample=48000:async=0,asetpts=PTS-STARTPTS', '-r', '30', '-fps_mode', 'cfr',
                 '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-video_track_timescale', '90000',
                 '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', $path]);
