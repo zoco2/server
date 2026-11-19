@@ -102,7 +102,13 @@ final class MicroVideoMediaTest extends TestCase
         $this->rejects(fn() => MicroVideoMedia::validateImages(self::TENANT, self::USER, array_fill(0, 5, ['uri' => 'uploads/a.png']), 4));
     }
 
-    public function testMixedAudioAndDifferentClipLengthsMergeInFullOrder(): void
+    public static function mergeCanvasCases(): array
+    {
+        return ['standard canvas' => [false, 180], 'mixed shot resolutions' => [true, 240]];
+    }
+
+    /** @dataProvider mergeCanvasCases */
+    public function testMixedAudioAndDifferentClipLengthsMergeInFullOrder(bool $useLargest, int $expectedHeight): void
     {
         $ffmpeg = $this->invoke('binary', ['ffmpeg']);
         $inputs = [];
@@ -113,9 +119,9 @@ final class MicroVideoMediaTest extends TestCase
             $command = array_merge($command, ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', $path]);
             $this->invoke('run', [$command, 60]); $inputs[] = $path;
         }
-        $result = $this->invoke('concatLocal', [$inputs, $this->directory]);
+        $result = $this->invoke('concatLocal', [$inputs, $this->directory, [], $useLargest]);
         self::assertEqualsWithDelta(3.0, $result['duration'], 0.15);
-        self::assertSame(320, $result['width']); self::assertSame(180, $result['height']);
+        self::assertSame(320, $result['width']); self::assertSame($expectedHeight, $result['height']);
         self::assertTrue($result['has_audio']); self::assertFileExists($result['path']); self::assertFileDoesNotExist($this->directory . '/merged.partial.mp4');
         foreach ([[0.4, 0], [1.5, 2], [2.4, 1]] as [$seek, $dominant]) {
             $rgb = $this->invoke('run', [[$ffmpeg, '-hide_banner', '-loglevel', 'error', '-ss', (string)$seek, '-i', $result['path'], '-vf', 'scale=1:1', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], 30]);

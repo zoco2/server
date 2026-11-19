@@ -51,12 +51,12 @@ final class MicroVideoWorkbenchJobs
             $request['continuity']=(string)($body['script']['continuity']??$body['template_snapshot']['body']['reference_rules']??MicroVideoSettings::defaults()['continuity_template']);
             $planning=null;
             if ($action === 'rewrite' && !empty($body['script']['segments'])) {
-                $shots = MicroVideoService::workbenchShots($tenant, $body['script']['segments'], $body['quality'], $body['ratio'], $config);
+                $shots = MicroVideoService::workbenchShots($tenant, $body['script']['segments'], $body['ratio'], $config);
                 $durations = array_column($shots, 'duration');
                 $planning = ['target_duration' => array_sum($durations), 'segment_durations' => $durations, 'allowed_durations' => array_values(array_unique($durations)), 'required_total_duration' => array_sum($durations), 'max_total_duration' => 600, 'max_segments' => $config['max_segments'], 'source_timeline' => []];
                 $request['planning_contract'] = $planning;
                 $request['video_reference_limit'] = max(array_column($shots, 'max_reference_images'));
-                $request['shot_model_ids'] = array_column($shots, 'model_id');
+                $request['shots'] = $shots;
             } elseif($action==='rewrite'&&!empty($body['model_id'])){$f=MicroVideoService::form($tenant,$user,['model_id'=>$body['model_id'],'quality'=>$body['quality']??$config['default_quality'],'ratio'=>$body['ratio']??'9:16','target_duration'=>$body['target_duration']??$body['brief']['target_duration']??30,'mode'=>'prompt','prompt'=>(string)($body['script']['text']??'')],false,MicroVideoService::workbenchTargetDurations($body));$planning=MicroVideoContentPlanning::contract($f['params'],array_column(MicroVideoCatalog::specs($f['model'],$f['params']['quality'],$f['params']['ratio']),'duration'),(int)$config['max_segments'],3);$request['planning_contract']=$planning;$request['video_reference_limit']=(int)$f['model']['max_reference_images'];}
             $request+=['selection'=>$selection,'content'=>MicroVideoStore::encode(['project'=>MicroVideoWorkbenchRecords::publicBody($body),'instructions'=>$instructions,'planning_contract'=>$planning,'continuity_constraint'=>$request['continuity']]),'system'=>self::system($action,$body).($planning?'必须严格使用planning_contract.segment_durations给出的生成段数和时长，段内镜头不拆成独立生成段。':'')];
             $input=Text::estimateTokens($request['content'].$request['system']);$output=8000;$quote=['tenant_cost_points'=>0.,'user_charge_points'=>0.,'approximate'=>true,'price_identity'=>['model_id'=>$model['id'],'input'=>$model['input'],'output'=>$model['output']]];

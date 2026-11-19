@@ -164,8 +164,10 @@ final class MicroVideoWorkbenchWorker
             if($sum<$target||$sum>$target+15)throw new InvalidArgumentException('改写剧本未覆盖目标时长，请查看保留的结果后重新规划');
         }
         foreach ($script['segments'] as $index => &$segment) {
-            $modelId = $input['shot_model_ids'][$index] ?? $snapshot['model_id'] ?? '';
+            $modelId = $input['shots'][$index]['model_id'] ?? $snapshot['model_id'] ?? '';
             if ($modelId !== '') $segment['model_id'] = $modelId;
+            $quality = $input['shots'][$index]['quality'] ?? $snapshot['quality'] ?? '';
+            if ($quality !== '') $segment['quality'] = $quality;
         }
         unset($segment);
         return $script;

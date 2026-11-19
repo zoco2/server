@@ -54,15 +54,16 @@ final class MicroVideoPolicy
     }
 
     /** Resolve authored shots against the tenant's enabled models and their exact SKUs. */
-    public static function workbenchShots(array $segments, array $models, string $quality, string $ratio): array
+    public static function workbenchShots(array $segments, array $models, string $ratio): array
     {
-        $height = match (strtolower($quality)) {
-            '2k' => 1440, '4k' => 2160,
-            default => preg_match('/^(\d+)p$/i', $quality, $match) ? (int)$match[1] : 0,
-        };
-        if ($height < 720) throw new InvalidArgumentException('请选择720P及以上的成片分辨率');
         $shots = [];
         foreach (array_values($segments) as $index => $segment) {
+            $quality = $segment['quality'] ?? '';
+            $height = is_string($quality) ? match (strtolower($quality)) {
+                '2k' => 1440, '4k' => 2160,
+                default => preg_match('/^(\d+)p$/i', $quality, $match) ? (int)$match[1] : 0,
+            } : 0;
+            if ($height < 720) throw new InvalidArgumentException('请为分镜 '.($index + 1).' 选择720P及以上的分辨率');
             $id = $segment['model_id'] ?? '';
             $raw = $segment['duration'] ?? null;
             $duration = (is_int($raw) || is_string($raw)) ? filter_var($raw, FILTER_VALIDATE_INT) : false;
@@ -75,7 +76,7 @@ final class MicroVideoPolicy
                 throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型不支持所选分辨率、画幅或时长');
             }
             $frames = array_filter($model['start_end_specs'] ?? [], fn($s) => $s['quality'] === $quality && $s['ratio'] === $ratio && $s['duration'] === $duration);
-            $shots[] = ['model_id' => $id, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames];
+            $shots[] = ['model_id' => $id, 'quality' => $quality, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames];
         }
         if (array_sum(array_column($shots, 'duration')) > 600) throw new InvalidArgumentException('分镜总时长不能超过600秒');
         return $shots;
@@ -88,6 +89,7 @@ final class MicroVideoPolicy
         foreach (array_values($segments) as $index => $segment) {
             $shot = $shots[$index];
             if (isset($segment['model_id']) && $segment['model_id'] !== $shot['model_id']) throw new InvalidArgumentException('分镜模型已变化，请从项目重新生成方案');
+            if (isset($segment['quality']) && $segment['quality'] !== $shot['quality']) throw new InvalidArgumentException('分镜分辨率已变化，请从项目重新生成方案');
             [$row] = self::segments([$segment], [$shot['duration']], $imageCount, $shot['max_reference_images'], 1);
             $row['sort'] = $index + 1;
             $rows[] = $row;

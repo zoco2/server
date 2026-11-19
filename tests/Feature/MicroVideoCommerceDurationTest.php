@@ -35,7 +35,10 @@ final class MicroVideoCommerceDurationTest extends TestCase
         $template=array_values(array_filter(Catalog::catalog()['templates'],static fn($t)=>$t['default_duration']===10))[0];
         $template['seed_key']='commerce_v1_'.$template['code'];
         $saved=$trusted?Records::saveTrustedTemplate(1,['kind'=>'template','title'=>$template['title'],'visibility'=>'tenant','body'=>$template]):Records::save(1,1,['kind'=>'template','title'=>'Ordinary template','body'=>['script'=>$template['script']]]);
-        foreach ($template['segments'] as &$segment) $segment['model_id'] = 'market_video_model:182';
+        foreach ($template['segments'] as &$segment) {
+            $segment['model_id'] = 'market_video_model:182';
+            $segment['quality'] = '768P';
+        }
         unset($segment);
         return Records::save(1,1,['kind'=>'project','title'=>'Ten second policy fixture','body'=>['template'=>['id'=>$saved['id'],'revision'=>1],'model_id'=>'market_video_model:182','quality'=>'768P','ratio'=>'9:16','target_duration'=>10,'script'=>['text'=>$template['script'],'segments'=>$template['segments']]]]);
     }
@@ -96,6 +99,7 @@ final class MicroVideoCommerceDurationTest extends TestCase
         self::assertNotContains(10,array_column($model['specs'],'duration'));
         $segments=$body['script']['segments'];$segments[0]['image_indices']=[0];
         $segments[0]['model_id'] = $params['model_id'];
+        $segments[0]['quality'] = $params['quality'];
         $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('不支持所选分辨率、画幅或时长');
         Service::importWorkbenchPlan(1,1,$params,$segments,['project_id'=>$project['id'],'project_revision'=>1,'body'=>$body]);
     }
