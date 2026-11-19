@@ -29,7 +29,7 @@ class GeoArticleGenerationService
 文章目录仅供选文。只使用与当前稿件主题相关的资料。引用案例、价格、资质、效果数据等具体事实前须在企业档案或已读取的正文中核实，缺少依据时省略对应事实。没有真实案例时，可以给出复盘方法或明确标注为示例的操作场景。
 根据用户要求生成对应篇数的独立稿件，未指定篇数时生成一篇。每篇优先回答目标读者的问题。
 最终回复只输出 JSON 对象，格式为 {"articles":[{"title":"稿件标题","digest":"摘要","content":"纯文本正文，段落用换行分隔"}]}。
-每篇稿件各占 articles 数组的一项，正文不重复标题。正文换行在 JSON 字符串中写成 \n，引号按 JSON 规则转义。JSON 外不添加解释或标记。
+每篇稿件各占 articles 数组的一项，正文不重复标题。正文中的引语优先使用中文引号“”。JSON 字符串中的英文双引号写成 \"，段落换行写成 \n。JSON 外不添加解释或标记。
 PROMPT;
 
     public static function submit(int $tenantId, int $userId, int $brandId, string $prompt, ?int $taskRunId = null): array
@@ -338,7 +338,7 @@ PROMPT;
                 $decoded = json_decode($content);
             }
             if (json_last_error() === JSON_ERROR_SYNTAX) {
-                $decoded = json_decode(self::escapeQuotedBodyPhrases($content));
+                $decoded = json_decode(self::escapeArticleFieldQuotes($content));
             }
             if (json_last_error() !== JSON_ERROR_NONE) {
                 throw new InvalidArgumentException('模型返回的稿件格式有误，无法解析为 JSON');
@@ -367,15 +367,17 @@ PROMPT;
         return $articles;
     }
 
-    private static function escapeQuotedBodyPhrases(string $json): string
+    private static function escapeArticleFieldQuotes(string $json): string
     {
-        // 只匹配完整的 content 字段。引语若紧邻 JSON 分隔符，保留原文交给严格解析。
+        // 只处理完整的稿件字符串字段，已有的 JSON 转义和其他字段都保持原样。
         $fieldPattern = <<<'REGEX'
 ~
-    ("content" \s* : \s* ")
+    ("(?:title|digest|content)" \s* : \s* ")
     (
         (?: [^"\\\x00-\x1f]++ | \\.
-          | "[\p{L}\p{N}][\p{L}\p{N} +×-]*+" (?!\s*[:,}\]])
+          | " (?!\s* [",:}\]] )        # 字段结束符或相邻字符串不能作为引语开头
+              (?: [^"\\\x00-\x1f]++ | \\. )++
+            " (?!\s* :)                # 不跨越下一个属性名
         )*+
     )
     " (?=\s*[,}])
@@ -383,9 +385,8 @@ PROMPT;
 ~ux
 REGEX;
         return preg_replace_callback($fieldPattern, static function (array $field): string {
-            // 跳过原有转义，只给正文中成对出现的裸引号补上反斜杠。
-            $body = preg_replace('~\\\\.(*SKIP)(*F)|"~s', '\\"', $field[2]);
-            return $body === null ? $field[0] : $field[1] . $body . '"';
+            $value = preg_replace('~\\\\.(*SKIP)(*F)|"~s', '\\"', $field[2]);
+            return $value === null ? $field[0] : $field[1] . $value . '"';
         }, $json) ?? $json;
     }
 
