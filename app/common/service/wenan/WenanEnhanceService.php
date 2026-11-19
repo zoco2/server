@@ -6,6 +6,7 @@ use app\common\service\app\AppAccessService;
 use app\common\service\app\aigc_llm\AigcLlmService;
 use app\common\service\wenan\WenanConfigService;
 use Exception;
+use think\facade\Log;
 
 /**
  * 企业知识库 / 智能剪辑文案的美化、优化、强化与帮写。
@@ -27,6 +28,11 @@ class WenanEnhanceService
 
     /** @var array<string, array{label:string,max:int,hint:string}> */
     private const SCENES = [
+        'geo_article_titles' => [
+            'label' => 'GEO 宣传稿候选标题',
+            'max' => 120,
+            'hint' => '围绕同一选题方向拟定 6 个中文宣传稿标题，覆盖不同读者的搜索意图。每行只写一个「标题｜类别」，类别用 2 至 8 个字概括。只输出候选列表，避免虚构数据和绝对化宣传。',
+        ],
         'knowledge_title' => [
             'label' => '企业知识库标题',
             'max' => 120,
@@ -111,7 +117,7 @@ class WenanEnhanceService
      * 统一改写入口。
      *
      * @param array<string, mixed> $params text/prompt、mode、scene、brand_id、max_length、tone、hint
-     * @return array{text:string,prompt:string,mode:string,scene:string,charge_points:mixed,model_code:string,model_name:string}
+     * @return array{text:string,prompt:string,mode:string,scene:string,charge_points:mixed,model_code:string,model_name:string,titles?:list<array{title:string,category:string}>}
      */
     public static function rewrite(int $tenantId, int $userId, array $params): array
     {
@@ -140,6 +146,10 @@ class WenanEnhanceService
         }
 
         $brandContext = self::resolveBrandContext($params);
+        $isTitleList = $scene === 'geo_article_titles';
+        if ($isTitleList && $mode !== 'write') {
+            throw new Exception('拓展标题请使用帮写接口');
+        }
         // 模型来自租户「文案模型」配置（知识库/智能剪辑共用）；未配置时走市场默认。
         // 不传 enable_thinking / max_tokens，避免上游 422。
         $request = [
@@ -156,13 +166,18 @@ class WenanEnhanceService
         }
         $result = AigcLlmService::generateText($tenantId, $userId, $request);
 
-        $output = self::validateResult(
-            (string)($result['content'] ?? ''),
-            $maxLength,
-            $mode,
-            $text,
-            $scene
-        );
+        $extra = [];
+        if ($isTitleList) {
+            $titles = self::articleTitleCandidates($result, $maxLength);
+            $extra['titles'] = $titles;
+            $output = implode("\n", array_map(
+                static fn(array $item): string => $item['category'] === ''
+                    ? $item['title'] : $item['title'] . '｜' . $item['category'],
+                $titles
+            ));
+        } else {
+            $output = self::validateResult((string)($result['content'] ?? ''), $maxLength, $mode, $text, $scene);
+        }
 
         return [
             'text' => $output,
@@ -174,7 +189,46 @@ class WenanEnhanceService
                 ?? 0,
             'model_code' => (string)($result['model_code'] ?? ''),
             'model_name' => (string)($result['model_name'] ?? $result['model_code'] ?? ''),
-        ];
+        ] + $extra;
+    }
+
+    /** @return list<array{title:string,category:string}> */
+    private static function articleTitleCandidates(array $result, int $maxLength): array
+    {
+        $source = (string)($result['content_source'] ?? 'content');
+        $text = $source === 'content' ? (string)($result['content'] ?? '') : '';
+        $visible = preg_replace('~<(think|reasoning)>.*?(?:</\1>|\z)~is', '', $text) ?? '';
+        $titles = [];
+        foreach (preg_split('/\R/u', $visible) ?: [] as $line) {
+            $line = trim(preg_replace('/^(?:[-*•]\s+|\d+[.、)．）]\s*)/u', '', trim($line)) ?? '');
+            if ($line === '' || str_starts_with($line, '```') || preg_match('/[:：]$/u', $line)) {
+                continue;
+            }
+            $category = '';
+            if (preg_match('/^(.*?)\s*[｜|]\s*([^｜|]{2,12})$/u', $line, $match)) {
+                $line = trim($match[1]);
+                $category = trim($match[2]);
+            }
+            if ($line === '' || mb_strlen($line, 'UTF-8') > $maxLength || isset($titles[$line])
+                || self::looksLikeMetaLeak($line, '')) {
+                continue;
+            }
+            $titles[$line] = ['title' => $line, 'category' => $category];
+            if (count($titles) === 6) {
+                break;
+            }
+        }
+        if ($titles === []) {
+            Log::warning('GEO 标题回复校验失败 ' . json_encode([
+                'consumption_id' => (int)($result['consumption_id'] ?? 0),
+                'model_code' => (string)($result['model_code'] ?? ''),
+                'finish_reason' => (string)($result['finish_reason'] ?? ''),
+                'content_source' => $source,
+                'response_content' => $visible,
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+            throw new Exception('模型未返回可用的候选标题，请重新拓展');
+        }
+        return array_values($titles);
     }
 
     /**
@@ -273,6 +327,9 @@ class WenanEnhanceService
         int $maxLength,
         string $tone
     ): string {
+        if ($scene === 'geo_article_titles') {
+            return $sceneMeta['hint'] . "每个标题最多 {$maxLength} 字。";
+        }
         $modeGoal = match ($mode) {
             'beautify' => '润色语句，更顺、更专业，不改原意。',
             'optimize' => '改得更清楚好用，删空话，不编造事实。',
@@ -315,6 +372,10 @@ PROMPT;
         }
         if ($hint !== '') {
             $parts[] = '补充：' . mb_substr($hint, 0, 500);
+        }
+        if ($scene === 'geo_article_titles') {
+            $parts[] = '选题方向：' . $text;
+            return implode("\n", $parts);
         }
         if ($mode === 'write') {
             $parts[] = $text !== ''
