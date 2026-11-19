@@ -333,10 +333,13 @@ PROMPT;
             // 兼容 JSON 外的 Markdown 围栏或短说明，内部仍须是一个完整的 JSON 对象。
             $first = strpos($content, '{');
             $last = strrpos($content, '}');
-            if ($first === false || $last <= $first || ($first === 0 && $last === strlen($content) - 1)) {
-                throw new InvalidArgumentException('模型返回的稿件格式有误，无法解析为 JSON');
+            if ($first !== false && $last > $first && ($first > 0 || $last < strlen($content) - 1)) {
+                $content = substr($content, $first, $last - $first + 1);
+                $decoded = json_decode($content);
             }
-            $decoded = json_decode(substr($content, $first, $last - $first + 1));
+            if (json_last_error() === JSON_ERROR_SYNTAX) {
+                $decoded = json_decode(self::escapeQuotedBodyPhrases($content));
+            }
             if (json_last_error() !== JSON_ERROR_NONE) {
                 throw new InvalidArgumentException('模型返回的稿件格式有误，无法解析为 JSON');
             }
@@ -362,6 +365,28 @@ PROMPT;
             ];
         }
         return $articles;
+    }
+
+    private static function escapeQuotedBodyPhrases(string $json): string
+    {
+        // 只匹配完整的 content 字段。引语若紧邻 JSON 分隔符，保留原文交给严格解析。
+        $fieldPattern = <<<'REGEX'
+~
+    ("content" \s* : \s* ")
+    (
+        (?: [^"\\\x00-\x1f]++ | \\.
+          | "[\p{L}\p{N}][\p{L}\p{N} +×-]*+" (?!\s*[:,}\]])
+        )*+
+    )
+    " (?=\s*[,}])
+  | "(?: [^"\\]++ | \\. )*+" (*SKIP)(*F)
+~ux
+REGEX;
+        return preg_replace_callback($fieldPattern, static function (array $field): string {
+            // 跳过原有转义，只给正文中成对出现的裸引号补上反斜杠。
+            $body = preg_replace('~\\\\.(*SKIP)(*F)|"~s', '\\"', $field[2]);
+            return $body === null ? $field[0] : $field[1] . $body . '"';
+        }, $json) ?? $json;
     }
 
     private static function complete(array $task, array $articles): void
