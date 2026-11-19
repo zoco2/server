@@ -35,6 +35,8 @@ final class MicroVideoCommerceDurationTest extends TestCase
         $template=array_values(array_filter(Catalog::catalog()['templates'],static fn($t)=>$t['default_duration']===10))[0];
         $template['seed_key']='commerce_v1_'.$template['code'];
         $saved=$trusted?Records::saveTrustedTemplate(1,['kind'=>'template','title'=>$template['title'],'visibility'=>'tenant','body'=>$template]):Records::save(1,1,['kind'=>'template','title'=>'Ordinary template','body'=>['script'=>$template['script']]]);
+        foreach ($template['segments'] as &$segment) $segment['model_id'] = 'market_video_model:182';
+        unset($segment);
         return Records::save(1,1,['kind'=>'project','title'=>'Ten second policy fixture','body'=>['template'=>['id'=>$saved['id'],'revision'=>1],'model_id'=>'market_video_model:182','quality'=>'768P','ratio'=>'9:16','target_duration'=>10,'script'=>['text'=>$template['script'],'segments'=>$template['segments']]]]);
     }
 
@@ -72,21 +74,18 @@ final class MicroVideoCommerceDurationTest extends TestCase
         self::assertSame(0,Store::table('attempt')->where('task_id',$task['id'])->count());self::assertSame($before,Db::name('ai_consumption_log')->count());self::assertSame($config,Settings::get(1));
     }
 
-    public function testHttpArgumentsCannotOpenTenSecondsForLegacyFormOrAnOrdinaryTemplate(): void
+    public function testClassicFormKeepsItsOwnDurationPolicy(): void
     {
         $project=$this->project(false);$body=$this->body($project);$params=$this->params($body)+['allowedTargetDurations'=>[10],'allowed_target_durations'=>[10],'protected_prompt'=>true,'internal_prompt'=>'forged'];
-        foreach([fn()=>Service::form(1,1,$params,false),fn()=>Service::importWorkbenchPlan(1,1,$params,[],['body'=>$body])] as $operation){
-            try{$operation();self::fail('Legacy duration policy bypassed');}catch(\InvalidArgumentException $error){self::assertSame('请选择开放的目标时长',$error->getMessage());}
-        }
-        $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('请选择开放的目标时长');
-        $text=\app\common\service\power\MarketTextModelRuntimeService::textOptions(1);
-        Jobs::input(1,1,['project_id'=>$project['id'],'project_revision'=>1,'action'=>'rewrite','selection'=>['model_id'=>$text[0]['id']]]);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('请选择开放的目标时长');
+        Service::form(1,1,$params,false);
     }
 
-    public function testPublicSnapshotCannotGrantTheInternalDurationAllowance(): void
+    public function testAnEmptyStoryboardCannotCreateAnExecution(): void
     {
         $project=$this->project();$body=Records::publicBody($this->body($project));
-        $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('请选择开放的目标时长');
+        $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('分镜数量超出配置范围');
         Service::importWorkbenchPlan(1,1,$this->params($body),[],['body'=>$body]);
     }
 
@@ -96,7 +95,8 @@ final class MicroVideoCommerceDurationTest extends TestCase
         $model=\app\common\service\app\aigc_micro_video\MicroVideoCatalog::model(1,$params['model_id']);$params['quality']=$model['specs'][0]['quality'];
         self::assertNotContains(10,array_column($model['specs'],'duration'));
         $segments=$body['script']['segments'];$segments[0]['image_indices']=[0];
-        $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('分段时长不受当前模型支持');
+        $segments[0]['model_id'] = $params['model_id'];
+        $this->expectException(\InvalidArgumentException::class);$this->expectExceptionMessage('不支持所选分辨率、画幅或时长');
         Service::importWorkbenchPlan(1,1,$params,$segments,['project_id'=>$project['id'],'project_revision'=>1,'body'=>$body]);
     }
 

@@ -136,18 +136,4 @@ final class MicroVideoCatalog
         return $out;
     }
 
-    /** Apply the same duration/HD contract before quoting or preparing a workbench task. */
-    public static function assertWorkbenchSelection(array $model,array $body): void
-    {
-        $height=static function(string $quality):int{$q=strtolower(trim($quality));return $q==='2k'?1440:($q==='4k'?2160:(preg_match('/^(\d+)p$/',$q,$m)?(int)$m[1]:0));};
-        $hd=array_values(array_filter($model['specs'],fn($s)=>$height($s['quality'])>=720&&$s['duration']>=8));
-        $script=array_sum(array_map(fn($s)=>(int)($s['duration']??0),(array)($body['script']['segments']??[])));
-        $required=max($script,(int)($body['script_target_duration']??$body['target_duration']??$body['brief']['target_duration']??0));
-        $maximum=$hd?max(array_column($hd,'duration')):0;
-        if($maximum<8||$height((string)($body['quality']??''))<720)throw new InvalidArgumentException('请选择支持 8 秒及以上、720P 及以上画质的视频模型');
-        if($maximum<$required)throw new InvalidArgumentException('当前模型最长 '.$maximum.' 秒，短于剧本 '.$required.' 秒，请更换模型');
-        $target=(int)($body['target_duration']??0);
-        if($target<$required)throw new InvalidArgumentException('视频时长不能短于剧本时长');
-        self::spec($model,(string)$body['quality'],(string)$body['ratio'],$target);
-    }
 }

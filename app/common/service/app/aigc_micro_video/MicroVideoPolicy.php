@@ -53,6 +53,48 @@ final class MicroVideoPolicy
         return $out;
     }
 
+    /** Resolve authored shots against the tenant's enabled models and their exact SKUs. */
+    public static function workbenchShots(array $segments, array $models, string $quality, string $ratio): array
+    {
+        $height = match (strtolower($quality)) {
+            '2k' => 1440, '4k' => 2160,
+            default => preg_match('/^(\d+)p$/i', $quality, $match) ? (int)$match[1] : 0,
+        };
+        if ($height < 720) throw new InvalidArgumentException('请选择720P及以上的成片分辨率');
+        $shots = [];
+        foreach (array_values($segments) as $index => $segment) {
+            $id = $segment['model_id'] ?? '';
+            $raw = $segment['duration'] ?? null;
+            $duration = (is_int($raw) || is_string($raw)) ? filter_var($raw, FILTER_VALIDATE_INT) : false;
+            if (!is_string($id) || $id === '' || !$duration || $duration < 1) throw new InvalidArgumentException('请为分镜 '.($index + 1).' 选择视频模型和时长');
+            $model = $models[$id] ?? null;
+            if (!$model) throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型暂不可用');
+            try {
+                $spec = MicroVideoCatalog::spec($model, $quality, $ratio, $duration);
+            } catch (InvalidArgumentException $e) {
+                throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型不支持所选分辨率、画幅或时长');
+            }
+            $frames = array_filter($model['start_end_specs'] ?? [], fn($s) => $s['quality'] === $quality && $s['ratio'] === $ratio && $s['duration'] === $duration);
+            $shots[] = ['model_id' => $id, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames];
+        }
+        if (array_sum(array_column($shots, 'duration')) > 600) throw new InvalidArgumentException('分镜总时长不能超过600秒');
+        return $shots;
+    }
+
+    public static function authoredSegments(array $segments, array $shots, int $imageCount): array
+    {
+        if (count($segments) !== count($shots)) throw new InvalidArgumentException('分镜数量已变化，请从项目重新生成方案');
+        $rows = [];
+        foreach (array_values($segments) as $index => $segment) {
+            $shot = $shots[$index];
+            if (isset($segment['model_id']) && $segment['model_id'] !== $shot['model_id']) throw new InvalidArgumentException('分镜模型已变化，请从项目重新生成方案');
+            [$row] = self::segments([$segment], [$shot['duration']], $imageCount, $shot['max_reference_images'], 1);
+            $row['sort'] = $index + 1;
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
     public static function retryIds(array $rows): array
     {
         return array_values(array_map(fn($r)=>(int)$r['id'],array_filter($rows,fn($r)=>($r['status']??'')==='failed')));
