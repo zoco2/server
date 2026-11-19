@@ -36,10 +36,25 @@ $json = json_encode(['articles' => $articles], JSON_UNESCAPED_UNICODE | JSON_THR
 foreach ([$json, "```json\n$json\n```", "以下是稿件。\n```json\n$json\n```\n共六篇。", "\xEF\xBB\xBF<think>{草稿}</think>\n$json"] as $content) {
     $check($decode->invoke(null, $content) === $articles, 'Complete article list or paragraph formatting was lost');
 }
+$quotedArticles = $articles;
+$quotedArticles[0]['content'] = '回答"我的店为谁服务"。例如"手作咖啡""本地烘培"。' . "\n" . $articles[0]['content'];
+$quotedJson = json_encode(['articles' => $quotedArticles], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+$malformed = str_replace(
+    ['\"我的店为谁服务\"', '\"手作咖啡\"', '\"本地烘培\"'],
+    ['"我的店为谁服务"', '"手作咖啡"', '"本地烘培"'],
+    $quotedJson
+);
+foreach ([$malformed, "```json\n$malformed\n```"] as $reply) {
+    $check($decode->invoke(null, $reply) === $quotedArticles, 'Body quote repair changed the six articles');
+}
 foreach ([
     '<think>' . $json => '模型未返回正式稿件',
     substr($json, 0, -2) => '模型返回的稿件格式有误，无法解析为 JSON',
     $json . "\n" . $json => '模型返回的稿件格式有误，无法解析为 JSON',
+    substr($malformed, 0, -2) => '模型返回的稿件格式有误，无法解析为 JSON',
+    $malformed . $malformed => '模型返回的稿件格式有误，无法解析为 JSON',
+    '{"articles":[{"content":"正文" "title":"标题"}]}' => '模型返回的稿件格式有误，无法解析为 JSON',
+    '{"articles":[{"title":"标题","content":"正文中"没闭合。"}]}' => '模型返回的稿件格式有误，无法解析为 JSON',
     '{"articles":{"0":{"title":"标题","content":"正文"}}}' => '模型未返回有效的稿件列表',
     '{"articles":[]}' => '模型未返回有效的稿件列表',
     '{"articles":[{"title":"标题","content":""}]}' => '模型返回的稿件缺少标题或正文',
