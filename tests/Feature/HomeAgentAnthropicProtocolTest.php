@@ -1,14 +1,17 @@
 <?php
 // Exercise the real curl SSE buffer with fake wire chunks; no database/network/payment.
 namespace app\common\service\power {
-    final class AnthropicWireFixture { public static array $events = []; }
+    final class AnthropicWireFixture { public static array $events = []; public static string $lineEnding = "\n"; }
     function curl_init() { return new \stdClass(); }
     function curl_setopt_array($handle, array $options) { $handle->options = $options; return true; }
     function curl_exec($handle) {
         $wire = '';
-        foreach (AnthropicWireFixture::$events as $event) $wire .= 'event: '.($event['type'] ?? 'message')."\ndata: ".json_encode($event, JSON_UNESCAPED_UNICODE)."\n\n";
+        $eol = AnthropicWireFixture::$lineEnding;
+        foreach (AnthropicWireFixture::$events as $event) $wire .= 'event: '.($event['type'] ?? 'message').$eol.'data: '.json_encode($event, JSON_UNESCAPED_UNICODE).$eol.$eol;
         // Byte boundaries deliberately split JSON escapes, UTF-8 characters and SSE delimiters.
-        foreach (str_split($wire, 7) as $chunk) ($handle->options[CURLOPT_WRITEFUNCTION])($handle, $chunk);
+        foreach (preg_split('/(?<=\r)(?=\n)/', $wire) as $segment) {
+            foreach (str_split($segment, 7) as $chunk) ($handle->options[CURLOPT_WRITEFUNCTION])($handle, $chunk);
+        }
         return true;
     }
     function curl_errno($handle) { return 0; }
@@ -47,6 +50,9 @@ namespace {
     check($visible === ['先查询。','再回答。'] && $result['content'] === '先查询。再回答。', 'Native blocks leaked or text reordered');
     check(count($result['tool_calls']) === 2 && $result['tool_calls'][0]['function']['arguments'] === '{"name":"服装"}' && $result['tool_calls'][1]['id'] === 'tool_b', 'Sparse block indices or fragmented arguments corrupted');
     check(invoke('normalizeUsage',$result['usage'])['total_tokens'] === 140 && $result['provider_request_id'] === 'msg_fixture', 'Native receipt/usage lost');
+    F::$lineEnding = "\r\n";
+    check(wire($events, $visible) === $result && $visible === ['先查询。','再回答。'], 'CRLF split across callbacks lost SSE frames');
+    F::$lineEnding = "\n";
     $empty = wire(array_merge([start()],block(3,'empty','list',[]),finishWire('tool_use')));
     check($empty['tool_calls'][0]['function']['arguments'] === '{}','Empty tool input not an object');
     foreach ([array_slice($events,0,-1),array_merge([start()],block(1,'broken','lookup',['{"name":']),finishWire('tool_use')),array_merge([start()],block(1,'c','lookup',['{}']),finishWire('max_tokens'))] as $invalid) {
