@@ -11,82 +11,92 @@ class GeoDiagProvider
 {
     public const BASE_URL = 'https://118.89.28.187/api/v1';
 
+    private string $apiKey;
+
+    public function __construct(int $tenantId)
+    {
+        $this->apiKey = GeoDiagConfigService::get($tenantId)['api_key'];
+        if ($this->apiKey === '') {
+            throw new Exception('请先在租户后台「基础配置 → GEO 检测」填写 API Key');
+        }
+    }
+
     /** @var string[] */
     public const TERMINAL_STATUS = ['completed', 'partial_failed', 'failed', 'cancelled'];
 
     /**
      * @return array<int, array<string, mixed>>
      */
-    public static function platforms(): array
+    public function platforms(): array
     {
-        $result = self::request('GET', '/platforms');
+        $result = $this->request('GET', '/platforms');
         return is_array($result['data']) ? $result['data'] : [];
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function regions(): array
+    public function regions(): array
     {
-        return self::request('GET', '/regions')['data'];
+        return $this->request('GET', '/regions')['data'];
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function usage(): array
+    public function usage(): array
     {
-        return self::request('GET', '/usage')['data'];
+        return $this->request('GET', '/usage')['data'];
     }
 
     /**
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    public static function createRun(array $payload, string $idempotencyKey): array
+    public function createRun(array $payload, string $idempotencyKey): array
     {
-        return self::request('POST', '/runs', $payload, ['Idempotency-Key: ' . $idempotencyKey]);
+        return $this->request('POST', '/runs', $payload, ['Idempotency-Key: ' . $idempotencyKey]);
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function runStatus(string $runId): array
+    public function runStatus(string $runId): array
     {
-        return self::request('GET', '/runs/' . rawurlencode($runId) . '/status');
+        return $this->request('GET', '/runs/' . rawurlencode($runId) . '/status');
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function runDetail(string $runId): array
+    public function runDetail(string $runId): array
     {
-        return self::request('GET', '/runs/' . rawurlencode($runId));
+        return $this->request('GET', '/runs/' . rawurlencode($runId));
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function runReport(string $runId): array
+    public function runReport(string $runId): array
     {
-        return self::request('GET', '/runs/' . rawurlencode($runId) . '/report');
+        return $this->request('GET', '/runs/' . rawurlencode($runId) . '/report');
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function batchStatus(string $batchId): array
+    public function batchStatus(string $batchId): array
     {
-        return self::request('GET', '/batches/' . rawurlencode($batchId) . '/status');
+        return $this->request('GET', '/batches/' . rawurlencode($batchId) . '/status');
     }
 
     /**
      * @return array<string, mixed>
      */
-    public static function batchDetail(string $batchId, int $page = 1): array
+    public function batchDetail(string $batchId, int $page = 1): array
     {
         $path = '/batches/' . rawurlencode($batchId) . '?page=' . max(1, $page);
-        return self::request('GET', $path);
+        return $this->request('GET', $path);
     }
 
     /**
@@ -94,26 +104,26 @@ class GeoDiagProvider
      * @param string[] $extraHeaders
      * @return array{data:mixed,status:int,request_id:string,charged_cents:int,balance_cents:int}
      */
-    private static function request(string $method, string $path, array $body = [], array $extraHeaders = []): array
+    private function request(string $method, string $path, array $body = [], array $extraHeaders = []): array
     {
-        $apiKey = self::apiKey();
         $headers = array_merge([
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $this->apiKey,
             'Accept: application/json',
         ], $extraHeaders);
         $method = strtoupper($method);
-        $url = rtrim((string)env('geo_diag.base_url', self::BASE_URL), '/') . $path;
         $ch = curl_init();
         $options = [
-            CURLOPT_URL => $url,
+            CURLOPT_URL => self::BASE_URL . $path,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT => 45,
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_SSL_VERIFYPEER => filter_var(env('geo_diag.ssl_verify', false), FILTER_VALIDATE_BOOLEAN),
-            CURLOPT_SSL_VERIFYHOST => filter_var(env('geo_diag.ssl_verify', false), FILTER_VALIDATE_BOOLEAN) ? 2 : 0,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
         ];
         if ($method !== 'GET') {
             $headers[] = 'Content-Type: application/json';
@@ -150,18 +160,6 @@ class GeoDiagProvider
             'charged_cents' => (int)($headersMap['x-billing-charged-cents'] ?? 0),
             'balance_cents' => (int)($headersMap['x-balance-cents'] ?? 0),
         ];
-    }
-
-    private static function apiKey(): string
-    {
-        $apiKey = trim((string)env('geo_diag.api_key', ''));
-        if ($apiKey === '') {
-            $apiKey = trim((string)getenv('GEO_DIAG_API_KEY'));
-        }
-        if ($apiKey === '') {
-            throw new Exception('请先配置GEO诊断API Key');
-        }
-        return $apiKey;
     }
 
     /**

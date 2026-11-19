@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\common\service\douyin;
 
+use app\common\service\share\TenantShareConfigService;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use InvalidArgumentException;
@@ -22,7 +23,12 @@ final class DouyinH5ShareService
 
     public function __construct(?array $config = null, ?ClientInterface $http = null, ?Driver $cache = null)
     {
-        $config ??= config('douyin', []);
+        if ($config === null) {
+            $tenantId = (int)(request()->tenantId ?? 0);
+            $config = $tenantId > 0
+                ? (new TenantShareConfigService($tenantId))->runtime('douyin')
+                : config('douyin', []);
+        }
         $this->clientKey = trim((string)($config['client_key'] ?? ''));
         $this->clientSecret = trim((string)($config['client_secret'] ?? ''));
         if ($this->clientKey === '' || $this->clientSecret === '') {
@@ -33,6 +39,11 @@ final class DouyinH5ShareService
         $this->credentials = new DouyinCredentialCache(
             $cache ?? Cache::store($store === '' ? null : $store), $this->clientKey, $this->clientSecret
         );
+    }
+
+    public static function forTenant(int $tenantId, ?ClientInterface $http = null, ?Driver $cache = null): self
+    {
+        return new self((new TenantShareConfigService($tenantId))->runtime('douyin'), $http, $cache);
     }
 
     /**

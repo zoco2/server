@@ -207,8 +207,8 @@ php think geo:media-sync --tenant=1 --limit=100  # 试跑
 | **S6** | 租户菜单 SQL + 权限点（`la_tenant_menu`），GEO 设置页合并（海讯 key、加成倍率） |
 
 **S5 接口要点（已按开放文档 v1.11 实现）：**
-- 认证：`Authorization: Bearer API_KEY`，代码读取 `geo_diag.api_key` 或环境变量 `GEO_DIAG_API_KEY`，不要把真实 key 提交进仓库。
-- Base URL 默认 `https://118.89.28.187/api/v1`，可用 `geo_diag.base_url` 覆盖；IP HTTPS 默认关闭证书校验，可用 `geo_diag.ssl_verify=true` 打开。
+- 在租户后台的「系统设置 → 基础配置 → GEO 检测」填写 API Key。密钥存入当前租户的 MySQL 配置表，类型为 `geo_diag`，名称为 `provider`。
+- 提交检测和后台轮询都使用任务所属租户的 API Key，固定访问 `https://118.89.28.187/api/v1`。服务端校验证书链和目标 IP。升级时可在原环境运行 `php scripts/import-geo-diagnosis-config.php <租户ID>` 导入旧 API Key。重复导入会保留该租户已保存的密钥。
 - `POST /api/v1/runs` 支持批量 `items`，**必带 `Idempotency-Key`**，本地按诊断批次生成稳定幂等键。
 - 轮询：`GET /batches/{batchId}/status`，终态后读取 `GET /batches/{batchId}?page=` 和 `GET /runs/{runId}/report`。
 - 平台和计费：`GET /platforms`；省份：`GET /regions`（只允许 Web 平台）；余额：`GET /usage`。

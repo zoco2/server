@@ -27,21 +27,21 @@ class GeoDiagnosisService
     ];
 
     /** @return array<int, array<string, mixed>> */
-    public static function platforms(): array
+    public static function platforms(int $tenantId): array
     {
-        return GeoDiagProvider::platforms();
+        return (new GeoDiagProvider($tenantId))->platforms();
     }
 
     /** @return array<string, mixed> */
-    public static function regions(): array
+    public static function regions(int $tenantId): array
     {
-        return GeoDiagProvider::regions();
+        return (new GeoDiagProvider($tenantId))->regions();
     }
 
     /** @return array<string, mixed> */
-    public static function usage(): array
+    public static function usage(int $tenantId): array
     {
-        return GeoDiagProvider::usage();
+        return (new GeoDiagProvider($tenantId))->usage();
     }
 
     /**
@@ -91,6 +91,7 @@ class GeoDiagnosisService
         $result = Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $taskRunId) {
             $now = time();
             $batch = GeoDiagBatch::create([
+                'tenant_id' => (int)$brand['tenant_id'],
                 'user_id' => $userId,
                 'task_run_id' => $taskRunId,
                 'merchant_brand_id' => (int)$brand['id'],
@@ -150,7 +151,7 @@ class GeoDiagnosisService
             ]);
 
             try {
-                $accepted = GeoDiagProvider::createRun($request, $idempotencyKey);
+                $accepted = (new GeoDiagProvider((int)$batch['tenant_id']))->createRun($request, $idempotencyKey);
                 $payload = is_array($accepted['data']) ? $accepted['data'] : [];
                 if ($taskRunId !== null && empty($payload['id'])) {
                     throw new Exception('诊断服务未返回批次ID');
@@ -337,7 +338,8 @@ class GeoDiagnosisService
         if ($upstreamBatchId === '') {
             throw new \InvalidArgumentException('诊断记录缺少服务商批次ID');
         }
-        $statusResponse = GeoDiagProvider::batchStatus($upstreamBatchId);
+        $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+        $statusResponse = $provider->batchStatus($upstreamBatchId);
         $status = is_array($statusResponse['data']) ? $statusResponse['data'] : [];
         $pollAfter = (int)($status['pollAfterSeconds'] ?? self::DEFAULT_POLL_AFTER);
         $now = time();
@@ -357,7 +359,7 @@ class GeoDiagnosisService
         self::syncRunsFromStatus((int)$batch['id'], $status);
         if ($data['terminal'] || in_array($data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
             // 先持久化样本与汇总，拉取失败时保留原状态供下一次轮询。
-            $data = array_replace($data, self::syncBatchResults($batch));
+            $data = array_replace($data, self::syncBatchResults($batch, $provider));
             $data['terminal'] = 1;
             $data['finish_time'] = $now;
             $data['next_poll_time'] = $batch['task_run_id'] ? $now : 0;
@@ -384,13 +386,13 @@ class GeoDiagnosisService
         }
     }
 
-    private static function syncBatchResults(GeoDiagBatch $batch): array
+    private static function syncBatchResults(GeoDiagBatch $batch, GeoDiagProvider $provider): array
     {
         $upstreamBatchId = (string)$batch['upstream_batch_id'];
         $page = 1;
         $pages = 1;
         do {
-            $resultResponse = GeoDiagProvider::batchDetail($upstreamBatchId, $page);
+            $resultResponse = $provider->batchDetail($upstreamBatchId, $page);
             $result = is_array($resultResponse['data']) ? $resultResponse['data'] : [];
             $pages = max(1, (int)($result['totalPages'] ?? 1));
             $items = is_array($result['items'] ?? null) ? $result['items'] : [];
@@ -400,7 +402,7 @@ class GeoDiagnosisService
             }
             $page++;
         } while ($page <= $pages);
-        self::syncReports((int)$batch['id']);
+        self::syncReports((int)$batch['id'], $provider);
         return self::summarizeBatch((int)$batch['id']);
     }
 
@@ -477,12 +479,12 @@ class GeoDiagnosisService
         }
     }
 
-    private static function syncReports(int $batchId): void
+    private static function syncReports(int $batchId, GeoDiagProvider $provider): void
     {
         $runs = GeoDiagRun::where('batch_id', $batchId)->where('upstream_run_id', '<>', '')->select();
         foreach ($runs as $run) {
             try {
-                $reportResponse = GeoDiagProvider::runReport((string)$run['upstream_run_id']);
+                $reportResponse = $provider->runReport((string)$run['upstream_run_id']);
                 $report = is_array($reportResponse['data']) ? $reportResponse['data'] : [];
                 $run->save(['report_json' => self::json($report), 'update_time' => time()]);
             } catch (Exception) {

@@ -14871,3 +14871,33 @@ FROM `la_system_menu` p
 CROSS JOIN (SELECT 'assignTenant' AS action_name, '分配给租户' AS label UNION ALL SELECT 'tenantChoices','租户选项查询') a
 WHERE p.source_menu_key='core_platform_merchant_nfc_code'
   AND NOT EXISTS (SELECT 1 FROM `la_system_menu` e WHERE e.perms=CONCAT('merchant.nfc_code/',a.action_name));
+
+-- 租户基础配置的模板菜单和区块权限。
+INSERT INTO `la_tenant_system_menu`
+    (tenant_id,pid,type,name,icon,sort,perms,paths,component,selected,params,is_cache,is_show,is_disable,app_code,source,source_menu_key,is_core,create_time,update_time)
+SELECT root.tenant_id,root.id,'C','基础配置','el-icon-Setting',105,'','base-config','setting/base-config','','',0,1,0,'','core','core_tenant_base_config',1,UNIX_TIMESTAMP(),UNIX_TIMESTAMP()
+FROM `la_tenant_system_menu` root
+WHERE root.pid=0 AND root.type='M' AND root.paths='setting'
+  AND NOT EXISTS (
+      SELECT 1 FROM `la_tenant_system_menu` page
+      WHERE page.tenant_id=root.tenant_id
+        AND (page.source_menu_key='core_tenant_base_config' OR (page.pid=root.id AND page.paths='base-config'))
+  );
+
+-- 复用当前租户已有的权限记录。新租户的区块权限挂在基础配置下，供角色管理分配。
+INSERT INTO `la_tenant_system_menu`
+    (tenant_id,pid,type,name,icon,sort,perms,paths,component,selected,params,is_cache,is_show,is_disable,app_code,source,source_menu_key,is_core,create_time,update_time)
+SELECT page.tenant_id,page.id,'A',action.label,'',0,action.permission,'','','','',0,0,0,'','core',action.menu_key,1,UNIX_TIMESTAMP(),UNIX_TIMESTAMP()
+FROM `la_tenant_system_menu` page
+CROSS JOIN (
+    SELECT '查看 GEO 配置' AS label,'geo.manuscript/detail' AS permission,'core_tenant_base_geo_read' AS menu_key
+    UNION ALL SELECT '保存 GEO 检测配置','geo.diagnosis_config/save','core_tenant_base_geo_diag_save'
+    UNION ALL SELECT '查看剪辑配置','smart_edit.config/detail','core_tenant_base_edit_read'
+    UNION ALL SELECT '查看分享配置','channel.share_setting/getConfig','core_tenant_base_share_read'
+    UNION ALL SELECT '保存分享配置','channel.share_setting/setConfig','core_tenant_base_share_save'
+) action
+WHERE page.source_menu_key='core_tenant_base_config'
+  AND NOT EXISTS (
+      SELECT 1 FROM `la_tenant_system_menu` existing
+      WHERE existing.tenant_id=page.tenant_id AND existing.perms=action.permission
+  );

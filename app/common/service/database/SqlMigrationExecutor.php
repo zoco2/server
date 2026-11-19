@@ -18,6 +18,11 @@ class SqlMigrationExecutor
         bool $ignoreDuplicateColumn = true,
         string $prefixStyle = 'mysql'
     ): void {
+        $baseConfigMarker = '-- likeadmin:tenant-base-config-menus-v1';
+        if (str_starts_with($content, $baseConfigMarker)) {
+            self::migrateBaseConfigMenus(substr($content, strlen($baseConfigMarker)), $prefix, $connection);
+            return;
+        }
         if (preg_match('/^-- likeadmin:migrate-pc-wechat-bindings-v1\s*$/m', $content)) {
             PcWechatMigration::run($prefix, $connection);
             return;
@@ -65,6 +70,33 @@ class SqlMigrationExecutor
                 }
                 throw $e;
             }
+        }
+    }
+
+    private static function migrateBaseConfigMenus(string $sql, string $prefix, $connection): void
+    {
+        $db = $connection ?: Db::connect();
+        $tenantTable = '`' . str_replace('`', '``', $prefix . 'tenant') . '`';
+        $splitTenants = $db->query(
+            "SELECT t.sn FROM {$tenantTable} t
+             JOIN information_schema.TABLES m ON m.TABLE_SCHEMA=DATABASE() AND m.TABLE_NAME=CONCAT(?,t.sn)
+             WHERE t.tactics=1 AND t.sn<>''",
+            [$prefix . 'tenant_system_menu_']
+        );
+        $suffixes = [''];
+        foreach ($splitTenants as $tenant) {
+            $suffixes[] = '_' . str_replace('`', '``', $tenant['sn']);
+        }
+        foreach ($suffixes as $suffix) {
+            // Table names are quoted in the migration. Numeric menu/role IDs are local to each table family.
+            $tableSql = strtr($sql, [
+                '`la_tenant_system_menu`' => '`la_tenant_system_menu' . $suffix . '`',
+                '`la_tenant_system_role`' => '`la_tenant_system_role' . $suffix . '`',
+                '`la_tenant_system_role_menu`' => '`la_tenant_system_role_menu' . $suffix . '`',
+            ]);
+            $db->transaction(static function () use ($tableSql, $prefix, $db) {
+                self::execute($tableSql, $prefix, $db);
+            });
         }
     }
 

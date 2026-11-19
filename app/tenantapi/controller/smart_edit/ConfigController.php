@@ -25,7 +25,7 @@ class ConfigController extends BaseAdminController
     {
         try {
             $params = $this->request->post();
-            // 未回填 secret_key 时保留原值，避免前端脱敏回显把密钥覆盖成空
+            // 兼容旧版配置页的空密钥提交。
             if (!array_key_exists('secret_key', $params) || (string)$params['secret_key'] === '') {
                 $current = SmartEditImsConfigService::get($this->tenantId);
                 $params['secret_key'] = $current['secret_key'];
@@ -38,7 +38,7 @@ class ConfigController extends BaseAdminController
     }
 
     /**
-     * 火山语音配置回显；API Key 不回明文。
+     * 火山语音配置回显。
      */
     public function voiceDetail()
     {
@@ -49,7 +49,7 @@ class ConfigController extends BaseAdminController
     {
         try {
             $params = $this->request->post();
-            // 与阿里云配置同理：前端回显时密钥是空的，不能把已有 Key 覆盖掉
+            // 兼容旧版配置页的空密钥提交。
             if (!array_key_exists('api_key', $params) || (string)$params['api_key'] === '') {
                 $current = SmartEditVoiceConfigService::get($this->tenantId);
                 $params['api_key'] = $current['api_key'];

@@ -4,6 +4,8 @@
 
 ## 配置
 
+租户应用请在后台 **系统设置 → 基础配置 → 分享配置** 中设置 Client Key、Client Secret 并启用，详见 [租户分享配置](tenant-share-config.md)。已有租户上下文时服务自动读取该租户配置，未配置或禁用不会回退到环境凭据。下面的环境凭据仅用于无租户上下文的旧调用。
+
 在抖音开放平台创建网站应用，开通 `h5.share`、`open.get.ticket` 和投稿权限 `aweme.share`；转发到日常还需要 `aweme.forward`。在 server 的 `.env` 添加：
 
 ```ini
@@ -22,7 +24,7 @@ CACHE_STORE = redis
 ```php
 use app\common\service\douyin\DouyinH5ShareService;
 
-$share = (new DouyinH5ShareService())->createShare([
+$share = DouyinH5ShareService::forTenant($tenantId)->createShare([
     'video_path' => 'https://cdn.example.com/store/video.mp4',
     'title' => '周末来我们店里坐坐',
     'hashtag_list' => ['同城美食', '周末探店'],
