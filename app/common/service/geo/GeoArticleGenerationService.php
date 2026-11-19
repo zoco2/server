@@ -218,16 +218,25 @@ PROMPT;
                     return self::decodeArticles((string)$result['content']);
                 }
             } catch (InvalidArgumentException $e) {
+                $content = (string)($result['content'] ?? '');
+                $source = (string)($result['content_source'] ?? 'content');
+                $reply = [];
+                if ($source === 'content') {
+                    // Keep the exact pre-parser bytes, including whitespace and invalid UTF-8.
+                    $reply = mb_check_encoding($content, 'UTF-8')
+                        ? ['response_content' => $content]
+                        : ['response_content_base64' => base64_encode($content)];
+                }
                 Log::warning('GEO 稿件回复校验失败 ' . self::encode([
                     'request_id' => (string)$task['request_id'],
                     'consumption_id' => (int)($result['consumption_id'] ?? 0),
                     'round' => $round + 1,
                     'max_tokens' => (int)($result['effective_max_tokens'] ?? 0),
                     'finish_reason' => (string)($result['finish_reason'] ?? ''),
-                    'content_source' => (string)($result['content_source'] ?? ''),
-                    'content_bytes' => strlen((string)($result['content'] ?? '')),
+                    'content_source' => $source,
+                    'content_bytes' => strlen($content),
                     'reason' => $e->getMessage(),
-                ]));
+                ] + $reply));
                 throw $e;
             }
             if (!$canRead || $toolCallsUsed + count($calls) > self::MAX_TOOL_CALLS) {
