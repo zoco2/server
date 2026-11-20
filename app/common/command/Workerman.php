@@ -5,6 +5,7 @@ namespace app\common\command;
 use app\common\model\FailedJob;
 use app\common\job\Job;
 use app\common\model\smart_edit\SmartEditTask;
+use app\common\service\ai\WorkermanAiTaskGroup;
 use app\common\service\mq\LightMqService;
 use app\common\service\publish_task\PublishTaskDispatcher;
 use app\common\service\smart_edit\SmartEditService;
@@ -95,6 +96,10 @@ class Workerman extends Command
         self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
         self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
         self::registerTaskWorker('publish-task-dispatcher', [PublishTaskDispatcher::class, 'scan']);
+
+        if (env('workerman.ai_task_group', false)) {
+            WorkermanAiTaskGroup::register(app()->getRootPath(), $action, (bool)$input->getOption('daemon'));
+        }
 
         Worker::runAll();
         return 0;
