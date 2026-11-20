@@ -23,6 +23,9 @@ DECORATION_AGENT_MATCH="$SERVER_DIR/think decoration:agent-worker"
 OEM_BRAND_MATCH="$SERVER_DIR/think brand:worker"
 
 mkdir -p "$LOG_DIR"
+# Daemonized Workerman may leave fd 2 closed. dash needs a valid stderr
+# for its startup pipeline, including when checking a previous launcher's PID.
+exec 2>>"$START_LOG"
 
 log_startup() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$START_LOG"

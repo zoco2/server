@@ -94,6 +94,10 @@ def run(site):
     (site / "sleep").chmod(0o755)
     for name in ("start-ai-task-worker.sh", "start-workerman-ai-task-group.sh", "home-agent-php.sh"):
         shutil.copy(ROOT / "scripts" / name, scripts)
+    # Reproduce the daemon's closed stderr throughout the managed launcher's lifecycle.
+    managed = scripts / "start-workerman-ai-task-group.sh"
+    implementation = managed.rename(scripts / "managed-impl.sh")
+    managed.write_text('#!/bin/sh\nexec 2>&-\nexec /bin/sh "' + str(implementation) + '"\n')
     env = dict(os.environ, WORKERMAN_AUTOLOAD=str(AUTOLOAD), FIXTURE_SITE=str(site),
                FIXTURE_SOURCE=str(ROOT), PHP_BIN=str(site / "fake-php"), PATH=f"{site}:{os.environ['PATH']}")
     command = [PHP, str(site / "test-worker.php")]
