@@ -14,4 +14,40 @@ foreach(['ai:task-worker','brand:worker','brand:maintain','canvas:subagent-worke
     gateCheck($blocked,'active same-project worker was not blocked');proc_terminate($worker);foreach($pipes as $p)fclose($p);proc_close($worker);
 }
 ProjectUpdateProcessGate::assertDrained($work);
+$pidDir=$work.'/runtime/log/workerman';
+mkdir($pidDir,0755,true);
+$pidFile=$pidDir.'/workerman.pid';
+$masterTitle='WorkerMan: master process  start_file=';
+unset($_ENV['WORKERMAN_AI_TASK_GROUP']);
+putenv('PHP_WORKERMAN_AI_TASK_GROUP');
+foreach ([
+    ['default', $masterTitle.$work.'/think', false],
+    ['false', $masterTitle.$work.'/think', false],
+    ['off', $masterTitle.$work.'/think', false],
+    ['0', $masterTitle.$work.'/think', false],
+    ['true', $masterTitle.$work.'/think', true],
+    ['true', $masterTitle.$work.'/other/think', false],
+    ['true', 'unrelated process using a recycled PID', false],
+] as [$setting,$title,$expected]) {
+    if($setting !== 'default')file_put_contents($work.'/.env',"[WORKERMAN]\nAI_TASK_GROUP = $setting\n");
+    $pipes=[];
+    $master=proc_open([PHP_BINARY,'-r','cli_set_process_title($argv[1]); echo "ready\\n"; sleep(20);',$title],
+        [0=>['pipe','r'],1=>['pipe','w'],2=>['pipe','w']],$pipes);
+    try {
+        gateCheck(fgets($pipes[1])==="ready\n",'fixture master did not set its process title');
+        file_put_contents($pidFile,(string)proc_get_status($master)['pid']);
+        $blocked=false;
+        try { ProjectUpdateProcessGate::assertDrained($work); }
+        catch(RuntimeException $e) {
+            if(!str_contains($e->getMessage(),'Workerman'))throw $e;
+            $blocked=true;
+        }
+        gateCheck($blocked===$expected,"unexpected Workerman decision for $setting and $title");
+    } finally {
+        proc_terminate($master);
+        foreach($pipes as $pipe)fclose($pipe);
+        proc_close($master);
+    }
+}
+ProjectUpdateProcessGate::assertDrained($work); // Stale pidfile after the master exits.
 echo "PASS: read-only process gate blocks absolute/relative same-project workers, ignores other projects and permits drained site\n";

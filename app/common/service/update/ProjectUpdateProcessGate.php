@@ -140,7 +140,9 @@ class ProjectUpdateProcessGate
         if($root===false || PHP_OS_FAMILY!=='Linux' || !is_readable('/proc/mounts'))throw new RuntimeException('无法核验本项目任务进程；需可读取 Linux /proc，平滑停止本项目 Supervisor 和 cron 后重试');
         if(preg_match('/(?:^|,)hidepid=(?:1|2|4)(?:,|\s)/m',(string)file_get_contents('/proc/mounts')))throw new RuntimeException('/proc 隐藏进程，无法核验本项目任务进程停机');
         $commands=['ai:task-worker','canvas:subagent-worker','home-agent:worker','micro-video:worker','brand:worker','brand:maintain','virtualpay:maintain','short-drama:episode-worker','short-drama:planning-worker','short-drama:canvas-agent-worker','decoration:agent-worker','crontab'];
-        $scripts=['start-ai-task-worker.sh','start-brand-worker.sh','start-short-drama-episode-worker.sh','start-short-drama-planning-worker.sh','start-decoration-agent-worker.sh','start-project-supervisor.sh','start-project-cron.sh'];
+        $scripts=['start-ai-task-worker.sh','start-workerman-ai-task-group.sh','start-brand-worker.sh','start-short-drama-episode-worker.sh','start-short-drama-planning-worker.sh','start-decoration-agent-worker.sh','start-project-supervisor.sh','start-project-cron.sh'];
+        $workermanPid=trim((string)@file_get_contents($root.'/runtime/log/workerman/workerman.pid'));
+        $masterTitle='WorkerMan: master process  start_file=';
         $entries=glob('/proc/[0-9]*',GLOB_ONLYDIR);
         if($entries===false)throw new RuntimeException('无法枚举 Linux /proc 项目进程');
         foreach($entries as $process){
@@ -149,6 +151,12 @@ class ProjectUpdateProcessGate
             if($data===false){if(!is_dir($process))continue;throw new RuntimeException('进程读取权限不足，无法确认本项目任务进程已排空');}
             if($data==='')continue; // Readable empty cmdline belongs to a kernel thread/zombie.
             $args=array_values(array_filter(explode("\0",$data),fn($v)=>$v!==''));
+            // During a child restart the master can be the only process able to relaunch the AI queues.
+            if(basename($process)===$workermanPid && str_starts_with($args[0]??'', $masterTitle)
+                && self::resolve(substr($args[0],strlen($masterTitle)),$process)===$root.'/think'
+                && self::workermanManagesAi($root)){
+                throw new RuntimeException('本项目 Workerman 仍在托管 AI 队列，请停止本站 Workerman 并等待当前任务结束后重试');
+            }
             foreach($args as $argument){
                 if(in_array(basename($argument),$scripts,true)){
                     if(self::resolve($argument,$process)===$root.'/scripts/'.basename($argument))throw new RuntimeException('本项目启动脚本仍运行，请停止本项目 Supervisor 和 cron 后重试');
@@ -159,6 +167,20 @@ class ProjectUpdateProcessGate
                 if(self::resolve($argument,$process)===$root.'/think')throw new RuntimeException('本项目任务或 cron 进程仍运行，请等待当前任务结束并停止本项目 Supervisor 和 cron 后重试');
             }
         }
+    }
+
+    private static function workermanManagesAi(string $root): bool
+    {
+        if (function_exists('env')) {
+            return (bool)env('workerman.ai_task_group', false);
+        }
+        // Standalone update/bootstrap checks can run before ThinkPHP has loaded its env helper.
+        $settings = is_file($root.'/.env') ? @parse_ini_file($root.'/.env', true, INI_SCANNER_RAW) : [];
+        $settings = array_change_key_case($settings ?: [], CASE_UPPER);
+        $section = array_change_key_case((array)($settings['WORKERMAN'] ?? []), CASE_UPPER);
+        $value = $section['AI_TASK_GROUP'] ?? $settings['WORKERMAN_AI_TASK_GROUP']
+            ?? $_ENV['WORKERMAN_AI_TASK_GROUP'] ?? getenv('PHP_WORKERMAN_AI_TASK_GROUP');
+        return (bool)$value && $value !== 'false' && $value !== 'off';
     }
 
     private static function resolve(string $argument,string $process): string

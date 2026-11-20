@@ -147,14 +147,17 @@ class SystemPackageUpdateService
             $script = $directory . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'start-ai-task-worker.sh';
         }
 
+        $managed = env('workerman.ai_task_group', false);
         return [
-            'name' => 'aigc-task-worker',
+            'name' => $managed ? 'workerman' : 'aigc-task-worker',
             'start_user' => 'root',
             'process_count' => '1',
             'priority' => '999',
-            'remark' => 'AI 任务守护进程',
+            'remark' => $managed ? 'AI 队列由现有 Workerman 守护项统一管理' : 'AI 任务守护进程',
             'directory' => $directory,
-            'start_command' => '/bin/sh ' . escapeshellarg($script),
+            'start_command' => $managed
+                ? 'php ' . escapeshellarg($directory . DIRECTORY_SEPARATOR . 'think') . ' workerman start'
+                : '/bin/sh ' . escapeshellarg($script),
             'log_command' => 'tail -f ' . escapeshellarg($directory . DIRECTORY_SEPARATOR . 'runtime' . DIRECTORY_SEPARATOR . 'log' . DIRECTORY_SEPARATOR . 'ai_task_worker.log'),
         ];
     }

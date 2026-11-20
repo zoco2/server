@@ -516,7 +516,20 @@ PHP_BIN=/www/server/php/82/bin/php /bin/sh /www/wwwroot/likeadmin_aigc_saas/serv
 
 
 
-### 宝塔进程守护配置
+### 通过 Workerman 统一管理 AI 队列
+
+已经运行 `php think workerman` 的 Linux 站点，可以通过独立入口 `scripts/start-workerman-ai-task-group.sh` 管理同一组队列。首次切换时，在原守护程序中停用 `scripts/start-ai-task-worker.sh` 及其自动拉起，等在途任务退出。然后在 server 的 `.env` 中启用托管。
+
+```ini
+[WORKERMAN]
+AI_TASK_GROUP = true
+```
+
+重启现有的 Workerman 守护项。之后更新后台任务代码时，只需重启这一项。使用 Workerman 自带的后台模式时，运行 `php think workerman restart -d`。在项目目录执行 `php think workerman status` 可查看 `ai-task-group`。启动日志为 `runtime/log/ai_task_worker_start.log`，队列日志为 `runtime/log/ai_task_worker.log`。
+
+Workerman 使用 CLI 的 PHP（可用 `PHP_BIN` 指定），需要 `pcntl_exec` 和系统的 `flock`。启用后，命令行的停止、重启和重载都会等待任务排空。通过 Supervisor 托管前台 Workerman 时，将停止信号设为发给主进程的 `QUIT`，并给在途任务留出足够的停止等待时间。切回原脚本时，先停止 Workerman，等队列退出后关闭该开关，再恢复原有守护项。
+
+### 独立使用宝塔进程守护配置
 
 在宝塔面板的“进程守护管理器”中新建守护进程，并按以下配置填写：
 
