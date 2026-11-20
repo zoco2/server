@@ -67,7 +67,9 @@ final class MicroVideoSettings
                 if(isset($seen[$tuple]))continue;$seen[$tuple]=true;
                 $key=MicroVideoStore::encode([$spec['quality'],$spec['ratio']]);
                 if(!isset($pairs[$key]))$pairs[$key]=['quality'=>$spec['quality'],'ratio'=>$spec['ratio'],'prices'=>[]];
-                $pairs[$key]['prices'][]=[(int)$spec['duration'],(float)$spec['user_charge_points']];
+                $price = [(int)$spec['duration'], (float)$spec['user_charge_points']];
+                if (!empty($spec['max_reference_audios'])) $price[] = (int)$spec['max_reference_audios'];
+                $pairs[$key]['prices'][] = $price;
             }
             $groups=[];
             foreach($pairs as $pair){

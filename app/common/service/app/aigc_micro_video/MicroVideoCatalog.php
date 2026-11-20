@@ -25,14 +25,14 @@ final class MicroVideoCatalog
     {
         $subset='';if($allowedIds!==null){$allowedIds=array_values(array_unique(array_map('strval',$allowedIds)));if(!$allowedIds)return [];sort($allowedIds);$subset=':'.hash('sha256',MicroVideoStore::encode($allowedIds));}
         $cacheKey=$tenant.':'.(int)$legacy.':'.$mode.$subset.($summary?':summary':'');if(isset(self::$cache[$cacheKey]))return self::$cache[$cacheKey];
-        $sharedKey='micro_video_callable_models_v7:'.$tenant.':'.$mode.$subset.($summary?':summary':'').':'.MicroVideoCatalogVersion::current($tenant);if(!$legacy){try{$cached=Cache::get($sharedKey);if(is_array($cached))return self::$cache[$cacheKey]=$cached;}catch(\Throwable){}}
+        $sharedKey='micro_video_callable_models_v8:'.$tenant.':'.$mode.$subset.($summary?':summary':'').':'.MicroVideoCatalogVersion::current($tenant);if(!$legacy){try{$cached=Cache::get($sharedKey);if(is_array($cached))return self::$cache[$cacheKey]=$cached;}catch(\Throwable){}}
         $result=[];$options=AigcVideoService::marketOptions($tenant);
         foreach($options['channels']??[] as $model){
             if($allowedIds!==null&&!in_array((string)$model['id'],$allowedIds,true))continue;
             if((int)($model['status']??1)!==1||(int)($model['max_reference_images']??0)<1)continue;
             // Reuse validated entries while the complete live market definition
             // (including tenant prices, schemas and SKU rules) is unchanged.
-            $entryCacheKey='micro_video_callable_entry_v7:'.$tenant.':'.$mode.':'.(int)$summary.':'.hash('sha256',MicroVideoStore::encode($model));
+            $entryCacheKey='micro_video_callable_entry_v8:'.$tenant.':'.$mode.':'.(int)$summary.':'.hash('sha256',MicroVideoStore::encode($model));
             $entryCache=null;if(!$legacy)try{$entryCache=Cache::get($entryCacheKey);}catch(\Throwable){}
             if(is_array($entryCache)){
                 // A failed renewal must not discard a valid read and revalidate every SKU.
@@ -57,6 +57,7 @@ final class MicroVideoCatalog
                     foreach($durations as $duration){$duration=(int)$duration;if($duration<1||$duration>60)continue;
                         $unit=$s['usage_unit']??'';$quantity=in_array($unit,['input_second','output_second','second'],true)?$duration:1;
                         $entry=['quality'=>(string)$s['quality'],'ratio'=>$ratio,'duration'=>$duration,'generation_method'=>$method,'market_product_id'=>(int)$model['market_product_id'],'market_sku_id'=>(int)$s['market_sku_id'],'resource_type'=>$model['resource_type'],'user_charge_points'=>round((float)$s['tenant_unit_price']*$quantity/max(1,(float)($s['usage_unit_size']??1)),4)];
+                        $entry['max_reference_audios'] = in_array('omni_reference', $skuModes, true) ? min(5, (int)($model['max_reference_audios'] ?? 0)) : 0;
                         $input=(string)($s['input_mode']??'');
                         if($legacy){$specs[]=$entry;if($hasFrames&&($input===''||in_array($input,['start_end','image_reference'],true)))$frameSpecs[]=array_replace($entry,['generation_method'=>'start_end']);continue;}
                         // A pricing SKU may be labeled text_to_video while the shared
@@ -118,7 +119,7 @@ final class MicroVideoCatalog
         if($scale)$quantity*=$duration/max(1,(int)$quote['selection']['duration']);
         return isset($quote['_catalog_meter'])?MarketGenerationMeter::price($quote['_catalog_unit_price'],$quantity,$quote['_catalog_meter']):$quote['user_charge_points'];
     }
-    public static function quote(int $tenant,array $spec,string $model,bool $catalog=false): array
+    public static function quote(int $tenant,array $spec,string $model,bool $catalog=false,array $audios=[],int $referenceImageCount=1): array
     {
         $selection=$spec+['model_id'=>$model,'channel'=>$model,'resolution'=>$spec['quality']];
         // Read-only quotes validate the generation mode's reference shape. This
@@ -128,7 +129,15 @@ final class MicroVideoCatalog
         // through tenant storage for every SKU/mode check. This is never fetched.
         $asset=['type'=>'image','uri'=>'https://pricing-only.invalid/aigc_micro_video/reference.png','role'=>$selection['generation_method']==='image_to_video'?'first_frame_image':'reference_image'];
         $assets=[$asset];if($selection['generation_method']==='start_end'){$assets=[array_replace($asset,['role'=>'first_frame_image']),array_replace($asset,['role'=>'last_frame_image'])];}
-        $q=self::runtime($spec)::quote($tenant,$selection+['prompt'=>'保持参考图片中的商品外观，生成连续的商品展示镜头。','reference_images'=>array_column($assets,'uri'),'reference_assets'=>$assets]);
+        if ($audios) {
+            if ($selection['generation_method'] === 'start_end' || count($audios) > ($spec['max_reference_audios'] ?? 0)) throw new InvalidArgumentException('当前分镜规格不支持所选参考音频');
+            $selection['generation_method'] = 'omni_reference';
+            $assets = [];
+            for ($i = 0; $i < $referenceImageCount; $i++) {
+                $assets[] = ['type'=>'image','role'=>'reference_image','uri'=>'https://pricing-only.invalid/aigc_micro_video/ref-'.$i.'.png'];
+            }
+        }
+        $q=self::runtime($spec)::quote($tenant,$selection+['prompt'=>'保持参考图片中的商品外观，生成连续的商品展示镜头。','reference_images'=>array_column($assets,'uri'),'reference_assets'=>array_merge($assets,$audios)]);
         if(($q['settlement_mode']??'reserved')!=='reserved')throw new InvalidArgumentException('此规格按实际用量结算，暂不支持分段预报价');
         $selection['market_sku_id']=(int)$q['market_sku_id'];
         $out=['selection'=>$selection,'tenant_cost_points'=>(float)$q['tenant_cost_points'],'user_charge_points'=>(float)$q['user_charge_points'],'market_sku_id'=>(int)$q['market_sku_id']];

@@ -110,6 +110,16 @@ final class MicroVideoService
         $p['quality'] = $shots[0]['quality'];
         $prepared = self::form($tenant, $user, $p, false, [$p['target_duration']]);
         $prepared['params']['images'] = MicroVideoMedia::validateImages($tenant, $user, $p['images'], $config['max_images']);
+        $poolIds = array_column($snapshot['body']['reference_audios'] ?? [], 'id');
+        foreach ($shots as $shot) {
+            if (array_diff($shot['audio_ids'] ?? [], $poolIds)) throw new InvalidArgumentException('分镜选择的音频不在项目参考素材中');
+        }
+        $selectedIds = array_merge([], ...array_map(static fn(array $shot) => $shot['audio_ids'] ?? [], $shots));
+        foreach ($snapshot['body']['reference_audios'] ?? [] as $audio) {
+            if (in_array((int)$audio['id'], $selectedIds, true)) {
+                $prepared['params']['reference_audios'][] = ['id'=>(int)$audio['id'], 'name'=>(string)$audio['name']];
+            }
+        }
         $prepared['params']['shots'] = $shots;
         $prepared['config']['shot_timeline_version'] = 0;
         $normalized = MicroVideoPolicy::authoredSegments($segments, $shots, count($prepared['params']['images']));
@@ -170,7 +180,8 @@ final class MicroVideoService
             foreach ($shots as $shot) {
                 $model = MicroVideoCatalog::model($tenant, $shot['model_id'], false, 'reference');
                 $spec = MicroVideoCatalog::spec($model, $shot['quality'], $ratio, $shot['duration']);
-                $sum += MicroVideoCatalog::quote($tenant, $spec, $shot['model_id'])['user_charge_points'];
+                $audios = MicroVideoMedia::referenceAudios($tenant, $user, $shot['audio_ids'] ?? [], true);
+                $sum += MicroVideoCatalog::quote($tenant, $spec, $shot['model_id'], false, $audios)['user_charge_points'];
             }
             return ['user_charge_points'=>round($sum,4),'approximate'=>true,'planned_duration'=>array_sum(array_column($shots,'duration'))];
         }
@@ -203,7 +214,9 @@ final class MicroVideoService
             $modelId = $shot['model_id'];
             if (!$legacy) MicroVideoPolicy::allowedModel($modelId, $config['video_model_ids']);
             $model = $legacy ? MicroVideoStore::json($row['model_snapshot']) : MicroVideoCatalog::model((int)$row['tenant_id'], $modelId, false, 'reference');
-            $spec=MicroVideoCatalog::spec($model,$shot['quality'],$params['ratio'],(int)$segment['duration'],$mode);$q=MicroVideoCatalog::quote((int)$row['tenant_id'],$spec,$modelId);$quotes[(string)$segment['id']]=$q;$user+=$q['user_charge_points'];$tenant+=$q['tenant_cost_points'];
+            $spec=MicroVideoCatalog::spec($model,$shot['quality'],$params['ratio'],(int)$segment['duration'],$mode);
+            $audios = MicroVideoMedia::referenceAudios((int)$row['tenant_id'], (int)$row['user_id'], $shot['audio_ids'] ?? [], true);
+            $q=MicroVideoCatalog::quote((int)$row['tenant_id'],$spec,$modelId,false,$audios,count(MicroVideoStore::json($segment['image_indices'])));$quotes[(string)$segment['id']]=$q;$user+=$q['user_charge_points'];$tenant+=$q['tenant_cost_points'];
         }
         $subtitlesEnabled??=MicroVideoSubtitles::enabled($row);
         $subtitles=MicroVideoSubtitles::quote($row,$subtitlesEnabled);
