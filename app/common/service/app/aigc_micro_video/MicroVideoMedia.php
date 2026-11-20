@@ -51,6 +51,75 @@ final class MicroVideoMedia
         return $result;
     }
 
+    public static function referenceAudios(int $tenant, int $user, array $ids, bool $forGeneration = false): array
+    {
+        if (!$ids) return [];
+        foreach ($ids as $id) {
+            if (filter_var($id, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) === false) throw new RuntimeException('参考音频标识无效');
+        }
+        $files = Db::name('tenant_file')->where(['tenant_id'=>$tenant, 'source_id'=>$user,
+            'source'=>FileEnum::SOURCE_USER, 'type'=>FileEnum::AUDIO_TYPE])->whereIn('id', $ids)
+            ->whereRaw('(delete_time IS NULL OR delete_time=0)')->select()->toArray();
+        $byId = array_column($files, null, 'id');
+        $assets = [];
+        foreach ($ids as $id) {
+            if (!isset($byId[$id])) throw new RuntimeException('参考音频不存在或不属于当前用户');
+            $assets[] = self::referenceAudioAsset($tenant, $byId[$id], $forGeneration);
+        }
+        if ($forGeneration && array_sum(array_column($assets, 'duration')) > 15) throw new RuntimeException('每个分镜的参考音频合计不能超过15秒');
+        return $assets;
+    }
+
+    /** The caller has already scoped this file row to the current tenant, owner and audio type. */
+    public static function referenceAudioAsset(int $tenant, array $file, bool $forGeneration = false): array
+    {
+        $uri = self::canonicalUri($file['uri']);
+        if (!in_array(strtolower(pathinfo($uri, PATHINFO_EXTENSION)), ['mp3', 'wav'], true)) throw new RuntimeException('参考音频仅支持 MP3 和 WAV');
+        $storage = self::storage($file, $tenant);
+        $url = self::managedUrl($uri, $storage, $tenant);
+        $asset = ['id' => (int)$file['id'], 'uri' => $uri, 'url' => $url, 'name' => $file['name']];
+        if ($forGeneration) {
+            $local = $storage['storage_engine'] === 'local';
+            if ($local) {
+                if (!$storage['storage_domain']) throw new RuntimeException('参考音频缺少可供模型读取的公网地址，请重新上传');
+                $url = FileService::format($storage['storage_domain'], $uri);
+                OpenSafeHttp::resolve($url, false);
+            }
+            $asset['url'] = $url;
+            $asset['type'] = 'audio';
+            $asset['role'] = 'reference_audio';
+            $asset['duration'] = self::referenceAudioDuration($file, $url, $local);
+        }
+        return $asset;
+    }
+
+    private static function referenceAudioDuration(array $file, string $url, bool $local): float
+    {
+        $key = 'micro_video_audio_duration:' . $file['tenant_id'] . ':' . $file['id'] . ':' . sha1($file['uri']);
+        $duration = \think\facade\Cache::get($key);
+        if (is_numeric($duration)) return (float)$duration;
+        $workspace = self::workspace();
+        try {
+            $limit = 15 * 1024 * 1024;
+            if ($local) {
+                $path = self::localPath($file['uri']);
+                if (filesize($path) > $limit) throw new RuntimeException('参考音频不能超过15MB');
+            } else {
+                $path = $workspace . '/source';
+                $response = OpenSafeHttp::get($url, $limit, 30);
+                if (file_put_contents($path, $response['body']) === false) throw new RuntimeException('参考音频读取失败');
+            }
+            $metadata = self::run([self::binary('ffprobe'), '-v', 'error', '-protocol_whitelist', 'file',
+                '-format_whitelist', 'mp3,wav', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type:format=duration',
+                '-of', 'json', $path], 30);
+            $info = json_decode($metadata, true);
+            $duration = (float)($info['format']['duration'] ?? 0);
+            if (empty($info['streams']) || !is_finite($duration) || $duration < 1 || $duration > 15) throw new RuntimeException('参考音频须为1至15秒的 MP3 或 WAV');
+            \think\facade\Cache::set($key, $duration, 3600);
+            return $duration;
+        } finally { self::cleanup($workspace); }
+    }
+
     public static function visionInputs(array $canonicalImages): array
     {
         $result = [];

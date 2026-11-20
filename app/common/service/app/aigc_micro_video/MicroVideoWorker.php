@@ -101,6 +101,8 @@ final class MicroVideoWorker
                 if($mode==='start_end'){$selected=[];foreach(['first_frame_id','last_frame_id'] as $key){$f=MicroVideoStore::table('frame')->where(['id'=>(int)$segment[$key],'task_id'=>$task['id'],'tenant_id'=>$tenant,'user_id'=>$user,'status'=>'success','confirmed'=>1])->find();if(!$f)throw new RuntimeException('已确认首尾帧不存在');$selected[]=MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$f['image_uri']]],1)[0];}}
                 // Capture references as actual bytes/public storage URLs, not browser localhost URLs.
                 $uris=MicroVideoMedia::visionInputs($selected);$assets=MicroVideoFramePolicy::assets($mode,$uris,$frozen['selection']['generation_method']);
+                $audioIds = $p['shots'][(int)$segment['sort'] - 1]['audio_ids'] ?? [];
+                $assets = array_merge($assets, MicroVideoMedia::referenceAudios($tenant, $user, $audioIds, true));
                 $request=$frozen['selection']+['quantity'=>1,'prompt'=>self::segmentPrompt($task,$segment),'reference_images'=>$uris,'reference_assets'=>$assets];
                 $attempt=Db::transaction(function()use($task,$segment,$request,$tenant,$user,$frozen,$mode){
                     $current=MicroVideoStore::table('segment')->where(['id'=>$segment['id'],'task_id'=>$task['id']])->lock(true)->find();if($current['status']!=='pending')return null;

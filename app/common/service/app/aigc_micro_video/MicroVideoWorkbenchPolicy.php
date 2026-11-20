@@ -36,7 +36,7 @@ final class MicroVideoWorkbenchPolicy
         foreach($booleanFields as $field)if(array_key_exists($field,$value))$value[$field]=self::booleanValue($value[$field]);
         if($context==='beat')foreach(['start','end'] as $field)if(array_key_exists($field,$value))$value[$field]=self::numberValue($value[$field]);
         if($context==='body'){
-            foreach(['roles'=>'role','scenes'=>'scene','beats'=>'beat','segments'=>'segment'] as $field=>$itemContext)if(isset($value[$field])&&is_array($value[$field]))foreach($value[$field] as $index=>$item)if(is_array($item))$value[$field][$index]=self::normalizeValues($item,$itemContext);
+            foreach(['roles'=>'role','scenes'=>'scene','beats'=>'beat','segments'=>'segment','reference_audios'=>'reference'] as $field=>$itemContext)if(isset($value[$field])&&is_array($value[$field]))foreach($value[$field] as $index=>$item)if(is_array($item))$value[$field][$index]=self::normalizeValues($item,$itemContext);
             foreach(['script'=>'script','brief'=>'brief','template'=>'reference','product'=>'reference','variant_source'=>'reference','duplicate_source'=>'reference','scene_reset'=>'scene_reset'] as $field=>$itemContext)if(isset($value[$field])&&is_array($value[$field]))$value[$field]=self::normalizeValues($value[$field],$itemContext);
             if(isset($value['durations'])&&is_array($value['durations']))$value['durations']=array_map([self::class,'integerValue'],$value['durations']);
             foreach(['template_snapshot','product_snapshot'] as $field)if(isset($value[$field])&&is_array($value[$field])){
@@ -45,6 +45,7 @@ final class MicroVideoWorkbenchPolicy
             }
         }
         if($context==='script'&&isset($value['segments'])&&is_array($value['segments']))foreach($value['segments'] as $index=>$segment)if(is_array($segment))$value['segments'][$index]=self::normalizeValues($segment,'segment');
+        if ($context === 'segment' && isset($value['audio_ids']) && is_array($value['audio_ids'])) $value['audio_ids'] = array_map([self::class, 'integerValue'], $value['audio_ids']);
         if($context==='segment'&&isset($value['image_indices'])&&is_array($value['image_indices']))$value['image_indices']=array_map([self::class,'integerValue'],$value['image_indices']);
         return $value;
     }

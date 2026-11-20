@@ -76,7 +76,16 @@ final class MicroVideoPolicy
                 throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型不支持所选分辨率、画幅或时长');
             }
             $frames = array_filter($model['start_end_specs'] ?? [], fn($s) => $s['quality'] === $quality && $s['ratio'] === $ratio && $s['duration'] === $duration);
-            $shots[] = ['model_id' => $id, 'quality' => $quality, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames];
+            $audioIds = $segment['audio_ids'] ?? [];
+            if (!is_array($audioIds) || !array_is_list($audioIds) || count($audioIds) > ($spec['max_reference_audios'] ?? 0)) {
+                throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型或规格不支持所选参考音频');
+            }
+            foreach ($audioIds as $audioId) {
+                if ((!is_int($audioId) && !is_string($audioId)) || !ctype_digit((string)$audioId) || (int)$audioId < 1) throw new InvalidArgumentException('分镜参考音频标识无效');
+            }
+            $audioIds = array_map('intval', $audioIds);
+            if (count($audioIds) !== count(array_unique($audioIds))) throw new InvalidArgumentException('分镜参考音频重复');
+            $shots[] = ['model_id' => $id, 'quality' => $quality, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames && !$audioIds] + ($audioIds ? ['audio_ids' => $audioIds] : []);
         }
         if (array_sum(array_column($shots, 'duration')) > 600) throw new InvalidArgumentException('分镜总时长不能超过600秒');
         return $shots;

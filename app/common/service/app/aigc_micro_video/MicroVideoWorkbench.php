@@ -21,9 +21,23 @@ final class MicroVideoWorkbench
     {MicroVideoWorkbenchTemplates::seed($tenant,MicroVideoSettings::directions($tenant,true));}
     public static function assets(int $tenant,int $user,array $p): array
     {
-        $q=Db::name('tenant_file')->where(['tenant_id'=>$tenant,'source'=>FileEnum::SOURCE_USER,'source_id'=>$user,'type'=>FileEnum::IMAGE_TYPE])->whereRaw('(delete_time IS NULL OR delete_time=0)');if(!empty($p['keyword']))$q->whereLike('name','%'.mb_substr((string)$p['keyword'],0,100).'%');$page=max(1,(int)($p['page_no']??1));$size=min(100,max(1,(int)($p['page_size']??20)));$count=(clone $q)->count();$rows=$q->order('id','desc')->page($page,$size)->select()->toArray();$images=[];
-        foreach($rows as $r){try{$images[]=MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$r['uri'],'name'=>$r['name']]],1)[0]+['id'=>(int)$r['id']];}catch(\Throwable){/* Historical files lacking valid storage cannot become execution references. */}}
-        return ['lists'=>array_map([MicroVideoWorkbenchRecords::class,'publicAsset'],$images),'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
+        $audio = ($p['kind'] ?? 'image') === 'audio';
+        $q = Db::name('tenant_file')->where(['tenant_id'=>$tenant, 'source'=>FileEnum::SOURCE_USER, 'source_id'=>$user,
+            'type'=>$audio ? FileEnum::AUDIO_TYPE : FileEnum::IMAGE_TYPE])->whereRaw('(delete_time IS NULL OR delete_time=0)');
+        if ($audio) $q->whereRaw("(LOWER(uri) LIKE '%.wav' OR LOWER(uri) LIKE '%.mp3')");
+        if (!empty($p['keyword'])) $q->whereLike('name','%'.mb_substr((string)$p['keyword'],0,100).'%');
+        $page = max(1, (int)($p['page_no'] ?? 1));
+        $size = min(100, max(1, (int)($p['page_size'] ?? 20)));
+        $count = (clone $q)->count();
+        $assets = [];
+        foreach ($q->order('id','desc')->page($page,$size)->select()->toArray() as $row) {
+            try {
+                $asset = $audio ? MicroVideoMedia::referenceAudioAsset($tenant, $row)
+                    : MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$row['uri'],'name'=>$row['name']]],1)[0];
+                $assets[] = MicroVideoWorkbenchRecords::publicAsset($asset + ['id'=>(int)$row['id']]);
+            } catch (\Throwable) { /* Skip unavailable historical files. */ }
+        }
+        return ['lists'=>$assets,'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
     }
     public static function execution(int $tenant,int $user,array $p): array
     {

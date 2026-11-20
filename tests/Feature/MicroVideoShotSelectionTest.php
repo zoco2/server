@@ -2,6 +2,8 @@
 namespace Tests\Feature;
 
 use app\common\service\app\aigc_micro_video\MicroVideoPolicy;
+use app\common\service\app\aigc_micro_video\MicroVideoFramePolicy;
+use app\common\service\power\MarketGenerationRequest;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
@@ -46,6 +48,40 @@ final class MicroVideoShotSelectionTest extends TestCase
         $segment['quality'] = '1080P';
         $this->expectExceptionMessage('分镜分辨率已变化');
         MicroVideoPolicy::authoredSegments([$segment], $shots, 1);
+    }
+
+    public function testAudioOrderAndFrameAvailabilityAreIndependentForEachShot(): void
+    {
+        $model = $this->model(8, 'image_reference');
+        $model['specs'][0]['max_reference_audios'] = 2;
+        $plain = $this->segment('wan', 8);
+        $withAudio = $plain + ['audio_ids'=>['42', 17]];
+        $shots = MicroVideoPolicy::workbenchShots([$withAudio, $plain], ['wan'=>$model], '9:16');
+        self::assertSame([42, 17], $shots[0]['audio_ids']);
+        self::assertFalse($shots[0]['supports_start_end']);
+        self::assertArrayNotHasKey('audio_ids', $shots[1]);
+        self::assertTrue($shots[1]['supports_start_end']);
+        $model['specs'][0]['max_reference_audios'] = 0;
+        $this->expectException(InvalidArgumentException::class);
+        MicroVideoPolicy::workbenchShots([$withAudio], ['wan'=>$model], '9:16');
+    }
+
+    public function testWanReferencePayloadIncludesOnlySelectedAudioInOrder(): void
+    {
+        $schema = ['type'=>'array', 'items'=>['type'=>'string']];
+        $snapshot = ['market_metadata'=>['params_schema'=>['reference_image_urls'=>$schema,'reference_audio_urls'=>$schema],
+            'material_capabilities'=>['modes'=>[['code'=>'', 'view_key'=>':reference', 'fields'=>[
+                ['field'=>'reference_image_urls','kind'=>'image','role'=>'reference','maximum'=>10],
+                ['field'=>'reference_audio_urls','kind'=>'audio','role'=>'reference','maximum'=>5],
+            ]]]]]];
+        $images = MicroVideoFramePolicy::assets('reference', ['https://media.example/car.png'], 'omni_reference');
+        $audio = static fn(string $name) => ['type'=>'audio','role'=>'reference_audio','url'=>'https://media.example/'.$name];
+        $request = ['generation_method'=>'omni_reference', 'reference_assets'=>[...$images,$audio('second.wav'),$audio('first.mp3')]];
+        $payload = MarketGenerationRequest::payload($snapshot, $request);
+        self::assertSame(['https://media.example/second.wav','https://media.example/first.mp3'], $payload['reference_audio_urls']);
+        self::assertSame(['https://media.example/car.png'], $payload['reference_image_urls']);
+        $request['reference_assets'] = $images;
+        self::assertArrayNotHasKey('reference_audio_urls', MarketGenerationRequest::payload($snapshot, $request));
     }
 
     public function testASupportedDurationOnAnotherModelDoesNotAuthorizeTheShot(): void
