@@ -6,6 +6,17 @@ use InvalidArgumentException;
 /** Pure plan, retry and public presentation rules; no model calls or writes. */
 final class MicroVideoPolicy
 {
+    /** Resolve editor mentions against the frozen per-shot attachment order. */
+    public static function audioMentionPrompt(string $prompt, array $audioIds): string
+    {
+        if (!$audioIds || !str_contains($prompt, '@音频「')) return $prompt;
+        $positions = array_flip(array_values($audioIds));
+        return preg_replace_callback('/@音频「([0-9]+)·[^」]*」/u', static function (array $match) use ($positions): string {
+            $id = (int)$match[1];
+            return isset($positions[$id]) ? '@音频' . ($positions[$id] + 1) : $match[0];
+        }, $prompt) ?? $prompt;
+    }
+
     public static function allowedModel(string $id,array $allowed): void
     {
         if($id===''||!in_array($id,$allowed,true))throw new InvalidArgumentException('请选择应用支持的视频模型');

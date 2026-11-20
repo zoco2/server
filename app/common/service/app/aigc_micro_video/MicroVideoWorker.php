@@ -103,7 +103,7 @@ final class MicroVideoWorker
                 $uris=MicroVideoMedia::visionInputs($selected);$assets=MicroVideoFramePolicy::assets($mode,$uris,$frozen['selection']['generation_method']);
                 $audioIds = $p['shots'][(int)$segment['sort'] - 1]['audio_ids'] ?? [];
                 $assets = array_merge($assets, MicroVideoMedia::referenceAudios($tenant, $user, $audioIds, true));
-                $request=$frozen['selection']+['quantity'=>1,'prompt'=>self::segmentPrompt($task,$segment),'reference_images'=>$uris,'reference_assets'=>$assets];
+                $request=$frozen['selection']+['quantity'=>1,'prompt'=>MicroVideoPolicy::audioMentionPrompt(self::segmentPrompt($task,$segment), $audioIds),'reference_images'=>$uris,'reference_assets'=>$assets];
                 $attempt=Db::transaction(function()use($task,$segment,$request,$tenant,$user,$frozen,$mode){
                     $current=MicroVideoStore::table('segment')->where(['id'=>$segment['id'],'task_id'=>$task['id']])->lock(true)->find();if($current['status']!=='pending')return null;
                     $no=(int)$current['attempt_no']+1;$id=MicroVideoStore::table('attempt')->insertGetId(['tenant_id'=>$tenant,'user_id'=>$user,'task_id'=>$task['id'],'segment_id'=>$segment['id'],'kind'=>'video','attempt_no'=>$no,'status'=>'prepared','request_json'=>MicroVideoStore::encode(['selection'=>$frozen['selection'],'request'=>$request,'generation_mode'=>$mode,'frame_ids'=>$mode==='start_end'?[(int)$segment['first_frame_id'],(int)$segment['last_frame_id']]:[]]),'result_json'=>'{}','user_charge_points'=>$frozen['user_charge_points'],'create_time'=>time(),'update_time'=>time()]);

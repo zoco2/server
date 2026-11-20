@@ -66,6 +66,13 @@ final class MicroVideoShotSelectionTest extends TestCase
         MicroVideoPolicy::workbenchShots([$withAudio], ['wan'=>$model], '9:16');
     }
 
+    public function testEditorMentionsUseTheSelectedAudioOrderEvenWithDuplicateNames(): void
+    {
+        $prompt = '先用@音频「17·旁白.wav」，再用@音频「42·旁白.wav」。';
+        self::assertSame('先用@音频2，再用@音频1。', MicroVideoPolicy::audioMentionPrompt($prompt, [42,17]));
+        self::assertSame($prompt, MicroVideoPolicy::audioMentionPrompt($prompt, []));
+    }
+
     public function testWanReferencePayloadIncludesOnlySelectedAudioInOrder(): void
     {
         $schema = ['type'=>'array', 'items'=>['type'=>'string']];
