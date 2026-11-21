@@ -6,6 +6,7 @@ use app\common\model\geo\GeoDiagBatch;
 use app\common\model\geo\GeoDiagRun;
 use app\common\model\geo\GeoDiagSample;
 use app\common\model\merchant\MerchantBrand;
+use app\common\service\point\PointService;
 use app\common\service\user_task\GeoRankingTaskJob;
 use Exception;
 use think\facade\Log;
@@ -29,7 +30,13 @@ class GeoDiagnosisService
     /** @return array<int, array<string, mixed>> */
     public static function platforms(int $tenantId): array
     {
-        return (new GeoDiagProvider($tenantId))->platforms();
+        $platforms = (new GeoDiagProvider($tenantId))->platforms();
+        $markup = GeoDiagnosisPricing::markupPercent();
+        foreach ($platforms as &$platform) {
+            $platform['markup_basis_points'] = (int)round($markup * 100);
+        }
+        unset($platform);
+        return $platforms;
     }
 
     /** @return array<string, mixed> */
@@ -47,7 +54,6 @@ class GeoDiagnosisService
     /**
      * @param int $userId
      * @param array<string, mixed> $params
-     * @param int|null $taskRunId 内部计划执行记录 ID，手动检测留空
      * @return array<string, mixed>
      */
     public static function create(int $userId, array $params, ?int $taskRunId = null): array
@@ -56,6 +62,15 @@ class GeoDiagnosisService
         $brand = MerchantBrand::where('id', $brandId)->findOrEmpty();
         if ($brand->isEmpty() || (int)$brand['user_id'] !== $userId) {
             throw new Exception('品牌不存在或无权限');
+        }
+        if ($taskRunId !== null) {
+            $existing = GeoDiagBatch::where(['tenant_id' => (int)$brand['tenant_id'], 'user_id' => $userId, 'task_run_id' => $taskRunId])->findOrEmpty();
+            if (!$existing->isEmpty()) {
+                if ($existing['status'] === GeoDiagBatch::STATUS_FAILED) {
+                    throw new GeoDiagnosisSubmissionException((int)$existing['id'], new Exception((string)$existing['error']));
+                }
+                return self::detail((int)$existing['id'], $userId);
+            }
         }
 
         $questions = self::questions($params['questions'] ?? []);
@@ -88,7 +103,18 @@ class GeoDiagnosisService
             }
         }
 
-        $result = Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $taskRunId) {
+        $tenantId = (int)$brand['tenant_id'];
+        $provider = new GeoDiagProvider($tenantId);
+        $billing = GeoDiagnosisPricing::quote(
+            $provider->platforms(), $platforms, count($questions) * $repeatCount, $screenshot, $conversationLink,
+            GeoDiagnosisPricing::markupPercent()
+        );
+        if (array_key_exists('expected_points', $params)
+            && filter_var($params['expected_points'], FILTER_VALIDATE_INT) !== $billing['reserved_points']) {
+            throw new Exception('诊断价格已变更，请刷新报价后重新确认');
+        }
+
+        $batchId = Db::transaction(function () use ($userId, $brand, $questions, $platforms, $repeatCount, $intervalSeconds, $screenshot, $conversationLink, $regionCode, $aliases, $title, $platformOptions, $billing, $taskRunId) {
             $now = time();
             $batch = GeoDiagBatch::create([
                 'tenant_id' => (int)$brand['tenant_id'],
@@ -105,6 +131,7 @@ class GeoDiagnosisService
                 'screenshot' => $screenshot ? 1 : 0,
                 'conversation_link' => $conversationLink ? 1 : 0,
                 'unit_count' => count($questions) * count($platforms) * $repeatCount,
+                'summary_json' => self::json(['billing' => $billing]),
                 'status' => GeoDiagBatch::STATUS_QUEUED,
                 'next_poll_time' => $now + self::DEFAULT_POLL_AFTER,
                 'create_time' => $now,
@@ -149,30 +176,68 @@ class GeoDiagnosisService
                 'idempotency_key' => $idempotencyKey,
                 'request_json' => self::json($request),
             ]);
+            PointService::reserveBusinessAmountsInCurrentTransaction(
+                (int)$batch['tenant_id'], $userId, 0, $billing['reserved_points'], $idempotencyKey,
+                'GEO 检测预占', ['app_code' => 'aigc_geo', 'batch_id' => (int)$batch['id']]
+            );
+            return (int)$batch['id'];
+        });
 
+        $rejection = self::submitReserved($batchId, false);
+        if ($rejection !== null) {
+            throw $rejection;
+        }
+        return self::detail($batchId, $userId);
+    }
+
+    /** 先保存预占和幂等键，超时后由轮询使用同一请求确认受理结果。 */
+    private static function submitReserved(int $batchId, bool $recovery): ?GeoDiagnosisSubmissionException
+    {
+        return Db::transaction(function () use ($batchId, $recovery) {
+            $batch = GeoDiagBatch::where('id', $batchId)->lock(true)->findOrFail();
+            $summary = self::decode($batch['summary_json'], []);
+            if (($summary['billing']['status'] ?? '') !== 'reserved' || $batch['upstream_batch_id']) {
+                return;
+            }
+            $now = time();
             try {
-                $accepted = (new GeoDiagProvider((int)$batch['tenant_id']))->createRun($request, $idempotencyKey);
-                $payload = is_array($accepted['data']) ? $accepted['data'] : [];
-                if ($taskRunId !== null && empty($payload['id'])) {
-                    throw new Exception('诊断服务未返回批次ID');
-                }
+                $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+                $accepted = $provider->createRun(self::decode($batch['request_json'], []), (string)$batch['idempotency_key']);
             } catch (GeoDiagProviderException $e) {
-                self::markCreateFailed($batch, $e->getMessage(), $e->providerCode(), $e->requestId(), $e->payload());
-                return new GeoDiagnosisSubmissionException((int)$batch['id'], $e);
+                if ($e->getCode() >= 400 && $e->getCode() < 500 && !in_array($e->getCode(), [408, 409, 429], true)) {
+                    self::settleBilling($batch, $summary, 0);
+                    self::markCreateFailed($batch, $e->getMessage(), $e->providerCode(), $e->requestId(), $e->payload());
+                    if ($recovery && $batch['task_run_id']) {
+                        $batch->save(['next_poll_time' => $now]);
+                    }
+                    return new GeoDiagnosisSubmissionException($batchId, $e);
+                } else {
+                    $batch->save(['next_poll_time' => $now + 60]);
+                }
+                return;
+            } catch (Exception $e) {
+                $batch->save(['next_poll_time' => $now + 60]);
+                return;
             }
 
+            $payload = is_array($accepted['data']) ? $accepted['data'] : [];
+            if (empty($payload['id'])) {
+                $batch->save(['next_poll_time' => $now + 60]);
+                return;
+            }
             $itemsResult = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+            // 幂等重放可能显示本次请求扣费为 0，首笔受理回执丢失时按终态成功样本报价结算。
+            $summary['billing']['accepted_cents'] = $recovery && $accepted['charged_cents'] === 0
+                ? null : $accepted['charged_cents'];
             $batch->save([
                 'upstream_batch_id' => (string)($payload['id'] ?? ''),
-                // 自动检测统一在轮询阶段拉取明细，再确认终态。
-                'status' => $taskRunId === null
-                    ? (string)($payload['status'] ?? GeoDiagBatch::STATUS_QUEUED)
-                    : GeoDiagBatch::STATUS_QUEUED,
+                'status' => GeoDiagBatch::STATUS_QUEUED,
+                'summary_json' => self::json($summary),
                 'provider_request_id' => (string)$accepted['request_id'],
                 'charged_cents' => (int)$accepted['charged_cents'],
                 'balance_cents' => (int)$accepted['balance_cents'],
                 'response_json' => self::json($payload),
-                'next_poll_time' => time() + self::DEFAULT_POLL_AFTER,
+                'next_poll_time' => $now + self::DEFAULT_POLL_AFTER,
                 'update_time' => $now,
             ]);
             foreach ($itemsResult as $row) {
@@ -191,14 +256,7 @@ class GeoDiagnosisService
                     'update_time' => $now,
                 ]);
             }
-
-            return self::detail((int)$batch['id'], $userId);
         });
-        // API 明确返回的失败是业务结果，先落库再报告；其他程序/数据库异常仍由事务回滚。
-        if ($result instanceof GeoDiagnosisSubmissionException) {
-            throw $result;
-        }
-        return $result;
     }
 
     /**
@@ -225,7 +283,7 @@ class GeoDiagnosisService
             });
         }
         $count = (clone $query)->count();
-        $lists = $query->field('id,merchant_brand_id,title,brand_name,question_count,platforms_json,region_code,repeat_count,screenshot,conversation_link,unit_count,status,mention_rate,coverage_rate,citation_rate,completed_count,failed_count,charged_cents,balance_cents,error,finish_time,create_time,update_time')
+        $lists = $query->field('id,merchant_brand_id,title,brand_name,question_count,platforms_json,region_code,repeat_count,screenshot,conversation_link,unit_count,status,mention_rate,coverage_rate,citation_rate,completed_count,failed_count,charged_cents,balance_cents,summary_json,error,finish_time,create_time,update_time')
             ->order('id', 'desc')
             ->limit(($pageNo - 1) * $pageSize, $pageSize)
             ->select()
@@ -292,6 +350,7 @@ class GeoDiagnosisService
                 $before = [$batch['status'], $batch['completed_count'], $batch['failed_count']];
                 if (empty($batch['terminal'])) {
                     self::syncBatch($batch);
+                    $batch = GeoDiagBatch::where('id', (int)$batch['id'])->findOrFail();
                 }
                 $terminal = !empty($batch['terminal']);
                 $changed = $before !== [$batch['status'], $batch['completed_count'], $batch['failed_count']];
@@ -336,7 +395,8 @@ class GeoDiagnosisService
     {
         $upstreamBatchId = trim((string)$batch['upstream_batch_id']);
         if ($upstreamBatchId === '') {
-            throw new \InvalidArgumentException('诊断记录缺少服务商批次ID');
+            self::submitReserved((int)$batch['id'], true);
+            return;
         }
         $provider = new GeoDiagProvider((int)$batch['tenant_id']);
         $statusResponse = $provider->batchStatus($upstreamBatchId);
@@ -350,21 +410,27 @@ class GeoDiagnosisService
             'failed_count' => (int)(($status['failedChecks'] ?? 0) + ($status['cancelledChecks'] ?? 0)),
             'status_json' => self::json($status),
             'provider_request_id' => (string)$statusResponse['request_id'],
-            'charged_cents' => (int)$statusResponse['charged_cents'],
             'balance_cents' => (int)$statusResponse['balance_cents'],
             'poll_count' => (int)$batch['poll_count'] + 1,
             'next_poll_time' => $now + max(5, $pollAfter ?: self::DEFAULT_POLL_AFTER),
             'update_time' => $now,
         ];
-        self::syncRunsFromStatus((int)$batch['id'], $status);
-        if ($data['terminal'] || in_array($data['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
-            // 先持久化样本与汇总，拉取失败时保留原状态供下一次轮询。
-            $data = array_replace($data, self::syncBatchResults($batch, $provider));
-            $data['terminal'] = 1;
+        $terminal = !empty($status['terminal']) || in_array((string)$data['status'], GeoDiagBatch::TERMINAL_STATUS, true);
+        if ($terminal) {
             $data['finish_time'] = $now;
             $data['next_poll_time'] = $batch['task_run_id'] ? $now : 0;
         }
-        $batch->save($data);
+        Db::transaction(function () use ($batch, $data, $status, $provider, $terminal) {
+            $current = GeoDiagBatch::where('id', (int)$batch['id'])->lock(true)->findOrFail();
+            if (in_array((string)$current['status'], GeoDiagBatch::TERMINAL_STATUS, true)) {
+                return;
+            }
+            $current->save($data);
+            self::syncRunsFromStatus((int)$current['id'], $status);
+            if ($terminal) {
+                self::syncBatchResults($current, $status, $provider);
+            }
+        });
     }
 
     /** @param array<string, mixed> $status */
@@ -386,7 +452,8 @@ class GeoDiagnosisService
         }
     }
 
-    private static function syncBatchResults(GeoDiagBatch $batch, GeoDiagProvider $provider): array
+    /** @param array<string, mixed> $status */
+    private static function syncBatchResults(GeoDiagBatch $batch, array $status, GeoDiagProvider $provider): void
     {
         $upstreamBatchId = (string)$batch['upstream_batch_id'];
         $page = 1;
@@ -403,7 +470,7 @@ class GeoDiagnosisService
             $page++;
         } while ($page <= $pages);
         self::syncReports((int)$batch['id'], $provider);
-        return self::summarizeBatch((int)$batch['id']);
+        self::recalculateBatch($batch);
     }
 
     /** @param array<string, mixed> $runData */
@@ -493,9 +560,13 @@ class GeoDiagnosisService
         }
     }
 
-    private static function summarizeBatch(int $batchId): array
+    private static function recalculateBatch(GeoDiagBatch $batch): void
     {
+        $batchId = (int)$batch['id'];
         $samples = GeoDiagSample::where('batch_id', $batchId)->select()->toArray();
+        $summary = self::decode($batch['summary_json'] ?? '', []);
+        $billing = $summary['billing'] ?? [];
+        $completedCents = 0;
         $total = count($samples);
         $completed = 0;
         $failed = 0;
@@ -505,6 +576,10 @@ class GeoDiagnosisService
             $status = (string)$sample['status'];
             if ($status === 'completed') {
                 $completed++;
+                if (($billing['status'] ?? '') === 'reserved') {
+                    $sampleData = self::decode($sample['raw_json'] ?? '', []);
+                    $completedCents += max(0, (int)($sampleData['quotedPriceCents'] ?? $billing['unit_cents'][$sample['platform_id']] ?? 0));
+                }
             } elseif (in_array($status, ['failed', 'cancelled'], true)) {
                 $failed++;
             }
@@ -518,14 +593,42 @@ class GeoDiagnosisService
             }
         }
         $valid = max(1, $completed);
-        return [
+        $summary = array_merge($summary, ['planned' => $total, 'completed' => $completed, 'failed' => $failed, 'mentioned' => $mentioned, 'cited' => $cited]);
+        if (($billing['status'] ?? '') === 'reserved') {
+            $allCompleted = $batch['status'] === GeoDiagBatch::STATUS_COMPLETED;
+            $expected = $allCompleted ? (int)$batch['unit_count'] : (int)$batch['completed_count'];
+            if ($completed < $expected) {
+                throw new Exception('服务商检测结果尚未齐全，请稍后同步');
+            }
+            $receipt = $billing['accepted_cents'] ?? $completedCents;
+            $cents = $allCompleted ? $receipt : min($completedCents, $receipt);
+            self::settleBilling($batch, $summary, $cents);
+        }
+        GeoDiagBatch::where('id', $batchId)->update([
             'completed_count' => $completed,
             'failed_count' => $failed,
             'mention_rate' => $completed > 0 ? round($mentioned / $valid, 4) : 0,
             'coverage_rate' => $total > 0 ? round($completed / $total, 4) : 0,
             'citation_rate' => $completed > 0 ? round($cited / $valid, 4) : 0,
-            'summary_json' => self::json(['planned' => $total, 'completed' => $completed, 'failed' => $failed, 'mentioned' => $mentioned, 'cited' => $cited]),
-        ];
+            'summary_json' => self::json($summary),
+            'update_time' => time(),
+        ]);
+    }
+
+    /** @param array<string, mixed> $summary */
+    private static function settleBilling(GeoDiagBatch $batch, array &$summary, int $cents): void
+    {
+        // 以提交时的快照结算，扣点不会超过用户确认的报价。
+        $billing = &$summary['billing'];
+        $cents = min($billing['quoted_cents'], $cents);
+        $points = GeoDiagnosisPricing::points($cents, $billing['markup_percent']);
+        PointService::settleReservedBusinessAmountsInCurrentTransaction(
+            (int)$batch['tenant_id'], (int)$batch['user_id'], 0, $billing['reserved_points'], 0, $points,
+            (string)$batch['idempotency_key'], 'GEO 检测', ['app_code' => 'aigc_geo', 'batch_id' => (int)$batch['id']]
+        );
+        $billing['status'] = 'settled';
+        $billing['charged_points'] = $points;
+        $batch->save(['summary_json' => self::json($summary)]);
     }
 
     /** @param mixed $value */
@@ -641,6 +744,10 @@ class GeoDiagnosisService
         $row['platforms'] = self::decode($row['platforms_json'] ?? '[]', []);
         $row['brand_aliases'] = self::decode($row['brand_aliases_json'] ?? '[]', []);
         $row['summary'] = self::decode($row['summary_json'] ?? '{}', []);
+        $billing = $row['summary']['billing'] ?? [];
+        $row['reserved_points'] = $billing['reserved_points'] ?? null;
+        $row['charged_points'] = $billing['charged_points'] ?? null;
+        unset($row['summary']['billing'], $row['summary_json']);
         $row['progress'] = (int)($row['unit_count'] ?? 0) > 0 ? round(((int)($row['completed_count'] ?? 0) + (int)($row['failed_count'] ?? 0)) / max(1, (int)$row['unit_count']), 4) : 0;
     }
 
