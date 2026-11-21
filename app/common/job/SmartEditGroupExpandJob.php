@@ -5,6 +5,9 @@ namespace app\common\job;
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\service\smart_edit\SmartEditGroupService;
 use app\common\service\smart_edit\SmartEditService;
+use app\common\model\smart_edit\SmartEditTask;
+use app\common\service\smart_edit\SmartEditBillingService;
+use think\facade\Db;
 use think\facade\Log;
 
 /**
@@ -60,7 +63,23 @@ class SmartEditGroupExpandJob extends Job
         ));
 
         try {
-            $taskIds = $this->expand($group, $tenantId);
+            // 锁组后再展开，确保一份预占只对应一组子任务。
+            $taskIds = Db::transaction(function () use ($tenantId, $batchNo) {
+                $locked = SmartEditGroup::where('tenant_id', $tenantId)->where('batch_no', $batchNo)
+                    ->lock(true)->findOrEmpty();
+                if ($locked->isEmpty() || (string)$locked['status'] !== SmartEditGroup::STATUS_EXPANDING) {
+                    return [];
+                }
+                $taskIds = $this->expand($locked, $tenantId);
+                $locked->save([
+                    'status' => SmartEditGroup::STATUS_SUBMITTED, 'error_code' => '',
+                    'error_message' => '', 'update_time' => time(),
+                ]);
+                return $taskIds;
+            });
+            if ($taskIds === []) {
+                return;
+            }
         } catch (\Throwable $e) {
             Log::channel('mns')->error(sprintf(
                 '[smart_edit] group expand failed batch=%s attempt=%d %s',
@@ -84,7 +103,10 @@ class SmartEditGroupExpandJob extends Job
                     implode(',', $chunk)
                 ));
             } catch (\Throwable $e) {
-                // 提交消息投递失败：任务停在 submitting，用户可在列表里看到并重试
+                SmartEditBillingService::failSubmission($tenantId, $chunk, 0, [
+                    'status' => SmartEditTask::STATUS_FAILED, 'error_code' => 'DISPATCH_FAILED',
+                    'error_message' => '剪辑任务投递失败，请重试', 'update_time' => time(), 'finish_time' => time(),
+                ]);
                 Log::channel('mns')->error(sprintf(
                     '[smart_edit] group submit dispatch failed batch=%s chunk=%d ids=%s %s',
                     $batchNo,
@@ -94,13 +116,6 @@ class SmartEditGroupExpandJob extends Job
                 ));
             }
         }
-
-        $group->save([
-            'status' => SmartEditGroup::STATUS_SUBMITTED,
-            'error_code' => '',
-            'error_message' => '',
-            'update_time' => time(),
-        ]);
 
         Log::channel('mns')->info(sprintf(
             '[smart_edit] group expanded batch=%s combos=%d tasks=%d',
@@ -191,11 +206,6 @@ class SmartEditGroupExpandJob extends Job
             }
         }
 
-        $group->save([
-            'status' => SmartEditGroup::STATUS_FAILED,
-            'error_code' => 'EXPAND_FAILED',
-            'error_message' => mb_substr('生成任务失败：' . $e->getMessage(), 0, 480),
-            'update_time' => time(),
-        ]);
+        SmartEditGroupService::failPending($group, 'EXPAND_FAILED', '生成任务失败：' . $e->getMessage());
     }
 }

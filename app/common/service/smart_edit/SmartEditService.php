@@ -5,10 +5,12 @@ namespace app\common\service\smart_edit;
 use app\common\enum\FileEnum;
 use app\common\job\SmartEditSubmitJob;
 use app\common\model\file\TenantFile;
+use app\common\model\smart_edit\SmartEditGroup;
 use app\common\model\smart_edit\SmartEditTask;
 use app\common\model\smart_edit\SmartEditTaskItem;
 use app\common\service\sticker\StickerService;
 use Exception;
+use think\facade\Db;
 use think\facade\Log;
 
 /**
@@ -16,9 +18,7 @@ use think\facade\Log;
  *
  * 提交走 MNS job，接口只做参数校验、落库和投递，不在请求里等供应商。
  * 轮询仍由 smart-edit:worker 与详情 / 列表读路径同步完成。
- *
- * 第一轮不收费：tenant_cost_points / user_charge_points 恒为 0，也不建 consumption 记录。
- * 表里的计费字段与 app_task_id / consumption_id 已预留，后续开收时只改本类内部。
+ * 提交时统一预占，整次任务结束后按成功成片数一次结算。
  */
 class SmartEditService
 {
@@ -117,17 +117,15 @@ class SmartEditService
             'stickers' => $validated[6],
             'audios' => $validated[7],
         ];
-        $task = self::createTask($tenantId, $userId, $shared, $clips);
+        // 单条任务只产出一条成片，素材数量不参与计费。
+        $shared['unit_points'] = SmartEditBillingService::quote($params);
+        $task = Db::transaction(static function () use ($tenantId, $userId, $shared, $clips) {
+            $task = self::createTask($tenantId, $userId, $shared, $clips);
+            SmartEditBillingService::reserve($tenantId, $userId, $shared['unit_points'], 1, (string)$task['task_no']);
+            return $task;
+        });
 
-        // 提交动作交给 MNS：接口不再等供应商返回。
-        // 投递失败时任务停在 submitting，用户可重试；不在这里判失败，避免消息已发出又被覆盖。
-        try {
-            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
-            Log::channel('mns')->info('[smart_edit] submit dispatched task=' . (string)$task['task_no'] . ' id=' . (int)$task['id']);
-        } catch (\Throwable $e) {
-            Log::channel('mns')->error('[smart_edit] 投递失败 task=' . (string)$task['task_no'] . ' ' . $e->getMessage());
-            $task->save(self::failPayload($e));
-        }
+        self::dispatch($task);
 
         return self::formatTask($task->refresh()->toArray());
     }
@@ -259,6 +257,8 @@ class SmartEditService
             'batch_no' => $batchNo,
             'combo_index' => $comboIndex,
             'params_json' => [
+                // 预占时固定单价，等整次提交结束再记录实扣。
+                'unit_points' => (int)($shared['unit_points'] ?? 0),
                 'edit_type' => $editType,
                 'title' => $title,
                 'clips' => $clips,
@@ -436,7 +436,7 @@ class SmartEditService
         }
         $attempts = (int)$task['poll_attempts'];
         if ($attempts >= self::MAX_POLL_ATTEMPTS) {
-            $task->save([
+            SmartEditBillingService::fail($task, [
                 'status' => SmartEditTask::STATUS_FAILED,
                 'error_code' => 'POLL_TIMEOUT',
                 'error_message' => '剪辑任务长时间未完成，请稍后在结果中确认或重新提交',
@@ -454,22 +454,17 @@ class SmartEditService
             $job = $client->getJob((string)$task['provider_job_id']);
         } catch (\Throwable $e) {
             // 查询失败只记录并延后重试，不直接判失败
-            $task->save([
-                'poll_attempts' => $attempts + 1,
-                'next_poll_time' => time() + self::backoff($attempts + 1),
-                'update_time' => time(),
-            ]);
             Log::write('[smart_edit] 查询失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
-            return null;
+            $job = [];
         }
 
-        $status = strtolower($job['status']);
+        $status = strtolower((string)($job['status'] ?? ''));
         if (in_array($status, ['success', 'produced', 'finished'], true)) {
-            self::markSuccess($task, $job);
+            SmartEditBillingService::finish($task, static fn($locked) => self::markSuccess($locked, $job));
             return null;
         }
         if (in_array($status, ['failed', 'producefailed', 'error'], true)) {
-            $task->save([
+            SmartEditBillingService::fail($task, [
                 'status' => SmartEditTask::STATUS_FAILED,
                 'error_code' => $job['code'] !== '' ? $job['code'] : 'PRODUCE_FAILED',
                 'error_message' => $job['message'] !== '' ? $job['message'] : '剪辑失败',
@@ -480,11 +475,15 @@ class SmartEditService
             return null;
         }
 
-        $task->save([
-            'poll_attempts' => $attempts + 1,
-            'next_poll_time' => time() + self::backoff($attempts + 1),
-            'update_time' => time(),
-        ]);
+        SmartEditBillingService::withCurrentTask($task, static function (SmartEditTask $locked) use ($attempts) {
+            if ((int)$locked['poll_attempts'] <= $attempts) {
+                $locked->save([
+                    'poll_attempts' => $attempts + 1,
+                    'next_poll_time' => time() + self::backoff($attempts + 1),
+                    'update_time' => time(),
+                ]);
+            }
+        });
         return null;
     }
 
@@ -498,25 +497,47 @@ class SmartEditService
         if ((array)$task['timeline_json'] === []) {
             throw new Exception('任务参数缺失，无法重试');
         }
-        $task->save([
-            'status' => SmartEditTask::STATUS_SUBMITTING,
-            'provider_job_id' => '',
-            'error_code' => '',
-            'error_message' => '',
-            'poll_attempts' => 0,
-            'next_poll_time' => 0,
-            'output_target' => $output['uri'],
-            'finish_time' => 0,
-            'update_time' => time(),
-        ]);
-        // 与首次提交同一条链路：投递给 MNS，不在请求里等 IMS。
+        if ((string)$task['status'] !== SmartEditTask::STATUS_FAILED) {
+            throw new Exception('只有失败的任务可以重试');
+        }
+        $changed = SmartEditBillingService::withCurrentTask($task, static function (SmartEditTask $task, ?SmartEditGroup $group) use ($output) {
+            $params = (array)$task['params_json'];
+            $params['billing_attempt'] = SmartEditBillingService::attempt($task) + 1;
+            // 整组尚未结算时沿用原预占，组结束后的重试才重新预占。
+            if (empty($group['config_json']['reserved_points'])) {
+                SmartEditBillingService::reserve((int)$task['tenant_id'], (int)$task['user_id'],
+                    (int)($params['unit_points'] ?? 0), 1, $task['task_no'] . '-' . $params['billing_attempt']);
+            }
+            $task->save([
+                'params_json' => $params,
+                'status' => SmartEditTask::STATUS_SUBMITTING,
+                'provider_job_id' => '',
+                'error_code' => '',
+                'error_message' => '',
+                'poll_attempts' => 0,
+                'next_poll_time' => 0,
+                'output_target' => $output['uri'],
+                'finish_time' => 0,
+                'update_time' => time(),
+            ]);
+        }, true);
+        if (!$changed) {
+            throw new Exception('任务状态已变更，请刷新');
+        }
+        self::dispatch($task->refresh());
+    }
+
+    private static function dispatch(SmartEditTask $task): void
+    {
         $tenantId = (int)$task['tenant_id'];
         try {
-            SmartEditSubmitJob::dispatch(['task_ids' => [(int)$task['id']]], 0, '', $tenantId);
-            Log::channel('mns')->info('[smart_edit] retry dispatched task=' . $task['task_no'] . ' id=' . (int)$task['id']);
+            SmartEditSubmitJob::dispatch([
+                'task_ids' => [(int)$task['id']], 'billing_attempt' => SmartEditBillingService::attempt($task),
+            ], 0, '', $tenantId);
+            Log::channel('mns')->info('[smart_edit] submit dispatched task=' . $task['task_no'] . ' id=' . (int)$task['id']);
         } catch (\Throwable $e) {
-            Log::channel('mns')->error('[smart_edit] 重试投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
-            $task->save(self::failPayload($e));
+            Log::channel('mns')->error('[smart_edit] 投递失败 task=' . $task['task_no'] . ' ' . $e->getMessage());
+            SmartEditBillingService::fail($task, self::failPayload($e));
         }
     }
 
@@ -526,18 +547,22 @@ class SmartEditService
         if (!in_array((string)$task['status'], SmartEditTask::RUNNING_STATUSES, true)) {
             throw new Exception('该任务已结束，无法取消');
         }
-        // IMS 没有公开的终止接口；这里只把本地状态置为取消，worker 会跳过后续轮询。
-        $task->save([
-            'status' => SmartEditTask::STATUS_CANCELED,
-            'finish_time' => time(),
-            'update_time' => time(),
-        ]);
+        self::cancelTask($task);
     }
 
     public static function delete(int $tenantId, int $userId, int $taskId): void
     {
-        $task = self::findOwned($tenantId, $userId, $taskId);
-        $task->delete();
+        self::cancelTask(self::findOwned($tenantId, $userId, $taskId), true);
+    }
+
+    private static function cancelTask(SmartEditTask $task, bool $delete = false): void
+    {
+        // 删除在途成片时先标记取消，已经结束的成片直接软删除。
+        if (!SmartEditBillingService::finish($task, static fn(SmartEditTask $locked) => $locked->save([
+            'status' => SmartEditTask::STATUS_CANCELED, 'finish_time' => time(), 'update_time' => time(),
+        ]), $delete)) {
+            throw new Exception('任务状态已变更，请刷新');
+        }
     }
 
     public static function findOwned(int $tenantId, int $userId, int $taskId): SmartEditTask
