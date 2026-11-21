@@ -2,7 +2,7 @@
 
 namespace app\common\model\smart_edit;
 
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 use think\model\concern\SoftDelete;
 
 /**
@@ -18,7 +18,7 @@ use think\model\concern\SoftDelete;
  * @property string $title
  * @property string $status
  */
-class SmartEditGroup extends BaseModel
+class SmartEditGroup extends TenantScopedWriteModel
 {
     use SoftDelete;
 

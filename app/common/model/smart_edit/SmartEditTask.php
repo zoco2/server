@@ -2,7 +2,7 @@
 
 namespace app\common\model\smart_edit;
 
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 use think\model\concern\SoftDelete;
 
 /**
@@ -17,7 +17,7 @@ use think\model\concern\SoftDelete;
  * @property string $provider_job_id
  * @property string $output_uri
  */
-class SmartEditTask extends BaseModel
+class SmartEditTask extends TenantScopedWriteModel
 {
     use SoftDelete;
 

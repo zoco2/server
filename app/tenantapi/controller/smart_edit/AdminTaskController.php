@@ -48,7 +48,8 @@ class AdminTaskController extends BaseAdminController
     public function delete()
     {
         try {
-            $this->findTask((int)$this->request->post('id', 0))->delete();
+            $task = $this->findTask((int)$this->request->post('id', 0));
+            SmartEditService::delete((int)$task['tenant_id'], (int)$task['user_id'], (int)$task['id']);
             return $this->success('删除成功', [], 1, 1);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());

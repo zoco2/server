@@ -7,6 +7,7 @@ use app\common\job\SmartEditGroupExpandJob;
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\model\smart_edit\SmartEditTask;
 use Exception;
+use think\facade\Db;
 use think\facade\Log;
 
 /**
@@ -75,6 +76,7 @@ class SmartEditGroupService
         // 不把问题留给后台展开任务。
         SmartEditService::assertSharedResolvable($tenantId, $shared);
 
+        $shared['unit_points'] = SmartEditBillingService::quote($tenantId, $userId, $comboCount, $params);
         $batchNo = self::newBatchNo();
         // 选了配音演员的组先进「配音中」：口播是整组共用的，必须展开成任务前生成完，
         // 否则每条成片都会各自合成一遍。没选演员的组沿用旧流程直接展开。
@@ -113,7 +115,7 @@ class SmartEditGroupService
                 $tenantId,
                 $e->getMessage()
             ));
-            $group->save([
+            SmartEditGroup::where('id', (int)$group['id'])->where('status', (string)$group['status'])->update([
                 'status' => SmartEditGroup::STATUS_FAILED,
                 'error_code' => 'DISPATCH_FAILED',
                 'error_message' => mb_substr('任务投递失败：' . $e->getMessage(), 0, 480),
@@ -212,17 +214,19 @@ class SmartEditGroupService
      */
     public static function delete(int $tenantId, int $userId, string $batchNo): void
     {
-        $group = self::findOwned($tenantId, $userId, $batchNo);
-        $group->delete();
-
-        // 子任务逐个走模型删除，保证 delete_time 与全局作用域行为一致
-        $tasks = SmartEditTask::where('tenant_id', $tenantId)
-            ->where('user_id', $userId)
-            ->where('batch_no', $batchNo)
-            ->select();
-        foreach ($tasks as $task) {
-            $task->delete();
-        }
+        Db::transaction(static function () use ($tenantId, $userId, $batchNo) {
+            $group = SmartEditGroup::where('tenant_id', $tenantId)->where('user_id', $userId)
+                ->where('batch_no', $batchNo)->lock(true)->findOrEmpty();
+            if ($group->isEmpty()) {
+                throw new Exception('组不存在');
+            }
+            $ids = SmartEditTask::where('tenant_id', $tenantId)->where('user_id', $userId)
+                ->where('batch_no', $batchNo)->order('id')->column('id');
+            foreach ($ids as $id) {
+                SmartEditService::delete($tenantId, $userId, (int)$id);
+            }
+            $group->delete();
+        });
     }
 
     /**

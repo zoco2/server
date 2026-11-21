@@ -4,6 +4,7 @@ namespace app\api\controller\smart_edit;
 
 use app\api\controller\BaseApiController;
 use app\api\lists\smart_edit\SmartEditTaskLists;
+use app\common\service\pricing\BusinessPriceService;
 use app\common\service\smart_edit\SmartEditDubbingService;
 use app\common\service\smart_edit\SmartEditFontService;
 use app\common\service\smart_edit\SmartEditService;
@@ -15,6 +16,13 @@ use Exception;
  */
 class TaskController extends BaseApiController
 {
+    public function price()
+    {
+        return $this->success('获取成功', [
+            'unit_points' => BusinessPriceService::smartEditPoints(),
+        ]);
+    }
+
     public function lists()
     {
         return $this->dataLists(new SmartEditTaskLists());

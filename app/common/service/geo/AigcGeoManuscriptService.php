@@ -295,7 +295,10 @@ class AigcGeoManuscriptService
         }
         $payload = self::request('POST', '/api/media/order/queryON', ['ordernum' => $orderNum], $openToken);
         $data = is_array($payload['data'] ?? null) ? $payload['data'] : [];
-        $flag = (int)($data['flag'] ?? 100);
+        $flag = filter_var($data['flag'] ?? null, FILTER_VALIDATE_INT);
+        if ($flag === false || !isset(self::ORDER_FLAGS[$flag])) {
+            throw new Exception('代发服务返回的订单状态无效，将在下次查询时重试');
+        }
         return [
             'flag' => $flag,
             'status' => self::ORDER_FLAGS[$flag] ?? '未知状态',
@@ -419,11 +422,16 @@ class AigcGeoManuscriptService
         curl_setopt_array($ch, $options);
         $raw = curl_exec($ch);
         $errno = curl_errno($ch);
+        $httpStatus = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        $payload = json_decode((string)$raw, true);
+        if ($path === '/api/media/order/createON'
+            && ($errno || $httpStatus >= 500 || !is_array($payload) || !isset($payload['code']))) {
+            throw new \UnexpectedValueException('代发服务尚未确认是否已受理该投稿');
+        }
         if ($errno) {
             throw new Exception('文稿代发请求失败，请稍后重试');
         }
-        $payload = json_decode((string)$raw, true);
         if (!is_array($payload)) {
             throw new Exception('文稿代发返回无法解析');
         }

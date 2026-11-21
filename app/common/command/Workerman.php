@@ -4,11 +4,10 @@ namespace app\common\command;
 
 use app\common\model\FailedJob;
 use app\common\job\Job;
-use app\common\model\smart_edit\SmartEditTask;
 use app\common\service\ai\WorkermanAiTaskGroup;
 use app\common\service\mq\LightMqService;
 use app\common\service\publish_task\PublishTaskDispatcher;
-use app\common\service\smart_edit\SmartEditService;
+use app\common\service\smart_edit\SmartEditPollService;
 use app\common\service\user_task\UserTaskPlanService;
 use app\common\service\user_task\UserTaskRunService;
 use think\console\Command;
@@ -207,26 +206,7 @@ class Workerman extends Command
             }
             try {
                 self::reconnectDatabase();
-                $tasks = SmartEditTask::whereIn('status', SmartEditTask::RUNNING_STATUSES)
-                    ->where('provider_job_id', '<>', '')
-                    ->where('next_poll_time', '<=', time())
-                    ->order('next_poll_time', 'asc')
-                    ->limit(self::SMART_EDIT_POLL_BATCH)
-                    ->column('id');
-                if ($tasks === []) {
-                    return;
-                }
-                foreach ($tasks as $taskId) {
-                    try {
-                        SmartEditService::refresh((int)$taskId);
-                    } catch (\Throwable $e) {
-                        Log::channel('mns')->error(sprintf(
-                            '[smart_edit] poll failed id=%d %s',
-                            (int)$taskId,
-                            $e->getMessage()
-                        ));
-                    }
-                }
+                SmartEditPollService::run(self::SMART_EDIT_POLL_BATCH);
             } catch (\Throwable $e) {
                 Log::channel('mns')->error(sprintf(
                     '[smart_edit] poll error: %s @ %s:%d',

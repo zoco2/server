@@ -2,7 +2,7 @@
 
 namespace app\common\model\geo;
 
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 
 /**
  * GEO 投稿单：我方 order_no 即海讯社 ordernum。
@@ -10,7 +10,7 @@ use app\common\model\BaseModel;
  * status 本地用 -1 表示还没推送到海讯，其余与海讯 flag 一致：
  * 0 待安排 / 1 已安排 / 2 拒稿 / 3 发布成功待确认 / 4 反馈处理中 / 5 已完成 / 100 订单不存在。
  */
-class GeoOrder extends BaseModel
+class GeoOrder extends TenantScopedWriteModel
 {
     protected $name = 'geo_order';
     protected $type = [
