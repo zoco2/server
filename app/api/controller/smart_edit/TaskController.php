@@ -16,6 +16,7 @@ use Exception;
  */
 class TaskController extends BaseApiController
 {
+    /** 返回当前租户每条成片的点数，提交时按同一配置复核。 */
     public function price()
     {
         return $this->success('获取成功', [

@@ -116,6 +116,7 @@ class SmartEditService
             'stickers' => $validated[6],
             'audios' => $validated[7],
         ];
+        // 单条任务只产出一条成片，素材数量不参与计费。
         $shared['unit_points'] = SmartEditBillingService::quote($tenantId, $userId, 1, $params);
         $task = Db::transaction(static function () use ($tenantId, $userId, $shared, $clips) {
             $task = self::createTask($tenantId, $userId, $shared, $clips);
@@ -261,6 +262,7 @@ class SmartEditService
             'title' => $title,
             'batch_no' => $batchNo,
             'combo_index' => $comboIndex,
+            // 实扣用于退款。params_json 中保留提交时单价，供下一轮重试读取。
             'user_charge_points' => (int)($shared['unit_points'] ?? 0),
             'params_json' => [
                 'unit_points' => (int)($shared['unit_points'] ?? 0),
@@ -514,6 +516,7 @@ class SmartEditService
         $changed = SmartEditBillingService::withCurrentTask($task, static function (SmartEditTask $task) use ($output) {
             $params = (array)$task['params_json'];
             $points = (int)($params['unit_points'] ?? 0);
+            // 重试沿用原单价，并用新轮次区分本次扣退流水和旧提交消息。
             $params['billing_attempt'] = SmartEditBillingService::attempt($task) + 1;
             SmartEditBillingService::charge((int)$task['tenant_id'], (int)$task['user_id'], $points, 1,
                 $task['task_no'] . '-' . $params['billing_attempt']);

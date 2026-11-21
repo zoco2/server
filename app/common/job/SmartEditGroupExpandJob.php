@@ -63,6 +63,7 @@ class SmartEditGroupExpandJob extends Job
         ));
 
         try {
+            // 锁组后再展开。重复投递只处理一次，余额不足时整批新任务一起回滚。
             $taskIds = Db::transaction(function () use ($tenantId, $batchNo) {
                 $locked = SmartEditGroup::where('tenant_id', $tenantId)->where('batch_no', $batchNo)
                     ->lock(true)->findOrEmpty();
@@ -149,6 +150,7 @@ class SmartEditGroupExpandJob extends Job
         $userId = (int)$group['user_id'];
 
         $combos = SmartEditGroupService::expandShots($shots);
+        // 已展开的组合包含软删除记录，重投时跳过建单和扣点。
         $existing = SmartEditTask::withTrashed()->where('tenant_id', $tenantId)->where('batch_no', $batchNo)
             ->column('id', 'combo_index');
         $taskIds = [];

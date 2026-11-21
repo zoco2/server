@@ -56,7 +56,7 @@ class SmartEditSubmitJob extends Job
                 Log::channel('mns')->warning('[smart_edit] submit job skipped, task not found id=' . $taskId);
                 continue;
             }
-            // 用户可能在排队期间取消或删除任务，这里直接跳过，不再提交
+            // 手动重试会增加扣点轮次。即使状态再次变为提交中，旧消息也要跳过。
             if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
                 || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 Log::channel('mns')->info(sprintf(
@@ -165,6 +165,7 @@ class SmartEditSubmitJob extends Job
             self::MAX_ATTEMPTS
         ));
 
+        // 队列重投仍属同一次扣点，保留原轮次。耗尽重投机会才走失败退款。
         if ($nextAttempt < self::MAX_ATTEMPTS && $tenantId > 0) {
             try {
                 self::dispatch(
@@ -188,7 +189,7 @@ class SmartEditSubmitJob extends Job
             if ($task->isEmpty()) {
                 continue;
             }
-            // 已进入终态的任务不要被提交失败覆盖（例如用户已取消）
+            // 只处理当前轮次仍在提交的任务，避免迟到的失败消息触发退款。
             if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
                 || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 continue;

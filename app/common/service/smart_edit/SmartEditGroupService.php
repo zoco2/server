@@ -76,6 +76,7 @@ class SmartEditGroupService
         // 不把问题留给后台展开任务。
         SmartEditService::assertSharedResolvable($tenantId, $shared);
 
+        // 组任务异步展开，先把确认的单价存入组配置，途中改价也按原单价计。
         $shared['unit_points'] = SmartEditBillingService::quote($tenantId, $userId, $comboCount, $params);
         $batchNo = self::newBatchNo();
         // 选了配音演员的组先进「配音中」：口播是整组共用的，必须展开成任务前生成完，
