@@ -56,9 +56,6 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
-        // 旧媒体接口也可修改同一倍率，保留原授权并覆盖尚未登记旧菜单的租户。
-        $mediaPriceWrite = $accessUri === 'geo.media/savemarkup'
-            || ($accessUri === 'geo.media/update' && array_key_exists('price_ratio', $request->post()));
         // 配置接口按区块授权，即使菜单升级尚未执行，也须先取得权限才能访问凭据。
         $configPermissions = [
             'setting.businessprice/detail' => 'setting.businessprice/detail',
@@ -86,7 +83,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$mediaPriceWrite && $configPermission === null && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if ($configPermission === null && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
