@@ -58,6 +58,8 @@ class AuthMiddleware
         $accessUri = strtolower($request->controller() . '/' . $request->action());
         // 配置接口按区块授权，即使菜单升级尚未执行，也须先取得权限才能访问凭据。
         $configPermissions = [
+            'setting.businessprice/detail' => 'setting.businessprice/detail',
+            'setting.businessprice/save' => 'setting.businessprice/save',
             'smartedit.config/detail' => 'smartedit.config/detail',
             'smartedit.config/voicedetail' => 'smartedit.config/detail',
             'geo.diagnosisconfig/detail' => 'geo.manuscript/detail',
