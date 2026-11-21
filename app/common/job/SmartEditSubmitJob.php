@@ -3,6 +3,7 @@
 namespace app\common\job;
 
 use app\common\model\smart_edit\SmartEditTask;
+use app\common\service\smart_edit\SmartEditBillingService;
 use app\common\service\smart_edit\SmartEditImsConfigService;
 use app\common\service\smart_edit\SmartEditMaterialService;
 use app\common\service\smart_edit\SmartEditService;
@@ -56,7 +57,8 @@ class SmartEditSubmitJob extends Job
                 continue;
             }
             // 用户可能在排队期间取消或删除任务，这里直接跳过，不再提交
-            if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING) {
+            if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
+                || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 Log::channel('mns')->info(sprintf(
                     '[smart_edit] submit job skipped id=%d status=%s',
                     $taskId,
@@ -75,9 +77,11 @@ class SmartEditSubmitJob extends Job
                 continue;
             }
 
-            if (!$this->submitOne($task)) {
-                $failedTaskIds[] = $taskId;
-            }
+            SmartEditBillingService::withCurrentTask($task, function ($locked) use (&$failedTaskIds, $taskId) {
+                if (!$this->submitOne($locked)) {
+                    $failedTaskIds[] = $taskId;
+                }
+            });
         }
 
         if ($failedTaskIds !== []) {
@@ -95,7 +99,7 @@ class SmartEditSubmitJob extends Job
     {
         $timeline = (array)$task['timeline_json'];
         if ($timeline === []) {
-            $task->save([
+            SmartEditBillingService::fail($task, [
                 'status' => SmartEditTask::STATUS_FAILED,
                 'error_code' => 'TIMELINE_MISSING',
                 'error_message' => '任务参数缺失，无法提交',
@@ -164,7 +168,8 @@ class SmartEditSubmitJob extends Job
         if ($nextAttempt < self::MAX_ATTEMPTS && $tenantId > 0) {
             try {
                 self::dispatch(
-                    ['task_ids' => array_values($taskIds), 'attempt' => $nextAttempt],
+                    ['task_ids' => array_values($taskIds), 'attempt' => $nextAttempt,
+                        'billing_attempt' => (int)($this->data['billing_attempt'] ?? 0)],
                     self::RETRY_DELAY,
                     '',
                     $tenantId
@@ -184,10 +189,11 @@ class SmartEditSubmitJob extends Job
                 continue;
             }
             // 已进入终态的任务不要被提交失败覆盖（例如用户已取消）
-            if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING) {
+            if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
+                || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 continue;
             }
-            $task->save([
+            SmartEditBillingService::fail($task, [
                 'status' => SmartEditTask::STATUS_FAILED,
                 'error_code' => 'SUBMIT_FAILED',
                 'error_message' => '剪辑任务提交失败，请稍后重试',
