@@ -3,6 +3,7 @@ namespace app\api\controller;
 
 use app\api\logic\file\FileLogic;
 use app\common\service\WorkspaceAssetService;
+use app\common\service\WorkspaceSmartEditAssetService;
 use app\common\service\UploadService;
 use app\common\enum\FileEnum;
 use InvalidArgumentException;
@@ -11,6 +12,23 @@ use InvalidArgumentException;
 class WorkspaceAssetController extends BaseApiController
 {
     public function canvas() { return $this->respond(fn($t, $u) => \app\common\service\WorkspaceCanvasAssetService::lists($t, $u, (int)$this->request->get('page_no', 1), (string)$this->request->get('kind', 'task'))); }
+    public function smartEdit()
+    {
+        if (!$this->request->isGet()) {
+            return $this->fail('请使用 GET 请求');
+        }
+        return $this->respond(function ($tenant, $user) {
+            $keyword = $this->request->get('keyword', '', null);
+            if (!is_string($keyword)) {
+                throw new InvalidArgumentException('作品关键词格式无效');
+            }
+            return WorkspaceSmartEditAssetService::lists(
+                $tenant, $user, (int)$this->request->get('page_no', 1),
+                (int)$this->request->get('page_size', 100), trim($keyword)
+            );
+        });
+    }
+
     public function state() { return $this->respond(fn($t, $u) => WorkspaceAssetService::read($t, $u)); }
     public function uploads() { return $this->respond(fn($t, $u) => WorkspaceAssetService::uploads($t, $u, min(10000, max(1, (int)$this->request->get('page_no', 1))), $this->request->get('cid'))); }
     public function update() { return $this->respond(fn($t, $u) => WorkspaceAssetService::update($t, $u, $this->request->post()), true); }

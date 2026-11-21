@@ -3,6 +3,7 @@
 namespace app\api\lists\merchant;
 
 use app\api\lists\BaseApiDataLists;
+use app\common\service\DefaultWorkGroup;
 use app\common\model\merchant\MerchantTopic;
 
 /** 当前商家的话题列表。 */
@@ -26,6 +27,9 @@ class TopicLists extends BaseApiDataLists
     private function query()
     {
         $query = MerchantTopic::where('user_id', $this->userId);
+        if (in_array($this->params['work_group_id'] ?? null, [0, '0'], true)) {
+            DefaultWorkGroup::filterTextList($query, (int)$this->request->tenantId, $this->userId, 'topic');
+        }
         $keyword = $this->params['keyword'] ?? '';
         $keyword = is_string($keyword) ? trim(preg_replace('/^[#＃\s]+/u', '', $keyword) ?? '') : '';
         if ($keyword !== '') {
