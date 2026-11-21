@@ -65,12 +65,6 @@ class ConfigService
         if ($data->isEmpty()) {
 
             (!AdminTerminalEnum::isPlatform() ? new TenantConfig() : new Config())->create($options);
-        } elseif ($data instanceof TenantConfig && $data->value !== $value) {
-            // 模型实例 save() 按主键回写时会跳过租户分表作用域。
-            TenantConfig::where($query)->where('id', $data->id)->update([
-                'value' => $value,
-                'update_time' => time(),
-            ]);
         } else {
             $data->value = $value;
             $data->save();
