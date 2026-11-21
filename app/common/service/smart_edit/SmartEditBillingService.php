@@ -38,10 +38,15 @@ class SmartEditBillingService
         }
     }
 
-    /** 锁定后复核状态、上游任务号和提交轮次，只处理当前提交。 */
-    public static function withCurrentTask(SmartEditTask $expected, callable $action): bool
+    /** 终态或重试先锁整组，再锁子任务。普通状态更新只锁子任务。 */
+    public static function withCurrentTask(SmartEditTask $expected, callable $action, bool $lockGroup = false): bool
     {
-        return Db::transaction(static function () use ($expected, $action) {
+        return Db::transaction(static function () use ($expected, $action, $lockGroup) {
+            $group = $lockGroup && (string)$expected['batch_no'] !== '' ? SmartEditGroup::where([
+                'tenant_id' => (int)$expected['tenant_id'],
+                'user_id' => (int)$expected['user_id'],
+                'batch_no' => (string)$expected['batch_no'],
+            ])->lock(true)->find() : null;
             $task = SmartEditTask::where('id', (int)$expected['id'])->where('tenant_id', (int)$expected['tenant_id'])
                 ->where('user_id', (int)$expected['user_id'])->lock(true)->findOrEmpty();
             if ($task->isEmpty() || (string)$task['status'] !== (string)$expected['status']
@@ -49,21 +54,8 @@ class SmartEditBillingService
                 || self::attempt($task) !== self::attempt($expected)) {
                 return false;
             }
-            $action($task);
+            $action($task, $group);
             return true;
-        });
-    }
-
-    /** 先锁组、再锁成片。终态、取消和重试使用同一顺序，最后一个终态才结算整组。 */
-    public static function withTaskGroup(SmartEditTask $expected, callable $action): bool
-    {
-        return Db::transaction(static function () use ($expected, $action) {
-            $group = (string)$expected['batch_no'] === '' ? null : SmartEditGroup::where([
-                'tenant_id' => (int)$expected['tenant_id'],
-                'user_id' => (int)$expected['user_id'],
-                'batch_no' => (string)$expected['batch_no'],
-            ])->lock(true)->find();
-            return self::withCurrentTask($expected, static fn(SmartEditTask $task) => $action($task, $group));
         });
     }
 
@@ -75,22 +67,39 @@ class SmartEditBillingService
 
     public static function fail(SmartEditTask $task, array $failure): void
     {
-        if (!in_array((string)$task['status'], SmartEditTask::RUNNING_STATUSES, true)) {
-            return;
-        }
-        self::withTaskGroup($task, static function (SmartEditTask $locked, ?SmartEditGroup $group) use ($failure) {
-            $locked->save($failure);
-            self::settleFinishedTask($locked, $group);
-        });
+        self::finish($task, static fn(SmartEditTask $locked) => $locked->save($failure));
     }
 
-    /** 调用方先写入成片终态。删除的成片也计入原提交，避免少结算已交付视频。 */
-    public static function settleFinishedTask(SmartEditTask $task, ?SmartEditGroup $group): void
+    /** 投递失败和重投耗尽共用同一终态处理，旧消息不能结束新提交。 */
+    public static function failSubmission(int $tenantId, array $ids, int $attempt, array $failure): void
     {
-        if ((string)$task['batch_no'] !== '' && self::attempt($task) === 0) {
-            if ($group === null || (int)($group['config_json']['reserved_points'] ?? 0) <= 0) {
-                return;
+        $tasks = SmartEditTask::where('tenant_id', $tenantId)->whereIn('id', $ids)
+            ->where('status', SmartEditTask::STATUS_SUBMITTING)->select();
+        foreach ($tasks as $task) {
+            if (self::attempt($task) === $attempt) {
+                self::fail($task, $failure);
             }
+        }
+    }
+
+    /** 成片终态和整次结算放在同一个事务内。 */
+    public static function finish(SmartEditTask $task, callable $transition, bool $delete = false): bool
+    {
+        return self::withCurrentTask($task, static function (SmartEditTask $locked, ?SmartEditGroup $group) use ($transition, $delete) {
+            if (in_array((string)$locked['status'], SmartEditTask::RUNNING_STATUSES, true)) {
+                $transition($locked);
+                self::settleFinishedTask($locked, $group);
+            }
+            if ($delete) {
+                $locked->delete();
+            }
+        }, true);
+    }
+
+    /** 删除的成片也计入原提交，避免少结算已交付视频。 */
+    private static function settleFinishedTask(SmartEditTask $task, ?SmartEditGroup $group): void
+    {
+        if ((int)($group['config_json']['reserved_points'] ?? 0) > 0) {
             $tasks = SmartEditTask::withTrashed()->where([
                 'tenant_id' => (int)$task['tenant_id'],
                 'user_id' => (int)$task['user_id'],
@@ -109,7 +118,10 @@ class SmartEditBillingService
             return;
         }
 
-        // 单条提交和整组结束后的单条重试都是数量为 1 的预占。
+        // 组已结束时只有新预占的重试需要结算，旧成片由整组负责。
+        if ((string)$task['batch_no'] !== '' && self::attempt($task) === 0) {
+            return;
+        }
         $unit = (int)($task['params_json']['unit_points'] ?? 0);
         $actual = $task['status'] === SmartEditTask::STATUS_SUCCESS ? $unit : 0;
         self::settle(

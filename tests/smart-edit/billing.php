@@ -152,6 +152,12 @@ namespace {
     Tasks::refresh((int)$ids[0]);
     Tasks::refresh((int)$ids[0]);
     balance(70);
+    request()->tenantId = 3;
+    request()->source = AdminTerminalEnum::USER;
+    Tasks::retry(Task::findOrFail($ids[0]));
+    balance(70);
+    Tasks::cancel(3, 8, (int)$ids[0]);
+    balance(70);
     Task::where('id', $ids[1])->update(['status' => Task::STATUS_PROCESSING, 'provider_job_id' => 'success-job']);
     Tasks::refresh((int)$ids[1]);
     check((int)Task::find($ids[1])['user_charge_points'] === 0, 'Settled before the group completed');

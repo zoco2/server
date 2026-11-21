@@ -83,20 +83,21 @@ class SmartEditGroupService
         // 选了配音演员的组先进「配音中」：口播是整组共用的，必须展开成任务前生成完，
         // 否则每条成片都会各自合成一遍。没选演员的组沿用旧流程直接展开。
         $hasDubbing = !empty($shared['voices']);
-        $group = Db::transaction(static function () use ($tenantId, $userId, $batchNo, $title, $shots, $shared, $comboCount, $hasDubbing) {
+        $data = [
+            'tenant_id' => $tenantId,
+            'user_id' => $userId,
+            'batch_no' => $batchNo,
+            'title' => $title,
+            'shots_json' => $shots,
+            'config_json' => $shared,
+            'combo_count' => $comboCount,
+            'status' => $hasDubbing ? SmartEditGroup::STATUS_DUBBING : SmartEditGroup::STATUS_EXPANDING,
+            'create_time' => time(),
+            'update_time' => time(),
+        ];
+        $group = Db::transaction(static function () use ($data, $tenantId, $userId, $shared, $comboCount, $batchNo) {
             SmartEditBillingService::reserve($tenantId, $userId, $shared['unit_points'], $comboCount, $batchNo);
-            return SmartEditGroup::create([
-                'tenant_id' => $tenantId,
-                'user_id' => $userId,
-                'batch_no' => $batchNo,
-                'title' => $title,
-                'shots_json' => $shots,
-                'config_json' => $shared,
-                'combo_count' => $comboCount,
-                'status' => $hasDubbing ? SmartEditGroup::STATUS_DUBBING : SmartEditGroup::STATUS_EXPANDING,
-                'create_time' => time(),
-                'update_time' => time(),
-            ]);
+            return SmartEditGroup::create($data);
         });
 
         try {

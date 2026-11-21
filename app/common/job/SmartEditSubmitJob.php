@@ -183,24 +183,10 @@ class SmartEditSubmitJob extends Job
             }
         }
 
-        foreach ($taskIds as $taskId) {
-            $task = SmartEditTask::findOrEmpty($taskId);
-            if ($task->isEmpty()) {
-                continue;
-            }
-            // 只处理当前轮次仍在提交的任务，避免旧消息结算下一轮。
-            if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
-                || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
-                continue;
-            }
-            SmartEditBillingService::fail($task, [
-                'status' => SmartEditTask::STATUS_FAILED,
-                'error_code' => 'SUBMIT_FAILED',
-                'error_message' => '剪辑任务提交失败，请稍后重试',
-                'finish_time' => time(),
-                'update_time' => time(),
-            ]);
-        }
+        SmartEditBillingService::failSubmission($tenantId, $taskIds, (int)($this->data['billing_attempt'] ?? 0), [
+            'status' => SmartEditTask::STATUS_FAILED, 'error_code' => 'SUBMIT_FAILED',
+            'error_message' => '剪辑任务提交失败，请稍后重试', 'finish_time' => time(), 'update_time' => time(),
+        ]);
     }
 
     /**

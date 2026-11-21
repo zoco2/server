@@ -103,19 +103,10 @@ class SmartEditGroupExpandJob extends Job
                     implode(',', $chunk)
                 ));
             } catch (\Throwable $e) {
-                foreach ($chunk as $id) {
-                    $task = SmartEditTask::findOrEmpty((int)$id);
-                    if (!$task->isEmpty() && (string)$task['status'] === SmartEditTask::STATUS_SUBMITTING
-                        && SmartEditBillingService::attempt($task) === 0) {
-                        SmartEditBillingService::fail($task, [
-                            'status' => SmartEditTask::STATUS_FAILED,
-                            'error_code' => 'DISPATCH_FAILED',
-                            'error_message' => '剪辑任务投递失败，请重试',
-                            'update_time' => time(),
-                            'finish_time' => time(),
-                        ]);
-                    }
-                }
+                SmartEditBillingService::failSubmission($tenantId, $chunk, 0, [
+                    'status' => SmartEditTask::STATUS_FAILED, 'error_code' => 'DISPATCH_FAILED',
+                    'error_message' => '剪辑任务投递失败，请重试', 'update_time' => time(), 'finish_time' => time(),
+                ]);
                 Log::channel('mns')->error(sprintf(
                     '[smart_edit] group submit dispatch failed batch=%s chunk=%d ids=%s %s',
                     $batchNo,
@@ -150,16 +141,9 @@ class SmartEditGroupExpandJob extends Job
         $userId = (int)$group['user_id'];
 
         $combos = SmartEditGroupService::expandShots($shots);
-        // 已展开的组合包含软删除记录，重投时跳过建单。
-        $existing = SmartEditTask::withTrashed()->where('tenant_id', $tenantId)->where('batch_no', $batchNo)
-            ->column('id', 'combo_index');
         $taskIds = [];
         foreach ($combos as $index => $clips) {
             $comboIndex = $index + 1;
-            if (isset($existing[$comboIndex])) {
-                $taskIds[] = (int)$existing[$comboIndex];
-                continue;
-            }
             // 多组标题按 combo 序号循环对应：C1→G0，C2→G1，…，用完从头再来
             $taskShared = SmartEditService::sharedForCombo($shared, $comboIndex);
             try {
