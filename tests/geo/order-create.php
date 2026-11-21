@@ -2,6 +2,9 @@
 
 namespace {
     require dirname(__DIR__, 2) . '/vendor/autoload.php';
+    function request(): object {
+        return (object)['source' => \app\common\enum\AdminTerminalEnum::USER, 'tenantId' => 7];
+    }
     function generate_sn(...$unused): string { return bin2hex(random_bytes(12)); }
 }
 
@@ -80,8 +83,10 @@ namespace {
             'fields_strict' => true, 'break_reconnect' => false,
         ]],
     ]);
+    \think\Model::setDb($db);
     $connection = $db->connect();
     foreach ([
+        'CREATE TABLE tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)',
         'CREATE TABLE geo_article (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER,
             title TEXT, content TEXT, preview_url TEXT, delete_time INTEGER NULL, create_time INTEGER, update_time INTEGER)',
         'CREATE TABLE geo_media (id INTEGER PRIMARY KEY, tenant_id INTEGER, sourceid TEXT, resource_type INTEGER,
@@ -110,12 +115,15 @@ namespace {
         'title' => '测试稿件', 'content' => '<p>正文</p>',
         'preview_url' => 'https://tenant.example/api/geo.article/preview?token=test',
     ]);
+    $db->name('tenant_config')->insert([
+        'tenant_id' => 7, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"media_markup_percent":25}',
+    ]);
     $db->name('geo_media')->insertAll([
         ['id' => 59479, 'tenant_id' => 7, 'sourceid' => 'single-media', 'resource_type' => 1,
-            'name' => '单价媒体', 'costprice' => 322, 'price_ratio' => 1.25,
+            'name' => '单价媒体', 'costprice' => 322, 'price_ratio' => 1.1,
             'price_type_json' => '[]', 'flag' => 1, 'deleted' => 1],
         ['id' => 59480, 'tenant_id' => 7, 'sourceid' => 'multi-media', 'resource_type' => 12,
-            'name' => '多价媒体', 'costprice' => 80, 'price_ratio' => 1.25,
+            'name' => '多价媒体', 'costprice' => 80, 'price_ratio' => 1.1,
             'price_type_json' => '[{"type":2,"price":80},{"type":3,"price":120}]', 'flag' => 1, 'deleted' => 1],
     ]);
 

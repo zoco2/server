@@ -88,7 +88,7 @@ namespace {
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
     Db::name('tenant')->insert(['id' => 3, 'tactics' => 0, 'sn' => 'test']);
     Db::name('user')->insert(['id' => 8, 'tenant_id' => 3, 'user_money' => 100]);
-    Db::name('tenant_config')->insert(['tenant_id' => 3, 'type' => 'business_price', 'name' => 'smart_edit_points', 'value' => 7]);
+    Db::name('tenant_config')->insert(['tenant_id' => 3, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"smart_edit_points":7}']);
     request()->tenantId = 3;
     request()->source = AdminTerminalEnum::USER;
 
@@ -101,7 +101,7 @@ namespace {
     Billing::fail($old, ['status' => Task::STATUS_FAILED]);
     Billing::fail($old, ['status' => Task::STATUS_FAILED]);
     balance(100);
-    Db::name('tenant_config')->where('name', 'smart_edit_points')->update(['value' => 5]);
+    Db::name('tenant_config')->where('name', 'settings')->update(['value' => '{"smart_edit_points":5}']);
     try {
         Tasks::generate(3, 8, $input);
         throw new LogicException('Accepted a stale unit price');
@@ -120,7 +120,7 @@ namespace {
         ['videos' => $clips], ['videos' => [...$clips, ['uri' => 'c.mp4', 'out' => 4]]],
     ]]);
     $job = new SmartEditGroupExpandJob(['batch_no' => $group['batch_no']]);
-    Db::name('tenant_config')->where('name', 'smart_edit_points')->update(['value' => 9]);
+    Db::name('tenant_config')->where('name', 'settings')->update(['value' => '{"smart_edit_points":9}']);
     Db::name('user')->where('id', 8)->update(['user_money' => 29]);
     $job->handle();
     balance(29);

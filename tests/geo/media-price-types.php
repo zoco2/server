@@ -1,12 +1,33 @@
 <?php
 
-// Exercise the real model accessor, public catalog and order pricing without DB/API calls.
+// Exercise media pricing with an isolated tenant configuration.
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
 use app\common\model\geo\GeoMedia;
 use app\common\service\geo\GeoMediaCatalogService;
 use app\common\service\geo\GeoMediaSyncService;
 use app\common\service\geo\GeoOrderService;
+use think\App;
+use think\facade\Config;
+use think\facade\Db;
+use think\Model;
+
+require dirname(__DIR__, 2) . '/vendor/topthink/framework/src/helper.php';
+
+$app = new App(dirname(__DIR__, 2));
+Config::set(['default' => 'file', 'stores' => ['file' => ['type' => 'File']]], 'cache');
+Config::set(['default' => 'test', 'connections' => ['test' => [
+    'type' => 'sqlite', 'database' => ':memory:', 'prefix' => 'la_', 'trigger_sql' => false,
+]]], 'database');
+Model::setDb($app->make('db'));
+Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, delete_time INTEGER)');
+Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
+Db::name('tenant')->insert(['id' => 7, 'tactics' => 0]);
+Db::name('tenant_config')->insert([
+    'tenant_id' => 7, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"media_markup_percent":25}',
+]);
+request()->tenantId = 7;
+request()->source = \app\common\enum\AdminTerminalEnum::USER;
 
 function checkPrice(bool $condition, string $message): void
 {
@@ -21,7 +42,7 @@ function mediaFixture(array $overrides = []): GeoMedia
         'resource_type' => 1,
         'name' => '单价媒体',
         'costprice' => 322,
-        'price_ratio' => 1.25,
+        'price_ratio' => 1.1,
         'price_type_json' => [],
     ]);
 }

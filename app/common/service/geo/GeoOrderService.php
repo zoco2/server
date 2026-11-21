@@ -428,14 +428,19 @@ class GeoOrderService
      */
     private static function resolvePrice(GeoMedia $media, int $priceType): array
     {
-        $ratio = (float)$media['price_ratio'] > 0 ? (float)$media['price_ratio'] : GeoMediaSyncService::markup((int)$media['tenant_id']);
+        $cost = self::costOf($media, $priceType);
+        return [$cost, GeoMediaSyncService::suggestSalePrice($cost, BusinessPriceService::mediaMarkupRatio())];
+    }
+
+    private static function costOf(GeoMedia $media, int $priceType): float
+    {
         foreach ((array)$media->getAttr('price_type_json') as $item) {
             if ((int)($item['type'] ?? 0) === $priceType) {
                 $cost = (float)($item['price'] ?? 0);
                 if (!is_finite($cost) || $cost <= 0) {
                     throw new Exception('媒体报价无效，请重新选择');
                 }
-                return [$cost, GeoMediaSyncService::suggestSalePrice($cost, $ratio)];
+                return $cost;
             }
         }
         throw new InvalidArgumentException('该媒体没有价格类别 ' . $priceType . '，请重新选择');
@@ -446,10 +451,6 @@ class GeoOrderService
         return GeoOrder::where(['id' => $order['id'], 'tenant_id' => $order['tenant_id']])->lock(true)->findOrFail();
     }
 
-    private static function costOf(GeoMedia $media, int $priceType): float
-    {
-        return self::resolvePrice($media, $priceType)[0];
-    }
 
     private static function chargedPoints(array $order): int
     {

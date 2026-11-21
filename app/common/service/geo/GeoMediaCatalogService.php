@@ -3,6 +3,7 @@
 namespace app\common\service\geo;
 
 use app\common\model\geo\GeoMedia;
+use app\common\service\pricing\BusinessPriceService;
 
 /**
  * 媒体资源广场（前台用户视角）。
@@ -14,7 +15,7 @@ class GeoMediaCatalogService
 {
     /** 前台可见字段：不含 price_ratio / sourceid / detail_json 等内部列；costprice 只用于算售价，输出前剔除 */
     public const PUBLIC_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,'
-        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
+        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,update_time';
 
@@ -37,11 +38,9 @@ class GeoMediaCatalogService
             ->group('resource_type')
             ->column('count(*)', 'resource_type');
 
-        // 价格区间在 SQL 里按 成本 × 行倍率 取极值，再统一换算成售价。
-        $markup = GeoMediaSyncService::markup();
+        $markup = BusinessPriceService::mediaMarkupRatio();
         $rows = (clone $base)
-            ->field('resource_type,MIN(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS min_price,'
-                . 'MAX(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS max_price')
+            ->field('resource_type,MIN(costprice) AS min_price,MAX(costprice) AS max_price')
             ->group('resource_type')
             ->select()
             ->toArray();
@@ -61,8 +60,8 @@ class GeoMediaCatalogService
                 'type' => $type,
                 'name' => $name,
                 'count' => $count,
-                'min_price' => round($min, 2),
-                'max_price' => round($max, 2),
+                'min_price' => GeoMediaSyncService::suggestSalePrice($min, $markup),
+                'max_price' => GeoMediaSyncService::suggestSalePrice($max, $markup),
             ];
         }
         return $lists;
@@ -81,7 +80,8 @@ class GeoMediaCatalogService
         $pageNo = max(1, (int)($params['page_no'] ?? 1));
 
         $query = GeoMedia::where(self::ON_SALE);
-        self::applyFilters($query, $params);
+        $markup = BusinessPriceService::mediaMarkupRatio();
+        self::applyFilters($query, $params, $markup);
 
         $count = (int)(clone $query)->count();
         $rows = $query
@@ -92,7 +92,7 @@ class GeoMediaCatalogService
             ->select()
             ->toArray();
 
-        return ['count' => $count, 'lists' => array_map([self::class, 'publicRow'], $rows)];
+        return ['count' => $count, 'lists' => array_map(static fn(array $row) => self::publicRow($row, $markup), $rows)];
     }
 
     /**
@@ -116,13 +116,13 @@ class GeoMediaCatalogService
      * @param array<string, mixed> $row 原始行
      * @return array<string, mixed>
      */
-    public static function publicRow(array $row): array
+    public static function publicRow(array $row, ?float $ratio = null): array
     {
-        $ratio = GeoMedia::ratio($row);
+        $ratio ??= BusinessPriceService::mediaMarkupRatio();
         $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
 
         // 多价格类别：库里叫 price_type_json，对外仍叫 price_types。
-        // getter 已按倍率补好 sale_price，这里再去掉成本价 price，避免前端推算倍率。
+        // 按租户发稿溢价统一计算各类别售价。
         $priceTypes = [];
         foreach ((array)($row['price_type_json'] ?? []) as $item) {
             if (!is_array($item)) {
@@ -134,8 +134,7 @@ class GeoMediaCatalogService
             }
             $priceTypes[] = [
                 'type' => $type,
-                'sale_price' => $item['sale_price']
-                    ?? GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
+                'sale_price' => GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
             ];
         }
 
@@ -158,7 +157,7 @@ class GeoMediaCatalogService
      * @param \think\db\BaseQuery $query 查询对象
      * @param array<string, mixed> $params 请求参数
      */
-    private static function applyFilters($query, array $params): void
+    private static function applyFilters($query, array $params, float $markup): void
     {
         foreach (['resource_type', 'newsresource', 'searchcollint', 'weekendpublish', 'linktype', 'entrlevel'] as $key) {
             if (isset($params[$key]) && $params[$key] !== '') {
@@ -178,13 +177,12 @@ class GeoMediaCatalogService
                     ->whereOr('portalmedia', 'like', '%' . $keyword . '%');
             });
         }
-        // 价格区间按最终售价比较：成本 × 行倍率（0 用租户默认），与列表展示口径一致。
-        $markup = (float)GeoMediaSyncService::markup();
+        // 按与列表一致的售价筛选。
         if (isset($params['min_price']) && $params['min_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) >= ?', [$markup, (float)$params['min_price']]);
+            $query->whereRaw('ROUND(costprice * ?, 2) >= ?', [$markup, (float)$params['min_price']]);
         }
         if (isset($params['max_price']) && $params['max_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) <= ?', [$markup, (float)$params['max_price']]);
+            $query->whereRaw('ROUND(costprice * ?, 2) <= ?', [$markup, (float)$params['max_price']]);
         }
     }
 

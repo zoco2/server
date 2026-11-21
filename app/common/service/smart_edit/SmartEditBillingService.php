@@ -12,7 +12,7 @@ class SmartEditBillingService
 {
     public static function quote(int $tenantId, int $userId, int $count, array $input): int
     {
-        $points = BusinessPriceService::smartEditPoints($tenantId);
+        $points = BusinessPriceService::smartEditPoints();
         if (isset($input['expected_unit_points']) && (string)$input['expected_unit_points'] !== (string)$points) {
             throw new RuntimeException('剪辑单价已更新，请确认新价格后重新提交');
         }

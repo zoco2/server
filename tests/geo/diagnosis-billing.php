@@ -80,8 +80,11 @@ namespace {
     Db::name('merchant_brand')->insert(['id' => 6, 'tenant_id' => 3, 'user_id' => 8, 'name' => '示例']);
     Db::name('tenant_config')->insertAll([
         ['tenant_id' => 3, 'type' => 'geo_diag', 'name' => 'provider', 'value' => '{"api_key":"fixture"}'],
-        ['tenant_id' => 3, 'type' => 'business_price', 'name' => 'geo_markup_percent', 'value' => '20'],
+        ['tenant_id' => 3, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"geo_markup_percent":20}'],
     ]);
+
+    request()->tenantId = 3;
+    request()->source = \app\common\enum\AdminTerminalEnum::USER;
 
     $balance = static fn() => (float)Db::name('user')->where('id', 8)->value('user_money');
     $params = ['brand_id' => 6, 'questions' => ['问题'], 'platforms' => ['web', 'app'], 'screenshot' => true, 'expected_points' => 186];
@@ -94,7 +97,7 @@ namespace {
     $GLOBALS['submit_status'] = 200;
     Diagnosis::syncOne((int)$batch['id'], 8);
     check(count($GLOBALS['submissions']) === 2 && $GLOBALS['submissions'][0] === $GLOBALS['submissions'][1], 'Retry changed idempotency key');
-    Db::name('tenant_config')->where('name', 'geo_markup_percent')->update(['value' => '50']);
+    Db::name('tenant_config')->where('name', 'settings')->update(['value' => '{"geo_markup_percent":50}']);
     $done = Diagnosis::syncOne((int)$batch['id'], 8);
     check($done['charged_points'] === 78 && $balance() === 422.0, 'Replayed zero-cost receipt erased the initial charge or historical markup');
     Diagnosis::syncOne((int)$batch['id'], 8);

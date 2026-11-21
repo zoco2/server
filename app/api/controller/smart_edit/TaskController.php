@@ -19,7 +19,7 @@ class TaskController extends BaseApiController
     public function price()
     {
         return $this->success('获取成功', [
-            'unit_points' => BusinessPriceService::smartEditPoints((int)$this->request->tenantId),
+            'unit_points' => BusinessPriceService::smartEditPoints(),
         ]);
     }
 

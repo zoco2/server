@@ -3,6 +3,7 @@
 namespace app\api\lists\merchant;
 
 use app\api\lists\BaseApiDataLists;
+use app\common\service\DefaultWorkGroup;
 use app\common\model\merchant\MerchantCopy;
 
 class CopyLists extends BaseApiDataLists
@@ -28,6 +29,9 @@ class CopyLists extends BaseApiDataLists
             'tenant_id' => (int)$this->request->tenantId,
             'user_id' => $this->userId,
         ]);
+        if (in_array($this->params['work_group_id'] ?? null, [0, '0'], true)) {
+            DefaultWorkGroup::filterTextList($query, (int)$this->request->tenantId, $this->userId, 'copy');
+        }
         $keyword = $this->params['keyword'] ?? '';
         $keyword = is_string($keyword) ? trim($keyword) : '';
         if ($keyword !== '') {

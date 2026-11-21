@@ -32,7 +32,7 @@ class GeoDiagnosisService
     public static function platforms(int $tenantId): array
     {
         $platforms = (new GeoDiagProvider($tenantId))->platforms();
-        $markup = BusinessPriceService::get($tenantId)['geo_markup_percent'];
+        $markup = BusinessPriceService::geoMarkupPercent();
         foreach ($platforms as &$platform) {
             $platform['markup_basis_points'] = (int)round($markup * 100);
         }
@@ -108,7 +108,7 @@ class GeoDiagnosisService
         $provider = new GeoDiagProvider($tenantId);
         $billing = GeoDiagnosisPricing::quote(
             $provider->platforms(), $platforms, count($questions) * $repeatCount, $screenshot, $conversationLink,
-            BusinessPriceService::get($tenantId)['geo_markup_percent']
+            BusinessPriceService::geoMarkupPercent()
         );
         if (array_key_exists('expected_points', $params)
             && filter_var($params['expected_points'], FILTER_VALIDATE_INT) !== $billing['reserved_points']) {

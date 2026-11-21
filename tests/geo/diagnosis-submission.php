@@ -65,6 +65,7 @@ namespace {
         'type' => 'sqlite', 'database' => ':memory:', 'prefix' => 'la_',
         'fields_strict' => true, 'trigger_sql' => false, 'break_reconnect' => false,
     ]]]);
+    \think\Model::setDb(Db::$manager);
     // Use shipped fields so accidental writes to nonexistent columns fail the regression.
     $install = file_get_contents(dirname(__DIR__, 2) . '/public/install/db/like.sql');
     foreach (['merchant_brand', 'geo_diag_batch', 'geo_diag_run', 'geo_diag_sample', 'user_task_run', 'user_task_run_event'] as $table) {
@@ -81,6 +82,9 @@ namespace {
     Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, delete_time INTEGER)');
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
     Db::name('tenant')->insert(['id' => 7, 'tactics' => 0]);
+    Db::name('tenant_config')->insert(['tenant_id' => 7, 'type' => 'business_price', 'name' => 'settings', 'value' => '{}']);
+    request()->tenantId = 7;
+    request()->source = \app\common\enum\AdminTerminalEnum::USER;
     $params = ['brand_id' => 14, 'questions' => ['品牌怎么样？'], 'platforms' => ['doubao'], 'repeat_count' => 1];
 
     // Manual submission: API rejection is returned to the caller, but the failed history survives.
@@ -104,6 +108,8 @@ namespace {
     $run = ['id' => 3, 'plan_id' => 1, 'scheduled_at' => time(), 'tenant_id' => 7, 'user_id' => 23, 'job_type' => 'geo_ranking', 'status' => 'queued',
         'job_config' => json_encode($config, JSON_UNESCAPED_UNICODE)];
     Db::name('user_task_run')->insert($run);
+    request()->tenantId = 99;
+    request()->source = 'original';
     GeoRankingTaskJob::start($run, null);
     $progress = UserTaskRunProgress::read(7, 23, 3, 0);
     check($progress['run']['status'] === 'failed' && str_contains($progress['run']['reason'], '余额不足'), 'Task must show API rejection');
@@ -115,6 +121,8 @@ namespace {
     GeoRankingTaskJob::start($run, null);
     check(Db::name('geo_diag_batch')->count() === 2 && GeoDiagProvider::$calls === 2, 'Repeated delivery must not resubmit rejected task');
 
+    request()->tenantId = 7;
+    request()->source = \app\common\enum\AdminTerminalEnum::USER;
     // A lost or incomplete receipt leaves a durable reservation for reconciliation under the same key.
     foreach ([90 => 'exception', 92 => 'malformed'] as $runId => $mode) {
         GeoDiagProvider::$mode = $mode;
