@@ -37,9 +37,9 @@ final class WorkspaceAssetService
         foreach ($refs as $ref) {
             if (!is_string($ref) || !preg_match('/^(?:[a-z_]+:(result|task):[1-9][0-9]{0,10}|canvas:task:[1-9][0-9]{0,10}:[1-9][0-9]{0,4})$/D', $ref)) throw new InvalidArgumentException('资产标识无效');
             [$source, $kind] = explode(':', $ref);
-            if ($source !== 'upload' && !isset(self::SOURCES[$source])) throw new InvalidArgumentException('资产标识无效');
+            if (!in_array($source, ['upload', 'smart_edit'], true) && !isset(self::SOURCES[$source])) throw new InvalidArgumentException('资产标识无效');
             if ($source === 'canvas' && $kind === 'task' && count(explode(':', $ref)) !== 4) throw new InvalidArgumentException('资产标识无效');
-            if ($source === 'fitting' && $kind !== 'task') throw new InvalidArgumentException('资产标识无效');
+            if (in_array($source, ['fitting', 'smart_edit'], true) && $kind !== 'task') throw new InvalidArgumentException('资产标识无效');
             if (in_array($source, ['short_drama', 'upload'], true) && $kind !== 'result') throw new InvalidArgumentException('资产标识无效');
         }
         $patch = [];
@@ -210,6 +210,10 @@ final class WorkspaceAssetService
         if (!$stamp) return;
         [$source, $kind, $id] = explode(':', $ref);
         if ($source === 'canvas' && $kind === 'task') return;
+        if ($source === 'smart_edit') {
+            if ($kind === 'task') WorkspaceSmartEditAssetService::syncDeletion($tenant, $user, (int)$id, $stamp, $restore);
+            return;
+        }
         $owner = ['tenant_id'=>$tenant,'user_id'=>$user];
         if ($source === 'upload') {
             $file = Db::name('tenant_file')->where(['tenant_id'=>$tenant,'source_id'=>$user,'id'=>(int)$id,'source'=>FileEnum::SOURCE_USER,'upload_origin'=>'local']);
@@ -259,6 +263,7 @@ final class WorkspaceAssetService
     private static function owned(int $tenant, int $user, string $ref, bool $includeDeleted = false): ?array
     {
         [$source, $kind, $id] = explode(':', $ref);
+        if ($source === 'smart_edit') return WorkspaceSmartEditAssetService::owned($tenant, $user, $ref, $includeDeleted);
         if ($source === 'canvas' && $kind === 'task') return WorkspaceCanvasAssetService::owned($tenant, $user, $ref);
         if ($source === 'upload') {
             $file = ($includeDeleted ? TenantFile::withTrashed() : TenantFile::where([]))->where(['id' => (int)$id, 'tenant_id' => $tenant, 'source' => FileEnum::SOURCE_USER, 'source_id' => $user, 'upload_origin' => 'local']);
