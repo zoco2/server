@@ -114,13 +114,12 @@ class SmartEditImsConfigService
     }
 
     /**
-     * 前端回显：SecretKey 不回明文。
+     * 租户后台配置表单回显。
      */
     public static function forDisplay(int $tenantId): array
     {
         $config = self::get($tenantId);
-        $config['secret_key'] = '';
-        $config['secret_key_set'] = self::get($tenantId)['secret_key'] !== '';
+        $config['secret_key_set'] = $config['secret_key'] !== '';
         return $config;
     }
 

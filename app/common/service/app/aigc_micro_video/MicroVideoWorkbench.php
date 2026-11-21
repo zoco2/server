@@ -21,16 +21,30 @@ final class MicroVideoWorkbench
     {MicroVideoWorkbenchTemplates::seed($tenant,MicroVideoSettings::directions($tenant,true));}
     public static function assets(int $tenant,int $user,array $p): array
     {
-        $q=Db::name('tenant_file')->where(['tenant_id'=>$tenant,'source'=>FileEnum::SOURCE_USER,'source_id'=>$user,'type'=>FileEnum::IMAGE_TYPE])->whereRaw('(delete_time IS NULL OR delete_time=0)');if(!empty($p['keyword']))$q->whereLike('name','%'.mb_substr((string)$p['keyword'],0,100).'%');$page=max(1,(int)($p['page_no']??1));$size=min(100,max(1,(int)($p['page_size']??20)));$count=(clone $q)->count();$rows=$q->order('id','desc')->page($page,$size)->select()->toArray();$images=[];
-        foreach($rows as $r){try{$images[]=MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$r['uri'],'name'=>$r['name']]],1)[0]+['id'=>(int)$r['id']];}catch(\Throwable){/* Historical files lacking valid storage cannot become execution references. */}}
-        return ['lists'=>array_map([MicroVideoWorkbenchRecords::class,'publicAsset'],$images),'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
+        $audio = ($p['kind'] ?? 'image') === 'audio';
+        $q = Db::name('tenant_file')->where(['tenant_id'=>$tenant, 'source'=>FileEnum::SOURCE_USER, 'source_id'=>$user,
+            'type'=>$audio ? FileEnum::AUDIO_TYPE : FileEnum::IMAGE_TYPE])->whereRaw('(delete_time IS NULL OR delete_time=0)');
+        if ($audio) $q->whereRaw("(LOWER(uri) LIKE '%.wav' OR LOWER(uri) LIKE '%.mp3')");
+        if (!empty($p['keyword'])) $q->whereLike('name','%'.mb_substr((string)$p['keyword'],0,100).'%');
+        $page = max(1, (int)($p['page_no'] ?? 1));
+        $size = min(100, max(1, (int)($p['page_size'] ?? 20)));
+        $count = (clone $q)->count();
+        $assets = [];
+        foreach ($q->order('id','desc')->page($page,$size)->select()->toArray() as $row) {
+            try {
+                $asset = $audio ? MicroVideoMedia::referenceAudioAsset($tenant, $row)
+                    : MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$row['uri'],'name'=>$row['name']]],1)[0];
+                $assets[] = MicroVideoWorkbenchRecords::publicAsset($asset + ['id'=>(int)$row['id']]);
+            } catch (\Throwable) { /* Skip unavailable historical files. */ }
+        }
+        return ['lists'=>$assets,'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
     }
     public static function execution(int $tenant,int $user,array $p): array
     {
         $key=MicroVideoWorkbenchPolicy::key((string)($p['idempotency_key']??''));
         return Db::transaction(function()use($tenant,$user,$p,$key){$project=MicroVideoWorkbenchRecords::owned($tenant,$user,'project',(int)($p['project_id']??0),false,true,true);$prior=MicroVideoWorkbenchRecords::table('execution')->where(['tenant_id'=>$tenant,'user_id'=>$user,'idempotency_key'=>$key])->find();
             if($prior){if((int)$prior['project_id']!==(int)$project['id']||(int)$prior['project_revision']!==(int)($p['project_revision']??0))throw new InvalidArgumentException('请求标识已用于其他项目版本');return ['project_id'=>(int)$project['id'],'project_revision'=>(int)$prior['project_revision'],'task'=>MicroVideoService::detail($tenant,$user,(int)$prior['task_id'])];}
-            MicroVideoWorkbenchPolicy::revision($project,(int)($p['project_revision']??0));$body=MicroVideoWorkbenchPolicy::normalizeValues(MicroVideoStore::json($project['body_json']));[$segments,$images]=self::executionReferences($body);if(!$segments)throw new InvalidArgumentException('请先保存含完整镜头时间轴的分镜剧本');
+            MicroVideoWorkbenchPolicy::revision($project,(int)($p['project_revision']??0));$body=MicroVideoWorkbenchPolicy::normalizeValues(MicroVideoStore::json($project['body_json']));[$segments,$images]=self::executionReferences($body);if(!$segments)throw new InvalidArgumentException('请先保存分镜剧本');
             $brief=(array)($body['brief']??[]);$params=['model_id'=>$body['model_id']??MicroVideoSettings::get($tenant)['default_model_id'],'quality'=>$body['quality']??MicroVideoSettings::get($tenant)['default_quality'],'ratio'=>$body['ratio']??$body['template_snapshot']['body']['ratio']??'9:16','target_duration'=>$body['target_duration']??$brief['target_duration']??30,'mode'=>'prompt','theme'=>$project['title'],'prompt'=>(string)($body['script']['text']??''),'images'=>$images,'direction_id'=>(int)($body['template_snapshot']['body']['direction_id']??0),'idempotency_key'=>hash('sha256',$key),'continuity'=>(string)($body['script']['continuity']??$body['template_snapshot']['body']['reference_rules']??MicroVideoSettings::defaults()['continuity_template'])];
             $snapshot=['project_id'=>(int)$project['id'],'project_revision'=>(int)$project['revision'],'body'=>$body];$task=MicroVideoService::importWorkbenchPlan($tenant,$user,$params,$segments,$snapshot);MicroVideoWorkbenchRecords::table('execution')->insert(['tenant_id'=>$tenant,'user_id'=>$user,'project_id'=>$project['id'],'project_revision'=>$project['revision'],'idempotency_key'=>$key,'task_id'=>$task['id'],'snapshot_json'=>MicroVideoStore::encode($snapshot),'create_time'=>time()]);
             return ['project_id'=>(int)$project['id'],'project_revision'=>(int)$project['revision'],'task'=>$task];

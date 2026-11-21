@@ -22,10 +22,15 @@ class GroupController extends BaseApiController
     public function create()
     {
         try {
+            $params = $this->request->post();
+            if (array_key_exists('transition_policy', $params)) {
+                // 全局 trim 会把 JSON 布尔值转成字符串，转场策略需要保留原始类型。
+                $params['transition_policy'] = $this->request->post('transition_policy', null, null);
+            }
             $result = SmartEditGroupService::create(
                 (int)$this->request->tenantId,
                 $this->userId,
-                $this->request->post()
+                $params
             );
             return $this->success('提交成功', $result);
         } catch (Throwable $e) {

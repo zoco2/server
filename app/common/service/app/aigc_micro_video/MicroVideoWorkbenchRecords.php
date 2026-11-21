@@ -18,7 +18,13 @@ final class MicroVideoWorkbenchRecords
         $q=self::query($tenant,$user,$kind,$admin,$write)->where('id',$id);if($lock)$q->lock(true);$r=$q->find();if(!$r)throw new InvalidArgumentException('资料不存在或无权访问');return $r;
     }
     public static function dto(array $r): array
-    {return ['id'=>(int)$r['id'],'kind'=>$r['kind'],'title'=>$r['title'],'user_id'=>(int)$r['user_id'],'revision'=>(int)$r['revision'],'status'=>(int)$r['status'],'visibility'=>$r['visibility'],'body'=>self::publicBody(MicroVideoStore::json($r['body_json'])),'create_time'=>(int)$r['create_time'],'update_time'=>(int)$r['update_time']];}
+    {
+        $body = MicroVideoLibraryGeneration::decorate($r,MicroVideoStore::json($r['body_json']));
+        foreach (($r['kind'] === 'project' ? ($body['reference_audios'] ?? []) : []) as $index => $audio) {
+            try { $body['reference_audios'][$index] = MicroVideoMedia::referenceAudios((int)$r['tenant_id'], (int)$r['user_id'], [$audio['id']])[0]; }
+            catch (\Throwable) { $body['reference_audios'][$index]['url'] = ''; }
+        }
+        return ['id'=>(int)$r['id'],'kind'=>$r['kind'],'title'=>$r['title'],'user_id'=>(int)$r['user_id'],'revision'=>(int)$r['revision'],'status'=>(int)$r['status'],'visibility'=>$r['visibility'],'body'=>self::publicBody($body),'create_time'=>(int)$r['create_time'],'update_time'=>(int)$r['update_time']];}
     /** Public images preserve usable storage references but never expose private receipt/owner identities. */
     public static function publicAsset(array $image): array
     {return array_intersect_key($image,array_flip(['id','uri','url','name','role','storage_scope','storage_engine','storage_domain']));}
@@ -120,6 +126,14 @@ final class MicroVideoWorkbenchRecords
         // Snapshots are authoritative. Strip stale or malicious client copies before image validation.
         if($kind==='project'){unset($body['template_snapshot'],$body['product_snapshot']);if(!empty($body['scenes']))unset($body['scene_reset']);}
         $body=MicroVideoWorkbenchPolicy::body($kind,$body);$body=self::images($tenant,$owner,$body);
+        if ($kind === 'project' && isset($body['reference_audios'])) {
+            $pool = $body['reference_audios'];
+            if (!is_array($pool) || count($pool) > 15) throw new InvalidArgumentException('项目最多可保存15段参考音频');
+            $ids = array_column($pool, 'id');
+            if (count($ids) !== count($pool) || count(array_unique($ids)) !== count($ids)) throw new InvalidArgumentException('参考音频标识无效或重复');
+            $body['reference_audios'] = array_map(static fn(array $audio) => array_diff_key($audio, ['url'=>true]),
+                MicroVideoMedia::referenceAudios($tenant, $owner, $ids));
+        }
         foreach(['cover_image','example_video'] as $field)if(isset($body[$field]))$body[$field]=MicroVideoWorkbenchAssets::decorative($tenant,$owner,(string)$body[$field],$field==='example_video');
         if($kind==='project')foreach(['template','product'] as $ref){if(empty($body[$ref]['id']))continue;$prior=MicroVideoWorkbenchPolicy::normalizeValues($restoreBody??($initial?MicroVideoStore::json($initial['body_json']):[]));if(isset($prior[$ref.'_snapshot'])&&MicroVideoWorkbenchPolicy::hash($body[$ref])===MicroVideoWorkbenchPolicy::hash($prior[$ref]??[])){$body[$ref.'_snapshot']=self::images($tenant,$owner,$prior[$ref.'_snapshot']);continue;}$selected=self::owned($tenant,$owner,$ref,(int)$body[$ref]['id']);$revision=(int)($body[$ref]['revision']??$selected['revision']);$v=self::versionRow($selected,$revision);$snap=MicroVideoStore::json($v['body_json']);if((int)$selected['user_id']!==$owner)$snap=MicroVideoWorkbenchAssets::cloneBody($tenant,$owner,(int)$selected['id'],$snap,(int)$selected['user_id']);$body[$ref]=['id'=>(int)$selected['id'],'revision'=>$revision];$body[$ref.'_snapshot']=['title'=>$v['title'],'body'=>$snap];}
         return MicroVideoWorkbenchPolicy::normalizeValues($body);

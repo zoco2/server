@@ -1,8 +1,10 @@
 # 抖音 H5 分享服务
 
-后端入口：`app\common\service\douyin\DouyinH5ShareService::createShare()`（实例方法）。本次只接入 service；公开门店的 HTTP 接口、素材选择、前端按钮及二维码展示后续接入。
+员工可从服务号的任务通知页打开抖音投稿。任务接口使用 `DouyinH5ShareService::forTenant($tenantId)->createShare($content)` 生成唤起链接。接口及素材要求见[任务发布接口](publish-task.md)。
 
 ## 配置
+
+租户应用请在后台 **系统设置 → 基础配置 → 分享配置** 中设置 Client Key、Client Secret，详见 [租户分享配置](tenant-share-config.md)。已有租户上下文时服务自动读取该租户配置，缺少分享凭据时提示在租户后台配置。下面的环境凭据仅用于无租户上下文的旧调用。
 
 在抖音开放平台创建网站应用，开通 `h5.share`、`open.get.ticket` 和投稿权限 `aweme.share`；转发到日常还需要 `aweme.forward`。在 server 的 `.env` 添加：
 
@@ -22,7 +24,7 @@ CACHE_STORE = redis
 ```php
 use app\common\service\douyin\DouyinH5ShareService;
 
-$share = (new DouyinH5ShareService())->createShare([
+$share = DouyinH5ShareService::forTenant($tenantId)->createShare([
     'video_path' => 'https://cdn.example.com/store/video.mp4',
     'title' => '周末来我们店里坐坐',
     'hashtag_list' => ['同城美食', '周末探店'],

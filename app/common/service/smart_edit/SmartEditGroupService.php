@@ -49,6 +49,28 @@ class SmartEditGroupService
 
         // 共用配置走与单任务完全相同的归一化，保证两边语义一致
         $shared = SmartEditService::normalizeSharedForGroup($params, $tenantId);
+        $boundaryCount = count($shots) - 1;
+        if (array_key_exists('transition_policy', $params)) {
+            $policy = SmartEditTimelineBuilder::normalizeTransitionPolicy($params['transition_policy'], $boundaryCount);
+            $shared['transition_policy'] = $policy;
+            $transitionOptions = array_filter($policy['overrides'], static fn($key) => $key !== null);
+            if (in_array(null, $policy['overrides'], true)) {
+                $transitionOptions = array_merge($transitionOptions, $policy['candidates']);
+            }
+        } else {
+            // 兼容旧客户端提交的具体转场列表。
+            $transitionOptions = SmartEditTimelineBuilder::normalizeTransitions($params['transitions'] ?? [], $boundaryCount);
+            $shared['transitions'] = $transitionOptions;
+        }
+        if (array_diff($transitionOptions, ['none']) !== []) {
+            foreach ($shots as $index => $shot) {
+                foreach ($shot['videos'] as $video) {
+                    if (!is_finite($video['in']) || !is_finite($video['out']) || $video['out'] <= $video['in']) {
+                        throw new Exception('使用转场时，第 ' . ($index + 1) . ' 个镜头的素材必须有有效的截取区间');
+                    }
+                }
+            }
+        }
         // 提前解析素材地址，配置缺失或素材不归属当前租户时在请求里就报错，
         // 不把问题留给后台展开任务。
         SmartEditService::assertSharedResolvable($tenantId, $shared);

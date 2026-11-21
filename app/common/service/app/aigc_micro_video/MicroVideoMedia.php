@@ -51,6 +51,75 @@ final class MicroVideoMedia
         return $result;
     }
 
+    public static function referenceAudios(int $tenant, int $user, array $ids, bool $forGeneration = false): array
+    {
+        if (!$ids) return [];
+        foreach ($ids as $id) {
+            if (filter_var($id, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]) === false) throw new RuntimeException('参考音频标识无效');
+        }
+        $files = Db::name('tenant_file')->where(['tenant_id'=>$tenant, 'source_id'=>$user,
+            'source'=>FileEnum::SOURCE_USER, 'type'=>FileEnum::AUDIO_TYPE])->whereIn('id', $ids)
+            ->whereRaw('(delete_time IS NULL OR delete_time=0)')->select()->toArray();
+        $byId = array_column($files, null, 'id');
+        $assets = [];
+        foreach ($ids as $id) {
+            if (!isset($byId[$id])) throw new RuntimeException('参考音频不存在或不属于当前用户');
+            $assets[] = self::referenceAudioAsset($tenant, $byId[$id], $forGeneration);
+        }
+        if ($forGeneration && array_sum(array_column($assets, 'duration')) > 15) throw new RuntimeException('每个分镜的参考音频合计不能超过15秒');
+        return $assets;
+    }
+
+    /** The caller has already scoped this file row to the current tenant, owner and audio type. */
+    public static function referenceAudioAsset(int $tenant, array $file, bool $forGeneration = false): array
+    {
+        $uri = self::canonicalUri($file['uri']);
+        if (!in_array(strtolower(pathinfo($uri, PATHINFO_EXTENSION)), ['mp3', 'wav'], true)) throw new RuntimeException('参考音频仅支持 MP3 和 WAV');
+        $storage = self::storage($file, $tenant);
+        $url = self::managedUrl($uri, $storage, $tenant);
+        $asset = ['id' => (int)$file['id'], 'uri' => $uri, 'url' => $url, 'name' => $file['name']];
+        if ($forGeneration) {
+            $local = $storage['storage_engine'] === 'local';
+            if ($local) {
+                if (!$storage['storage_domain']) throw new RuntimeException('参考音频缺少可供模型读取的公网地址，请重新上传');
+                $url = FileService::format($storage['storage_domain'], $uri);
+                OpenSafeHttp::resolve($url, false);
+            }
+            $asset['url'] = $url;
+            $asset['type'] = 'audio';
+            $asset['role'] = 'reference_audio';
+            $asset['duration'] = self::referenceAudioDuration($file, $url, $local);
+        }
+        return $asset;
+    }
+
+    private static function referenceAudioDuration(array $file, string $url, bool $local): float
+    {
+        $key = 'micro_video_audio_duration:' . $file['tenant_id'] . ':' . $file['id'] . ':' . sha1($file['uri']);
+        $duration = \think\facade\Cache::get($key);
+        if (is_numeric($duration)) return (float)$duration;
+        $workspace = self::workspace();
+        try {
+            $limit = 15 * 1024 * 1024;
+            if ($local) {
+                $path = self::localPath($file['uri']);
+                if (filesize($path) > $limit) throw new RuntimeException('参考音频不能超过15MB');
+            } else {
+                $path = $workspace . '/source';
+                $response = OpenSafeHttp::get($url, $limit, 30);
+                if (file_put_contents($path, $response['body']) === false) throw new RuntimeException('参考音频读取失败');
+            }
+            $metadata = self::run([self::binary('ffprobe'), '-v', 'error', '-protocol_whitelist', 'file',
+                '-format_whitelist', 'mp3,wav', '-select_streams', 'a:0', '-show_entries', 'stream=codec_type:format=duration',
+                '-of', 'json', $path], 30);
+            $info = json_decode($metadata, true);
+            $duration = (float)($info['format']['duration'] ?? 0);
+            if (empty($info['streams']) || !is_finite($duration) || $duration < 1 || $duration > 15) throw new RuntimeException('参考音频须为1至15秒的 MP3 或 WAV');
+            \think\facade\Cache::set($key, $duration, 3600);
+            return $duration;
+        } finally { self::cleanup($workspace); }
+    }
+
     public static function visionInputs(array $canonicalImages): array
     {
         $result = [];
@@ -126,7 +195,9 @@ final class MicroVideoMedia
                     $sharedBoundaries[$index] = $anchor > 0 && $anchor === (int)($segments[$index - 1]['last_frame_id'] ?? 0);
                 }
             }
-            $merged = self::concatLocal($inputs, $workspace, $sharedBoundaries);
+            $shots = MicroVideoStore::json($task['params_json'] ?? [])['shots'] ?? [];
+            $mixedQualities = count(array_unique(array_column($shots, 'quality'))) > 1;
+            $merged = self::concatLocal($inputs, $workspace, $sharedBoundaries, $mixedQualities);
             $poster = $workspace . '/poster.jpg';
             self::run([self::binary('ffmpeg'), '-hide_banner', '-loglevel', 'error', '-y', '-i', $merged['path'], '-frames:v', '1', '-q:v', '2', $poster], 90);
             if (!is_file($poster) || !@getimagesize($poster)) throw new RuntimeException('视频封面生成失败');
@@ -137,9 +208,127 @@ final class MicroVideoMedia
             return [
                 'uri' => $stored['uri'], 'url' => self::managedUrl($stored['uri'], $stored, $tenant),
                 'cover_uri' => $cover['uri'], 'cover_url' => self::managedUrl($cover['uri'], $cover, $tenant),
-                'duration' => $merged['duration'], 'width' => $merged['width'], 'height' => $merged['height'],
+                'duration' => $merged['duration'], 'width' => $merged['width'], 'height' => $merged['height'], 'has_audio' => $merged['source_has_audio'],
             ] + self::storageFields($stored);
         } finally { self::cleanup($workspace); }
+    }
+
+    public static function subtitlePreflight(): void
+    {
+        self::binary('ffprobe'); self::subtitleFont();
+        if (!preg_match('/\bsubtitles\s+V->V/', self::run([self::binary('ffmpeg'), '-hide_banner', '-filters'], 15))) {
+            throw new RuntimeException('视频处理程序缺少字幕滤镜，请安装支持 libass 的 FFmpeg');
+        }
+    }
+
+    private static function subtitleFont(): string
+    {
+        $font = getenv('MICRO_VIDEO_SUBTITLE_FONT') ?: '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc';
+        if (!is_file($font) || !is_readable($font)) throw new RuntimeException('未找到中文字幕字体，请安装 fonts-noto-cjk');
+        return $font;
+    }
+
+    public static function subtitleMovie(array $task, array $original, callable $recognize, callable $finished, bool $extractAudio = true): array
+    {
+        self::subtitlePreflight();
+        $tenant=(int)$task['tenant_id'];$user=(int)$task['user_id'];$workspace=self::workspace();
+        try {
+            $uri=self::canonicalUri($original['uri']);$file=self::ownedFile($tenant,$user,$uri,FileEnum::VIDEO_TYPE);$storage=self::storage($file,$tenant);
+            $input=$workspace.'/original.mp4';
+            self::materialize($storage['storage_engine']==='local'?$uri:self::managedUrl($uri,$storage,$tenant),$input,$tenant,$user);
+            $probe=self::probe($input);$audio=$workspace.'/speech.wav';
+            if($extractAudio)self::extractSubtitleAudio($input,$audio);
+            $cues=$recognize($audio);
+            $result=$original;
+            if($cues){
+                $path=self::burnSubtitles($input,$workspace,$cues,$probe);
+                $stored=self::persistVideo($path,$tenant,$user);
+                $result=array_replace($original,['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant)],self::storageFields($stored));
+            }
+            $finished($result);return $result;
+        } finally { self::cleanup($workspace); }
+    }
+
+    private static function extractSubtitleAudio(string $input,string $output): void
+    {
+        self::run([self::binary('ffmpeg'),'-v','error','-nostdin','-y','-protocol_whitelist','file','-i',$input,'-vn','-map','0:a:0','-ac','1','-ar','16000','-c:a','pcm_s16le','-threads','1',$output],180);
+        if(!is_file($output)||filesize($output)<=44||filesize($output)>100*1024*1024)throw new RuntimeException('字幕音轨提取失败或超过大小限制');
+    }
+
+    private static function burnSubtitles(string $input,string $workspace,array $cues,array $probe): string
+    {
+        $font=self::subtitleFont();$family=getenv('MICRO_VIDEO_SUBTITLE_FONT_FAMILY')?:'Noto Sans CJK SC';
+        if(preg_match('/[,\r\n]/',$family))throw new RuntimeException('字幕字体名称无效');
+        if(!copy($font,$workspace.'/subtitle-font.'.pathinfo($font,PATHINFO_EXTENSION)))throw new RuntimeException('字幕字体读取失败');
+        $ass=MicroVideoSubtitles::ass($cues,$probe['width'],$probe['height'],$family);
+        if(file_put_contents($workspace.'/subtitles.ass',$ass)===false)throw new RuntimeException('字幕文件写入失败');
+        $output=$workspace.'/subtitled.mp4';
+        self::run([self::binary('ffmpeg'),'-v','error','-nostdin','-y','-protocol_whitelist','file','-i',$input,'-map','0:v:0','-map','0:a:0?','-vf','subtitles=filename=subtitles.ass:fontsdir=.','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','-c:a','copy','-movflags','+faststart',$output],900,$workspace);
+        $final=self::probe($output);
+        if(abs($final['duration']-$probe['duration'])>0.3||$final['width']!==$probe['width']||$final['height']!==$probe['height'])throw new RuntimeException('字幕成片校验失败');
+        return $output;
+    }
+
+    public static function extractRoleVoice(int $tenant,int $user,string $uri): array
+    {
+        $workspace=self::workspace();
+        try {
+            $source=$workspace.'/voice-source.mp4';self::materialize($uri,$source,$tenant,$user);
+            $media=self::probe($source);
+            if(!$media['has_audio']||$media['duration']<1||$media['duration']>16)throw new RuntimeException('NO_AUDIO');
+            $target=$workspace.'/voice.wav';
+            self::run([self::binary('ffmpeg'),'-v','error','-y','-protocol_whitelist','file','-i',$source,'-map','0:a:0','-vn','-ac','1','-ar','24000','-c:a','pcm_s16le',$target],90);
+            $audio=self::compactRoleVoice((string)file_get_contents($target));$bytes=$audio['bytes'];
+            $stored=\app\common\service\app\aigc_music\AigcMusicAssetService::persistGeneratedAudio('data:audio/wav;base64,'.base64_encode($bytes),$tenant,$user);
+            if(empty($stored['stored'])||empty($stored['uri']))throw new RuntimeException('角色声音保存失败');
+            return ['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant),'duration'=>$audio['duration']];
+        } finally {self::cleanup($workspace);}
+    }
+
+    /** Evaluate the native model result: validate metadata only and persist the exact returned bytes. */
+    public static function persistRoleAudition(int $tenant,int $user,string $wav): array
+    {
+        if(strlen($wav)>30*1024*1024||substr($wav,0,4)!=='RIFF'||substr($wav,8,4)!=='WAVE')throw new RuntimeException('NO_AUDIO');
+        $workspace=self::workspace();
+        try {
+            $source=$workspace.'/raw.wav';
+            file_put_contents($source,$wav);
+            $info=json_decode(self::run([self::binary('ffprobe'),'-v','error','-protocol_whitelist','file','-format_whitelist','wav','-show_streams','-show_format','-of','json',$source],30),true,512,JSON_THROW_ON_ERROR);
+            $duration=(float)($info['format']['duration']??0);
+            if(!is_finite($duration)||$duration<=0||!array_filter($info['streams']??[],static fn($s)=>($s['codec_type']??'')==='audio'))throw new RuntimeException('NO_AUDIO');
+            // Do not trim silence, normalize, change channels, resample, or stretch the generated audio.
+            $stored=\app\common\service\app\aigc_music\AigcMusicAssetService::persistGeneratedAudio('data:audio/wav;base64,'.base64_encode($wav),$tenant,$user);
+            if(empty($stored['stored'])||empty($stored['uri']))throw new RuntimeException('角色声音保存失败');
+            return ['uri'=>$stored['uri'],'url'=>self::managedUrl($stored['uri'],$stored,$tenant),'duration'=>$duration,'audio_sha256'=>hash('sha256',$wav)];
+        } finally {self::cleanup($workspace);}
+    }
+
+    /** Keep the complete spoken interval, including pauses, with a small lead-in and natural tail. */
+    private static function compactRoleVoice(string $wav): array
+    {
+        if(strlen($wav)<44||strlen($wav)>15*1024*1024||substr($wav,0,4)!=='RIFF'||substr($wav,8,4)!=='WAVE')throw new RuntimeException('NO_AUDIO');
+        $pcm='';$format=null;
+        for($offset=12;$offset+8<=strlen($wav);){
+            $kind=substr($wav,$offset,4);$size=unpack('V',substr($wav,$offset+4,4))[1];$offset+=8;
+            if($offset+$size>strlen($wav))throw new RuntimeException('NO_AUDIO');
+            if($kind==='fmt '&&$size>=16)$format=unpack('vencoding/vchannels/Vrate/VbytesPerSecond/vblock/vbits',substr($wav,$offset,16));
+            if($kind==='data')$pcm=substr($wav,$offset,$size);
+            $offset+=$size+($size%2);
+        }
+        if(!$format||$format['encoding']!==1||$format['channels']!==1||$format['rate']!==24000||$format['bits']!==16||strlen($pcm)%2)throw new RuntimeException('NO_AUDIO');
+        $frames=intdiv(strlen($pcm),2);$first=null;$last=null;
+        for($i=0;$i<$frames;$i++){
+            $sample=ord($pcm[$i*2])|(ord($pcm[$i*2+1])<<8);if($sample>32767)$sample-=65536;
+            if(abs($sample)>=32){$first??=$i;$last=$i;}
+        }
+        if($first===null)throw new RuntimeException('NO_AUDIO');
+        $start=max(0,$first-3600);$end=min($frames,$last+1+6000);
+        // Downstream voice references require at least one second. Never remove sentence-internal pauses.
+        if($end-$start<24000){$end=min($frames,$start+24000);$start=max(0,$end-24000);}
+        $pcm=substr($pcm,$start*2,($end-$start)*2);$size=strlen($pcm);
+        if(($end-$start)/24000>15.1)throw new RuntimeException('试音超过15秒，请缩短台词');
+        $bytes='RIFF'.pack('V',36+$size).'WAVEfmt '.pack('VvvVVvv',16,1,1,24000,48000,2,16).'data'.pack('V',$size).$pcm;
+        return ['bytes'=>$bytes,'duration'=>($end-$start)/24000];
     }
 
     private static function canonicalUri(string $input): string
@@ -276,15 +465,28 @@ final class MicroVideoMedia
     }
 
     /** Only shared-anchor repeated prefixes may be removed. Never speed up or pad footage. */
-    private static function concatLocal(array $inputs, string $workspace, array $sharedBoundaries = []): array
+    private static function concatLocal(array $inputs, string $workspace, array $sharedBoundaries = [], bool $useLargestCanvas = false): array
     {
         if (!$inputs) throw new RuntimeException('没有可合并的视频片段');
-        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $width = 0; $height = 0;
+        $ffmpeg = self::binary('ffmpeg'); $normalized = []; $expected = 0.0; $removed = 0.0; $sourceHasAudio = false;
+        $probes = array_map([self::class, 'probe'], $inputs);
+        $canvas = $probes[0];
+        if ($useLargestCanvas) {
+            foreach ($probes as $probe) {
+                if ($probe['width'] * $probe['height'] > $canvas['width'] * $canvas['height']) $canvas = $probe;
+            }
+        }
+        $width = max(2, (int)(round($canvas['width'] / 2) * 2));
+        $height = max(2, (int)(round($canvas['height'] / 2) * 2));
+        $scale = 'scale=' . $width . ':' . $height . ':flags=lanczos';
+        if ($useLargestCanvas) {
+            $scale .= ':force_original_aspect_ratio=decrease:force_divisible_by=2,pad=' . $width . ':' . $height . ':(ow-iw)/2:(oh-ih)/2';
+        }
         foreach ($inputs as $index => $input) {
-            $probe = self::probe($input);
+            $probe = $probes[$index];
+            $sourceHasAudio = $sourceHasAudio || $probe['has_audio'];
             $trimFrames = $index > 0 && !empty($sharedBoundaries[$index]) ? self::repeatedBoundaryFrames($inputs[$index - 1], $input) : 0;
             $trimSeconds = $trimFrames / 30; $removed += $trimSeconds; $expected += $probe['duration'] - $trimSeconds;
-            if ($index === 0) { $width = max(2, (int)(round($probe['width'] / 2) * 2)); $height = max(2, (int)(round($probe['height'] / 2) * 2)); }
             $path = $workspace . '/normalized-' . $index . '.mp4';
             $command = [$ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', $input];
             if (!$probe['has_audio']) {
@@ -292,7 +494,7 @@ final class MicroVideoMedia
                 $command = array_merge($command, ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo:d=' . sprintf('%.9F', $probe['video_duration'])]);
             }
             $command = array_merge($command, ['-map', '0:v:0', '-map', $probe['has_audio'] ? '0:a:0' : '1:a:0',
-                '-vf', 'scale=' . $width . ':' . $height . ':flags=lanczos,setsar=1,fps=30' . ($trimFrames ? ',trim=start_frame=' . $trimFrames : '') . ',setpts=PTS-STARTPTS',
+                '-vf', $scale . ',setsar=1,fps=30' . ($trimFrames ? ',trim=start_frame=' . $trimFrames : '') . ',setpts=PTS-STARTPTS',
                 '-af', ($trimFrames ? 'atrim=start=' . sprintf('%.9F', $trimSeconds) . ',' : '') . 'aresample=48000:async=0,asetpts=PTS-STARTPTS', '-r', '30', '-fps_mode', 'cfr',
                 '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-video_track_timescale', '90000',
                 '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-movflags', '+faststart', $path]);
@@ -308,7 +510,7 @@ final class MicroVideoMedia
         if (!str_contains($final['format'], 'mp4') || abs($final['duration'] - $expected) > max(0.3, count($inputs) * 0.12)) throw new RuntimeException('合并视频时长校验失败');
         $path = $workspace . '/merged.mp4';
         if (!rename($partial, $path)) throw new RuntimeException('合并视频发布失败');
-        return ['path' => $path, 'deduplicated_duration' => $removed] + $final;
+        return ['path' => $path, 'deduplicated_duration' => $removed, 'source_has_audio' => $sourceHasAudio] + $final;
     }
 
     private static function repeatedBoundaryFrames(string $previous, string $next): int
@@ -353,9 +555,9 @@ final class MicroVideoMedia
         throw new RuntimeException('未找到视频处理程序：' . $name);
     }
 
-    private static function run(array $command, int $timeout): string
+    private static function run(array $command, int $timeout, ?string $cwd = null): string
     {
-        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, null, ['bypass_shell' => true]);
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd, null, ['bypass_shell' => true]);
         if (!is_resource($process)) throw new RuntimeException('视频处理程序启动失败');
         fclose($pipes[0]); stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);
         $started = microtime(true); $output = ''; $error = ''; $code = -1;

@@ -32,6 +32,10 @@ class UpstreamErrorMessageService
             return self::CLAUDE_CLIENT_RESTRICTED;
         }
 
+        if (preg_match('/点数不足|余额不足|积分不足|insufficient[ _-]*(?:balance|credits?|quota)|(?:balance|credits?)[ _-]*(?:not[ _-]*enough|insufficient)/iu', $code . ' ' . $message)) {
+            return self::withCode($code, '上游服务账户点数不足，请联系管理员补充上游额度后重试');
+        }
+
         if (self::isParameterError($code, $message)) {
             $detail = $message !== '' ? $message : '上游请求参数不正确，请检查模型参数后重试';
             return self::withCode($code, $detail);

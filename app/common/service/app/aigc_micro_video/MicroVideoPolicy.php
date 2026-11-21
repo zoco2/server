@@ -6,6 +6,17 @@ use InvalidArgumentException;
 /** Pure plan, retry and public presentation rules; no model calls or writes. */
 final class MicroVideoPolicy
 {
+    /** Resolve editor mentions against the frozen per-shot attachment order. */
+    public static function audioMentionPrompt(string $prompt, array $audioIds): string
+    {
+        if (!$audioIds || !str_contains($prompt, '@音频「')) return $prompt;
+        $positions = array_flip(array_values($audioIds));
+        return preg_replace_callback('/@音频「([0-9]+)·[^」]*」/u', static function (array $match) use ($positions): string {
+            $id = (int)$match[1];
+            return isset($positions[$id]) ? '@音频' . ($positions[$id] + 1) : $match[0];
+        }, $prompt) ?? $prompt;
+    }
+
     public static function allowedModel(string $id,array $allowed): void
     {
         if($id===''||!in_array($id,$allowed,true))throw new InvalidArgumentException('请选择应用支持的视频模型');
@@ -53,6 +64,59 @@ final class MicroVideoPolicy
         return $out;
     }
 
+    /** Resolve authored shots against the tenant's enabled models and their exact SKUs. */
+    public static function workbenchShots(array $segments, array $models, string $ratio): array
+    {
+        $shots = [];
+        foreach (array_values($segments) as $index => $segment) {
+            $quality = $segment['quality'] ?? '';
+            $height = is_string($quality) ? match (strtolower($quality)) {
+                '2k' => 1440, '4k' => 2160,
+                default => preg_match('/^(\d+)p$/i', $quality, $match) ? (int)$match[1] : 0,
+            } : 0;
+            if ($height < 720) throw new InvalidArgumentException('请为分镜 '.($index + 1).' 选择720P及以上的分辨率');
+            $id = $segment['model_id'] ?? '';
+            $raw = $segment['duration'] ?? null;
+            $duration = (is_int($raw) || is_string($raw)) ? filter_var($raw, FILTER_VALIDATE_INT) : false;
+            if (!is_string($id) || $id === '' || !$duration || $duration < 1) throw new InvalidArgumentException('请为分镜 '.($index + 1).' 选择视频模型和时长');
+            $model = $models[$id] ?? null;
+            if (!$model) throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型暂不可用');
+            try {
+                $spec = MicroVideoCatalog::spec($model, $quality, $ratio, $duration);
+            } catch (InvalidArgumentException $e) {
+                throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型不支持所选分辨率、画幅或时长');
+            }
+            $frames = array_filter($model['start_end_specs'] ?? [], fn($s) => $s['quality'] === $quality && $s['ratio'] === $ratio && $s['duration'] === $duration);
+            $audioIds = $segment['audio_ids'] ?? [];
+            if (!is_array($audioIds) || !array_is_list($audioIds) || count($audioIds) > ($spec['max_reference_audios'] ?? 0)) {
+                throw new InvalidArgumentException('分镜 '.($index + 1).' 的模型或规格不支持所选参考音频');
+            }
+            foreach ($audioIds as $audioId) {
+                if ((!is_int($audioId) && !is_string($audioId)) || !ctype_digit((string)$audioId) || (int)$audioId < 1) throw new InvalidArgumentException('分镜参考音频标识无效');
+            }
+            $audioIds = array_map('intval', $audioIds);
+            if (count($audioIds) !== count(array_unique($audioIds))) throw new InvalidArgumentException('分镜参考音频重复');
+            $shots[] = ['model_id' => $id, 'quality' => $quality, 'duration' => $duration, 'max_reference_images' => $spec['generation_method'] === 'image_to_video' ? 1 : $model['max_reference_images'], 'supports_start_end' => (bool)$frames && !$audioIds] + ($audioIds ? ['audio_ids' => $audioIds] : []);
+        }
+        if (array_sum(array_column($shots, 'duration')) > 600) throw new InvalidArgumentException('分镜总时长不能超过600秒');
+        return $shots;
+    }
+
+    public static function authoredSegments(array $segments, array $shots, int $imageCount): array
+    {
+        if (count($segments) !== count($shots)) throw new InvalidArgumentException('分镜数量已变化，请从项目重新生成方案');
+        $rows = [];
+        foreach (array_values($segments) as $index => $segment) {
+            $shot = $shots[$index];
+            if (isset($segment['model_id']) && $segment['model_id'] !== $shot['model_id']) throw new InvalidArgumentException('分镜模型已变化，请从项目重新生成方案');
+            if (isset($segment['quality']) && $segment['quality'] !== $shot['quality']) throw new InvalidArgumentException('分镜分辨率已变化，请从项目重新生成方案');
+            [$row] = self::segments([$segment], [$shot['duration']], $imageCount, $shot['max_reference_images'], 1);
+            $row['sort'] = $index + 1;
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
     public static function retryIds(array $rows): array
     {
         return array_values(array_map(fn($r)=>(int)$r['id'],array_filter($rows,fn($r)=>($r['status']??'')==='failed')));
@@ -72,6 +136,8 @@ final class MicroVideoPolicy
     }
     public static function stableParams(array $params): array
     {
+        // Post-processing is bound by the execution quote, not the creative draft's idempotency key.
+        unset($params['subtitles_enabled']);
         foreach($params['images']??[] as $i=>$image){unset($image['url']);$params['images'][$i]=$image;}return $params;
     }
 }

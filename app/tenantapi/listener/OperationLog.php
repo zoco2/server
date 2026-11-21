@@ -46,6 +46,16 @@ class OperationLog
         }
 
         $params = $request->param();
+        $controller = strtolower(str_replace('_', '', $request->controller()));
+        $credentialFields = match ($controller) {
+            'smartedit.config' => ['secret_key', 'api_key'],
+            'geo.diagnosisconfig' => ['api_key'],
+            'channel.sharesetting' => ['client_secret', 'app_secret'],
+            default => [],
+        };
+        foreach ($credentialFields as $field) {
+            unset($params[$field]);
+        }
         $isRedeemCard = str_contains(strtolower($request->controller()), 'redeemcard') || str_contains(strtolower($request->controller()), 'redeem_card');
         if ($isRedeemCard) $params = \app\common\service\redeem\RedeemCardPolicy::redact($params);
 
@@ -71,12 +81,24 @@ class OperationLog
         $systemLog->admin_name = $request->adminInfo['name'] ?? '';
         $systemLog->action = $notes;
         $systemLog->account = $request->adminInfo['account'] ?? '';
-        $hasSensitiveQuery = $isRedeemCard || $request->get('password') !== null || $request->get('password_confirm') !== null;
+        $hasSensitiveQuery = $isRedeemCard || $credentialFields || $request->get('password') !== null || $request->get('password_confirm') !== null;
         $systemLog->url = $hasSensitiveQuery ? strtok($request->url(true), '?') : $request->url(true);
         $systemLog->type = $request->isGet() ? 'GET' : 'POST';
         $systemLog->params = json_encode($params, true);
         $systemLog->ip = $request->ip();
         $resultContent = $response->getContent();
+        if ($credentialFields) {
+            $result = json_decode($resultContent, true);
+            if (is_array($result) && is_array($result['data'] ?? null)) {
+                if ($controller === 'channel.sharesetting') {
+                    unset($result['data']['douyin']['client_secret'], $result['data']['xiaohongshu']['app_secret']);
+                }
+                foreach ($credentialFields as $field) {
+                    unset($result['data'][$field]);
+                }
+            }
+            $resultContent = is_array($result) ? json_encode($result, JSON_UNESCAPED_UNICODE) : '';
+        }
         if ($isRedeemCard) {
             $decoded = json_decode($resultContent, true);
             $resultContent = is_array($decoded) ? json_encode(\app\common\service\redeem\RedeemCardPolicy::redact($decoded), JSON_UNESCAPED_UNICODE) : '[REDACTED]';

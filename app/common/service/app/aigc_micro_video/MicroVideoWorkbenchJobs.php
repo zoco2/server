@@ -19,17 +19,22 @@ final class MicroVideoWorkbenchJobs
         if($admin)$d+=['user_id'=>(int)$r['user_id'],'diagnostic'=>MicroVideoWorkbenchRecords::publicBody(['text'=>$r['error']],MicroVideoStore::json($r['request_json']??'{}'))['text']];return $d;
     }
     private static function safeError(array $r): string
-    {if($r['status']==='unknown')return '模型受理或结算状态待核对，请稍后核对，勿重复提交';if(MicroVideoStore::json($r['receipt_json']))return '已保留模型返回结果；内容格式或入库未完成，可核对恢复，无需再次付费';return '准备未完成，请检查模型配置、余额或素材后重新报价';}
+    {
+        if($r['status']==='unknown')return '模型受理或结算状态待核对，请稍后核对，勿重复提交';
+        if(MicroVideoStore::json($r['receipt_json']))return '已保留模型返回结果；内容格式或入库未完成，可核对恢复，无需再次付费';
+        if(stripos((string)($r['error']??''),'AccessDenied.Unpurchased')!==false)return '当前模型未开通上游调用权限，请更换模型或联系管理员开通后重新生成。';
+        return '准备未完成，请检查模型配置、余额或素材后重新报价';
+    }
     public static function lists(int $tenant,int $user,array $p,bool $admin=false): array
     {
         $q=self::table()->where('tenant_id',$tenant);if(!$admin)$q->where('user_id',$user);elseif(!empty($p['user_id']))$q->where('user_id',(int)$p['user_id']);foreach(['project_id','status','idempotency_key'] as $f)if(isset($p[$f])&&$p[$f]!=='')$q->where($f,$p[$f]);
         $page=max(1,(int)($p['page_no']??1));$size=max(1,min(100,(int)($p['page_size']??20)));$count=(clone $q)->count();return ['lists'=>array_map(fn($r)=>self::dto($r,$admin),$q->order('id','desc')->page($page,$size)->select()->toArray()),'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
     }
-    public static function input(int $tenant,int $user,array $p): array
+    public static function input(int $tenant,int $user,array $p,?array $previewBody=null): array
     {
         $project=MicroVideoWorkbenchRecords::owned($tenant,$user,'project',(int)($p['project_id']??0),false,true);MicroVideoWorkbenchPolicy::revision($project,(int)($p['project_revision']??0));
-        $body=MicroVideoWorkbenchPolicy::normalizeValues(MicroVideoStore::json($project['body_json']));$action=MicroVideoWorkbenchPolicy::action((string)($p['action']??''));$selection=(array)($p['selection']??[]);$target=(string)($p['target_id']??'');$instructions=trim((string)($p['instructions']??''));if(mb_strlen($instructions)>5000)throw new InvalidArgumentException('补充要求过长');
-        $request=['project_id'=>(int)$project['id'],'project_revision'=>(int)$project['revision'],'action'=>$action,'target_id'=>$target,'instructions'=>$instructions];
+        $body=MicroVideoWorkbenchPolicy::normalizeValues($previewBody??MicroVideoStore::json($project['body_json']));$action=MicroVideoWorkbenchPolicy::action((string)($p['action']??''));$selection=(array)($p['selection']??[]);$target=(string)($p['target_id']??'');$instructions=trim((string)($p['instructions']??''));if(mb_strlen($instructions)>5000)throw new InvalidArgumentException('补充要求过长');
+        $request=['project_id'=>(int)$project['id'],'project_revision'=>(int)$project['revision'],'action'=>$action,'target_id'=>$target,'instructions'=>$instructions];$previewBasis=null;
         if(str_ends_with($action,'_image')){
             $items=(array)($body[$action==='role_image'?'roles':'scenes']??[]);$key=$action==='role_image'?'role_id':'scene_id';$item=null;foreach($items as $v)if(($v[$key]??'')===$target)$item=$v;if(!$item)throw new InvalidArgumentException('请选择当前项目中的角色或分镜');
             $config=MicroVideoSettings::get($tenant);$model=MicroVideoFrameCatalog::model($tenant,(string)($selection['model_id']??$config['default_frame_model_id']));if(!in_array($model['id'],(array)$config['frame_model_ids'],true))throw new InvalidArgumentException('请先在应用配置开放此图片模型');
@@ -45,14 +50,29 @@ final class MicroVideoWorkbenchJobs
             $config=MicroVideoSettings::get($tenant);$modelId=(string)($selection['model_id']??$config['script_model_id']);if($modelId==='')throw new InvalidArgumentException('请先在应用配置选择剧本规划模型');$model=Text::resolveModel($tenant,$modelId);$selection=['model_id'=>$model['id']];
             $request['continuity']=(string)($body['script']['continuity']??$body['template_snapshot']['body']['reference_rules']??MicroVideoSettings::defaults()['continuity_template']);
             $planning=null;
-            if($action==='rewrite'&&!empty($body['model_id'])){$f=MicroVideoService::form($tenant,$user,['model_id'=>$body['model_id'],'quality'=>$body['quality']??$config['default_quality'],'ratio'=>$body['ratio']??'9:16','target_duration'=>$body['target_duration']??$body['brief']['target_duration']??30,'mode'=>'prompt','prompt'=>(string)($body['script']['text']??'')],false,MicroVideoService::workbenchTargetDurations($body));$planning=MicroVideoContentPlanning::contract($f['params'],array_column(MicroVideoCatalog::specs($f['model'],$f['params']['quality'],$f['params']['ratio']),'duration'),(int)$config['max_segments'],3);$request['planning_contract']=$planning;$request['video_reference_limit']=(int)$f['model']['max_reference_images'];}
+            if ($action === 'rewrite' && !empty($body['script']['segments'])) {
+                $shots = MicroVideoService::workbenchShots($tenant, $body['script']['segments'], $body['ratio'], $config);
+                $durations = array_column($shots, 'duration');
+                $planning = ['target_duration' => array_sum($durations), 'segment_durations' => $durations, 'allowed_durations' => array_values(array_unique($durations)), 'required_total_duration' => array_sum($durations), 'max_total_duration' => 600, 'max_segments' => $config['max_segments'], 'source_timeline' => []];
+                $request['planning_contract'] = $planning;
+                $request['video_reference_limit'] = max(array_column($shots, 'max_reference_images'));
+                $request['shots'] = $shots;
+            } elseif($action==='rewrite'&&!empty($body['model_id'])){$f=MicroVideoService::form($tenant,$user,['model_id'=>$body['model_id'],'quality'=>$body['quality']??$config['default_quality'],'ratio'=>$body['ratio']??'9:16','target_duration'=>$body['target_duration']??$body['brief']['target_duration']??30,'mode'=>'prompt','prompt'=>(string)($body['script']['text']??'')],false,MicroVideoService::workbenchTargetDurations($body));$planning=MicroVideoContentPlanning::contract($f['params'],array_column(MicroVideoCatalog::specs($f['model'],$f['params']['quality'],$f['params']['ratio']),'duration'),(int)$config['max_segments'],3);$request['planning_contract']=$planning;$request['video_reference_limit']=(int)$f['model']['max_reference_images'];}
             $request+=['selection'=>$selection,'content'=>MicroVideoStore::encode(['project'=>MicroVideoWorkbenchRecords::publicBody($body),'instructions'=>$instructions,'planning_contract'=>$planning,'continuity_constraint'=>$request['continuity']]),'system'=>self::system($action,$body).($planning?'必须严格使用planning_contract.segment_durations给出的生成段数和时长，段内镜头不拆成独立生成段。':'')];
             $input=Text::estimateTokens($request['content'].$request['system']);$output=8000;$quote=['tenant_cost_points'=>0.,'user_charge_points'=>0.,'approximate'=>true,'price_identity'=>['model_id'=>$model['id'],'input'=>$model['input'],'output'=>$model['output']]];
             foreach(['input'=>$input,'output'=>$output] as $side=>$tokens){$sku=$model[$side];$quote['tenant_cost_points']+=$tokens*(float)$sku['platform_price']/Usage::unitSize($sku);$quote['user_charge_points']+=$tokens*(float)$sku['tenant_price']/Usage::unitSize($sku);}
             $quote['tenant_cost_points']=round($quote['tenant_cost_points'],6);$quote['user_charge_points']=round($quote['user_charge_points'],6);
+            // Display-only sale-price basis for the same draft and text model. It exposes
+            // neither internal prompts nor upstream costs, and is never an admission token.
+            if($previewBody!==null&&$action==='rewrite')$previewBasis=[
+                'base_input_characters'=>mb_strlen($request['content'].$request['system'],'UTF-8')-mb_strlen(MicroVideoStore::encode($instructions),'UTF-8'),
+                'input_token_price'=>(float)$model['input']['tenant_price'],
+                'input_unit_size'=>Usage::unitSize($model['input']),
+                'output_points'=>$output*(float)$model['output']['tenant_price']/Usage::unitSize($model['output'])
+            ];
         }
         // Fingerprint contains the actual, frozen project snapshot and exact action parameters.
-        $request['snapshot']=$body;$request['quote']=$quote;return ['project'=>$project,'request'=>$request,'quote'=>$quote,'hash'=>MicroVideoWorkbenchPolicy::hash($request)];
+        $request['snapshot']=$body;$request['quote']=$quote;return ['project'=>$project,'request'=>$request,'quote'=>$quote,'hash'=>MicroVideoWorkbenchPolicy::hash($request),'preview_basis'=>$previewBasis];
     }
     public static function uniqueImages(array $images): array
     {$out=[];$seen=[];foreach($images as $image){$uri=(string)($image['uri']??$image['url']??'');if($uri!==''&&!isset($seen[$uri])){$out[]=$image;$seen[$uri]=true;}}return $out;}
@@ -67,6 +87,14 @@ final class MicroVideoWorkbenchJobs
     }
     public static function estimate(int $tenant,int $user,array $p): array
     {
+        if(array_key_exists('preview_body',$p)){
+            MicroVideoService::available($tenant);
+            if(($p['action']??'')!=='rewrite'||!is_array($p['preview_body'])||strlen(MicroVideoStore::encode($p['preview_body']))>1000000)throw new InvalidArgumentException('剧本费用预览资料无效');
+            // Draft previews only calculate a price. No version, quote or paid job is created.
+            // create() never accepts preview_body; paid requests use the saved, owned snapshot.
+            $i=self::input($tenant,$user,$p,$p['preview_body']);
+            return ['quote_token'=>'','expires_at'=>time()+600,'project_revision'=>(int)$i['project']['revision'],'action'=>'rewrite','quantity'=>1,'user_charge_points'=>(float)$i['quote']['user_charge_points'],'approximate'=>true,'notice'=>'预计点数，最终按模型实际用量结算','pricing_basis'=>$i['preview_basis']];
+        }
         MicroVideoService::available($tenant);$i=self::input($tenant,$user,$p);$token=bin2hex(random_bytes(24));$expires=time()+600;self::table('quote')->insert(['tenant_id'=>$tenant,'user_id'=>$user,'project_id'=>$i['project']['id'],'project_revision'=>$i['project']['revision'],'token'=>$token,'action'=>$i['request']['action'],'input_hash'=>$i['hash'],'quote_json'=>MicroVideoStore::encode($i['quote']),'request_json'=>MicroVideoStore::encode($i['request']),'expires_at'=>$expires,'create_time'=>time()]);
         return ['quote_token'=>$token,'expires_at'=>$expires,'project_revision'=>(int)$i['project']['revision'],'action'=>$i['request']['action'],'quantity'=>1,'user_charge_points'=>(float)$i['quote']['user_charge_points'],'approximate'=>(bool)$i['quote']['approximate'],'notice'=>$i['quote']['approximate']?'文本费用为用量估算，最终按模型实际用量结算':'本次仅生成所选一张图片'];
     }

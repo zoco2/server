@@ -83,25 +83,27 @@ final class MicroVideoWorker
         if($blocked){MicroVideoStore::update((int)$task['id'],['status'=>'waiting_continue','error'=>$blocked[0]['error']?:'部分片段未完成，请核对后继续']);return;}
         MicroVideoStore::update((int)$task['id'],['status'=>'merging','merge_status'=>'running']);
         try{
-            $result=MicroVideoMedia::merge($task,$segments);
+            $result=MicroVideoSubtitles::enabled($task)?MicroVideoSubtitles::process($task,$segments):MicroVideoMedia::merge($task,$segments);
             MicroVideoStore::update((int)$task['id'],['status'=>'success','merge_status'=>'success','result_uri'=>$result['uri'],'cover_uri'=>$result['cover_uri']??'','actual_duration'=>$result['duration'],'storage_scope'=>$result['storage_scope'],'storage_engine'=>$result['storage_engine'],'storage_domain'=>$result['storage_domain'],'error'=>'']);
         }catch(\Throwable $e){MicroVideoStore::update((int)$task['id'],['merge_status'=>'failed']);throw $e;}
     }
     private static function segment(array $task,array $segment): void
     {
-        $tenant=(int)$task['tenant_id'];$user=(int)$task['user_id'];$p=MicroVideoStore::json($task['params_json']);$config=MicroVideoStore::json($task['config_snapshot']);$model=MicroVideoStore::json($task['model_snapshot']);$now=time();
+        $tenant=(int)$task['tenant_id'];$user=(int)$task['user_id'];$p=MicroVideoStore::json($task['params_json']);$config=MicroVideoStore::json($task['config_snapshot']);$now=time();
         $attempt=null;
         try{
             if((int)$segment['attempt_id']>0)$attempt=MicroVideoStore::table('attempt')->where('id',$segment['attempt_id'])->find();
             if($segment['status']==='pending'){
                 MicroVideoService::available($tenant);
                 $images=MicroVideoMedia::validateImages($tenant,$user,$p['images'],(int)$config['max_images']);$indices=MicroVideoStore::json($segment['image_indices']);$selected=array_map(fn($index)=>$images[$index],$indices);
-                $mode=$task['generation_mode']??'reference';$spec=MicroVideoCatalog::spec($model,$p['quality'],$p['ratio'],(int)$segment['duration'],$mode);
+                $mode=$task['generation_mode']??'reference';
                 $frozen=MicroVideoStore::json($task['confirmed_quote'])['segments'][(string)$segment['id']]??null;if(!$frozen)throw new RuntimeException('当前片段缺少已确认报价，请重新确认费用');
                 if($mode==='start_end'){$selected=[];foreach(['first_frame_id','last_frame_id'] as $key){$f=MicroVideoStore::table('frame')->where(['id'=>(int)$segment[$key],'task_id'=>$task['id'],'tenant_id'=>$tenant,'user_id'=>$user,'status'=>'success','confirmed'=>1])->find();if(!$f)throw new RuntimeException('已确认首尾帧不存在');$selected[]=MicroVideoMedia::validateImages($tenant,$user,[['uri'=>$f['image_uri']]],1)[0];}}
                 // Capture references as actual bytes/public storage URLs, not browser localhost URLs.
-                $uris=MicroVideoMedia::visionInputs($selected);$assets=MicroVideoFramePolicy::assets($mode,$uris,$spec['generation_method']);
-                $request=$frozen['selection']+['model_id'=>$p['model_id'],'channel'=>$p['model_id'],'resolution'=>$p['quality'],'quantity'=>1,'prompt'=>self::segmentPrompt($task,$segment),'reference_images'=>$uris,'reference_assets'=>$assets];
+                $uris=MicroVideoMedia::visionInputs($selected);$assets=MicroVideoFramePolicy::assets($mode,$uris,$frozen['selection']['generation_method']);
+                $audioIds = $p['shots'][(int)$segment['sort'] - 1]['audio_ids'] ?? [];
+                $assets = array_merge($assets, MicroVideoMedia::referenceAudios($tenant, $user, $audioIds, true));
+                $request=$frozen['selection']+['quantity'=>1,'prompt'=>MicroVideoPolicy::audioMentionPrompt(self::segmentPrompt($task,$segment), $audioIds),'reference_images'=>$uris,'reference_assets'=>$assets];
                 $attempt=Db::transaction(function()use($task,$segment,$request,$tenant,$user,$frozen,$mode){
                     $current=MicroVideoStore::table('segment')->where(['id'=>$segment['id'],'task_id'=>$task['id']])->lock(true)->find();if($current['status']!=='pending')return null;
                     $no=(int)$current['attempt_no']+1;$id=MicroVideoStore::table('attempt')->insertGetId(['tenant_id'=>$tenant,'user_id'=>$user,'task_id'=>$task['id'],'segment_id'=>$segment['id'],'kind'=>'video','attempt_no'=>$no,'status'=>'prepared','request_json'=>MicroVideoStore::encode(['selection'=>$frozen['selection'],'request'=>$request,'generation_mode'=>$mode,'frame_ids'=>$mode==='start_end'?[(int)$segment['first_frame_id'],(int)$segment['last_frame_id']]:[]]),'result_json'=>'{}','user_charge_points'=>$frozen['user_charge_points'],'create_time'=>time(),'update_time'=>time()]);

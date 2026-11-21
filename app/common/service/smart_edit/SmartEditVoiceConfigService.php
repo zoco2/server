@@ -116,13 +116,12 @@ class SmartEditVoiceConfigService
     }
 
     /**
-     * 前端回显：API Key 不回明文，只说有没有配。
+     * 租户后台配置表单回显。
      */
     public static function forDisplay(int $tenantId): array
     {
         $config = self::get($tenantId);
-        $config['api_key'] = '';
-        $config['api_key_set'] = self::get($tenantId)['api_key'] !== '';
+        $config['api_key_set'] = $config['api_key'] !== '';
         return $config;
     }
 }

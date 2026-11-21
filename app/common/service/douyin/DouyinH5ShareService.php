@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace app\common\service\douyin;
 
+use app\common\service\share\ShareServiceException;
+use app\common\service\share\TenantShareConfigService;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use InvalidArgumentException;
 use JsonException;
-use RuntimeException;
 use think\cache\Driver;
 use think\facade\Cache;
 
@@ -22,17 +23,27 @@ final class DouyinH5ShareService
 
     public function __construct(?array $config = null, ?ClientInterface $http = null, ?Driver $cache = null)
     {
-        $config ??= config('douyin', []);
+        if ($config === null) {
+            $tenantId = (int)(request()->tenantId ?? 0);
+            $config = $tenantId > 0
+                ? (new TenantShareConfigService($tenantId))->runtime('douyin')
+                : config('douyin', []);
+        }
         $this->clientKey = trim((string)($config['client_key'] ?? ''));
         $this->clientSecret = trim((string)($config['client_secret'] ?? ''));
         if ($this->clientKey === '' || $this->clientSecret === '') {
-            throw new RuntimeException('请先配置抖音网站应用的 client_key 和 client_secret');
+            throw new ShareServiceException('请先配置抖音网站应用的 client_key 和 client_secret');
         }
         $this->http = $http ?? new Client();
         $store = trim((string)($config['cache_store'] ?? ''));
         $this->credentials = new DouyinCredentialCache(
             $cache ?? Cache::store($store === '' ? null : $store), $this->clientKey, $this->clientSecret
         );
+    }
+
+    public static function forTenant(int $tenantId, ?ClientInterface $http = null, ?Driver $cache = null): self
+    {
+        return new self((new TenantShareConfigService($tenantId))->runtime('douyin'), $http, $cache);
     }
 
     /**
@@ -90,7 +101,7 @@ final class DouyinH5ShareService
                     $data = $this->request('GET', '/open/getticket/', [
                         'headers' => ['access-token' => $token['value']],
                     ]);
-                } catch (RuntimeException $error) {
+                } catch (ShareServiceException $error) {
                     if (!in_array($error->getCode(), [2190002, 2190008], true)) {
                         throw $error;
                     }
@@ -104,7 +115,7 @@ final class DouyinH5ShareService
                 $this->credentials->set('open_ticket', $entry);
                 return $entry;
             }
-            throw new RuntimeException('获取抖音 open_ticket 失败');
+            throw new ShareServiceException('获取抖音 open_ticket 失败');
         });
     }
 
@@ -131,7 +142,7 @@ final class DouyinH5ShareService
     {
         $expires = filter_var($data['expires_in'] ?? null, FILTER_VALIDATE_INT);
         if (!is_string($data[$field] ?? null) || trim($data[$field]) === '' || $expires === false || $expires <= 0) {
-            throw new RuntimeException('抖音返回的凭据或有效期无效');
+            throw new ShareServiceException('抖音返回的凭据或有效期无效');
         }
         // 严格使用接口有效期，短 TTL 不得被最小缓存时长延长。
         $margin = min(120, (int)floor($expires / 10));
@@ -146,27 +157,33 @@ final class DouyinH5ShareService
             $response = $this->http->request($method, 'https://open.douyin.com' . $path, $options);
         } catch (\Throwable) {
             // 不传播携带请求体、token 或 client_secret 的底层异常。
-            throw new RuntimeException('抖音服务连接失败，请稍后重试');
+            throw new ShareServiceException('抖音服务连接失败，请稍后重试');
         }
         if ($response->getStatusCode() !== 200) {
-            throw new RuntimeException('抖音服务 HTTP 异常（' . $response->getStatusCode() . '）');
+            throw new ShareServiceException('抖音服务 HTTP 异常（' . $response->getStatusCode() . '）');
         }
         try {
             $body = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException) {
-            throw new RuntimeException('抖音服务返回的数据格式无效');
+            throw new ShareServiceException('抖音服务返回的数据格式无效');
         }
         $data = is_array($body) ? ($body['data'] ?? null) : null;
         if (!is_array($data) || !array_key_exists('error_code', $data)) {
-            throw new RuntimeException('抖音服务返回的数据结构无效');
+            throw new ShareServiceException('抖音服务返回的数据结构无效');
         }
         $code = filter_var($data['error_code'], FILTER_VALIDATE_INT);
         if ($code === false) {
-            throw new RuntimeException('抖音服务返回的错误码无效');
+            throw new ShareServiceException('抖音服务返回的错误码无效');
         }
         if ($code !== 0) {
             // 保留错误码用于排查，不透传可能包含凭据的 description 或原始响应。
-            throw new RuntimeException('抖音接口调用失败（错误码 ' . $code . '）', $code);
+            $message = match (true) {
+                in_array($code, [10003, 10013], true) => '抖音未接受应用凭据，请管理员核对 Client Key 和 Client Secret',
+                $path === '/open/getticket/' && $code === 2190004 => '抖音拒绝签发分享票据，请管理员检查网站应用的 open.get.ticket 权限',
+                $path === '/open/getticket/' => '获取抖音分享票据失败',
+                default => '获取抖音应用凭证失败',
+            };
+            throw new ShareServiceException($message . '（错误码 ' . $code . '）', $code);
         }
         return $data;
     }
