@@ -49,7 +49,7 @@ class AdminTaskController extends BaseAdminController
     {
         try {
             $task = $this->findTask((int)$this->request->post('id', 0));
-            // 后台删除也走剪辑删除入口，在途成片先退点再软删除。
+            // 后台删除也走剪辑删除入口，成片结束后统一结算本次预占。
             SmartEditService::delete((int)$task['tenant_id'], (int)$task['user_id'], (int)$task['id']);
             return $this->success('删除成功', [], 1, 1);
         } catch (Exception $e) {

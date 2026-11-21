@@ -56,7 +56,7 @@ class SmartEditSubmitJob extends Job
                 Log::channel('mns')->warning('[smart_edit] submit job skipped, task not found id=' . $taskId);
                 continue;
             }
-            // 手动重试会增加扣点轮次。即使状态再次变为提交中，旧消息也要跳过。
+            // 手动重试会更新预占轮次，旧消息即使看到「提交中」也要跳过。
             if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
                 || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 Log::channel('mns')->info(sprintf(
@@ -77,6 +77,16 @@ class SmartEditSubmitJob extends Job
                 continue;
             }
 
+            if ((array)$task['timeline_json'] === []) {
+                SmartEditBillingService::fail($task, [
+                    'status' => SmartEditTask::STATUS_FAILED,
+                    'error_code' => 'TIMELINE_MISSING',
+                    'error_message' => '任务参数缺失，无法提交',
+                    'finish_time' => time(),
+                    'update_time' => time(),
+                ]);
+                continue;
+            }
             SmartEditBillingService::withCurrentTask($task, function ($locked) use (&$failedTaskIds, $taskId) {
                 if (!$this->submitOne($locked)) {
                     $failedTaskIds[] = $taskId;
@@ -98,17 +108,6 @@ class SmartEditSubmitJob extends Job
     private function submitOne(SmartEditTask $task): bool
     {
         $timeline = (array)$task['timeline_json'];
-        if ($timeline === []) {
-            SmartEditBillingService::fail($task, [
-                'status' => SmartEditTask::STATUS_FAILED,
-                'error_code' => 'TIMELINE_MISSING',
-                'error_message' => '任务参数缺失，无法提交',
-                'finish_time' => time(),
-                'update_time' => time(),
-            ]);
-            return true;
-        }
-
         try {
             $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
             $params = (array)$task['params_json'];
@@ -165,7 +164,7 @@ class SmartEditSubmitJob extends Job
             self::MAX_ATTEMPTS
         ));
 
-        // 队列重投仍属同一次扣点，保留原轮次。耗尽重投机会才走失败退款。
+        // 队列重投仍属于同一轮预占，耗尽重投机会才标记失败。
         if ($nextAttempt < self::MAX_ATTEMPTS && $tenantId > 0) {
             try {
                 self::dispatch(
@@ -189,7 +188,7 @@ class SmartEditSubmitJob extends Job
             if ($task->isEmpty()) {
                 continue;
             }
-            // 只处理当前轮次仍在提交的任务，避免迟到的失败消息触发退款。
+            // 只处理当前轮次仍在提交的任务，避免旧消息结算下一轮。
             if ((string)$task['status'] !== SmartEditTask::STATUS_SUBMITTING
                 || SmartEditBillingService::attempt($task) !== (int)($this->data['billing_attempt'] ?? 0)) {
                 continue;

@@ -76,24 +76,28 @@ class SmartEditGroupService
         // 不把问题留给后台展开任务。
         SmartEditService::assertSharedResolvable($tenantId, $shared);
 
-        // 组任务异步展开，先把确认的单价存入组配置，途中改价也按原单价计。
-        $shared['unit_points'] = SmartEditBillingService::quote($tenantId, $userId, $comboCount, $params);
+        // 组合数已确定，提交时按总条数预占并保存本次单价。
+        $shared['unit_points'] = SmartEditBillingService::quote($params);
+        $shared['reserved_points'] = $shared['unit_points'] * $comboCount;
         $batchNo = self::newBatchNo();
         // 选了配音演员的组先进「配音中」：口播是整组共用的，必须展开成任务前生成完，
         // 否则每条成片都会各自合成一遍。没选演员的组沿用旧流程直接展开。
         $hasDubbing = !empty($shared['voices']);
-        $group = SmartEditGroup::create([
-            'tenant_id' => $tenantId,
-            'user_id' => $userId,
-            'batch_no' => $batchNo,
-            'title' => $title,
-            'shots_json' => $shots,
-            'config_json' => $shared,
-            'combo_count' => $comboCount,
-            'status' => $hasDubbing ? SmartEditGroup::STATUS_DUBBING : SmartEditGroup::STATUS_EXPANDING,
-            'create_time' => time(),
-            'update_time' => time(),
-        ]);
+        $group = Db::transaction(static function () use ($tenantId, $userId, $batchNo, $title, $shots, $shared, $comboCount, $hasDubbing) {
+            SmartEditBillingService::reserve($tenantId, $userId, $shared['unit_points'], $comboCount, $batchNo);
+            return SmartEditGroup::create([
+                'tenant_id' => $tenantId,
+                'user_id' => $userId,
+                'batch_no' => $batchNo,
+                'title' => $title,
+                'shots_json' => $shots,
+                'config_json' => $shared,
+                'combo_count' => $comboCount,
+                'status' => $hasDubbing ? SmartEditGroup::STATUS_DUBBING : SmartEditGroup::STATUS_EXPANDING,
+                'create_time' => time(),
+                'update_time' => time(),
+            ]);
+        });
 
         try {
             if ($hasDubbing) {
@@ -116,15 +120,30 @@ class SmartEditGroupService
                 $tenantId,
                 $e->getMessage()
             ));
-            SmartEditGroup::where('id', (int)$group['id'])->where('status', (string)$group['status'])->update([
-                'status' => SmartEditGroup::STATUS_FAILED,
-                'error_code' => 'DISPATCH_FAILED',
-                'error_message' => mb_substr('任务投递失败：' . $e->getMessage(), 0, 480),
-                'update_time' => time(),
-            ]);
+            self::failPending($group, 'DISPATCH_FAILED', '任务投递失败：' . $e->getMessage());
         }
 
         return self::formatGroup($group->refresh()->toArray());
+    }
+
+    /** 配音或展开前失败，没有成片可计费，只释放整组预占。 */
+    public static function failPending(SmartEditGroup $expected, string $code, string $message): void
+    {
+        Db::transaction(static function () use ($expected, $code, $message) {
+            $group = SmartEditGroup::where(['id' => (int)$expected['id'], 'tenant_id' => (int)$expected['tenant_id']])
+                ->lock(true)->findOrEmpty();
+            if ($group->isEmpty() || $group['status'] !== $expected['status']
+                || !in_array((string)$group['status'], SmartEditGroup::RUNNING_STATUSES, true)) {
+                return;
+            }
+            SmartEditBillingService::settleGroup($group, 0);
+            $group->save([
+                'status' => SmartEditGroup::STATUS_FAILED,
+                'error_code' => $code,
+                'error_message' => mb_substr($message, 0, 480),
+                'update_time' => time(),
+            ]);
+        });
     }
 
     /**
@@ -225,6 +244,9 @@ class SmartEditGroupService
                 ->where('batch_no', $batchNo)->order('id')->column('id');
             foreach ($ids as $id) {
                 SmartEditService::delete($tenantId, $userId, (int)$id);
+            }
+            if (in_array((string)$group['status'], SmartEditGroup::RUNNING_STATUSES, true)) {
+                SmartEditBillingService::settleGroup($group, 0);
             }
             $group->delete();
         });

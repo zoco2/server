@@ -14,7 +14,11 @@ namespace app\common\service\mq {
 namespace app\common\service\smart_edit {
     class SmartEditImsConfigService
     {
-        public static function require(int $tenant): array { return ['region' => 'fixture', 'domain' => 'example.test']; }
+        public static function require(int $tenant): array { return ['region' => 'fixture', 'domain' => 'example.test', 'access_key' => 'fixture', 'secret_key' => 'fixture']; }
+    }
+    class ImsClient
+    {
+        public function getJob(string $id): array { return ['status' => 'success', 'duration' => 3.0]; }
     }
     class SmartEditMaterialService
     {
@@ -39,6 +43,7 @@ namespace think\facade {
 namespace {
     use app\common\enum\AdminTerminalEnum;
     use app\common\job\SmartEditGroupExpandJob;
+    use app\common\model\smart_edit\SmartEditGroup as Group;
     use app\common\model\smart_edit\SmartEditTask as Task;
     use app\common\service\smart_edit\SmartEditBillingService as Billing;
     use app\common\service\smart_edit\SmartEditGroupService as Groups;
@@ -71,7 +76,7 @@ namespace {
     Model::setDb($app->make('db'));
     Model::maker(static fn(Model $model) => $model->setDateFormat('Y-m-d H:i:s'));
     $schema = file_get_contents($root . '/public/install/db/like.sql');
-    foreach (['smart_edit_task', 'smart_edit_task_item', 'smart_edit_group', 'user', 'user_account_log'] as $table) {
+    foreach (['smart_edit_task', 'smart_edit_task_item', 'smart_edit_group', 'tenant_file', 'user', 'user_account_log'] as $table) {
         $pattern = '/CREATE TABLE (?:IF NOT EXISTS )?`la_' . $table . '`\s*\((.*?)\)\s*ENGINE/is';
         check((bool)preg_match($pattern, $schema, $match), "Missing installation table $table");
         preg_match_all('/^\s*`(\w+)`\s+(\w+)/m', $match[1], $columns, PREG_SET_ORDER);
@@ -114,16 +119,23 @@ namespace {
     balance(100);
 
     // A 2 x 3 group takes its original five-point quote into the expansion worker.
-    $group = Groups::create(3, 8, ['expected_unit_points' => 5, 'shots' => [
+    $groupInput = ['expected_unit_points' => 5, 'shots' => [
         ['videos' => $clips], ['videos' => [...$clips, ['uri' => 'c.mp4', 'out' => 4]]],
-    ]]);
+    ]];
+    Db::name('user')->where('id', 8)->update(['user_money' => 29]);
+    try {
+        Groups::create(3, 8, $groupInput);
+        throw new LogicException('Underfunded group started');
+    } catch (RuntimeException $e) {
+        check(str_contains($e->getMessage(), '不足'), $e->getMessage());
+    }
+    check(Group::count() === 0, 'Insufficient balance created a group');
+    balance(29);
+    Db::name('user')->where('id', 8)->update(['user_money' => 100]);
+    $group = Groups::create(3, 8, $groupInput);
+    balance(70);
     $job = new SmartEditGroupExpandJob(['batch_no' => $group['batch_no']]);
     Db::name('tenant_config')->where('name', 'settings')->update(['value' => '{"smart_edit_points":9}']);
-    Db::name('user')->where('id', 8)->update(['user_money' => 29]);
-    $job->handle();
-    balance(29);
-    check(Task::where('batch_no', $group['batch_no'])->count() === 0, 'Underfunded group left partial tasks');
-    Db::name('user')->where('id', 8)->update(['user_money' => 100]);
     $job->handle();
     $job->handle();
     balance(70);
@@ -139,12 +151,29 @@ namespace {
     request()->source = null;
     Tasks::refresh((int)$ids[0]);
     Tasks::refresh((int)$ids[0]);
-    balance(75);
+    balance(70);
+    Task::where('id', $ids[1])->update(['status' => Task::STATUS_PROCESSING, 'provider_job_id' => 'success-job']);
+    Tasks::refresh((int)$ids[1]);
+    check((int)Task::find($ids[1])['user_charge_points'] === 0, 'Settled before the group completed');
+    balance(70);
     request()->tenantId = 3;
     request()->source = AdminTerminalEnum::USER;
-    Task::where('id', $ids[1])->update(['status' => Task::STATUS_SUCCESS]);
+    foreach (array_slice($ids, 2) as $id) {
+        Tasks::cancel(3, 8, (int)$id);
+    }
+    balance(95);
+    check((int)Task::find($ids[1])['user_charge_points'] === 5, 'Settled amount should use the original unit price');
+    $settled = Group::where('batch_no', $group['batch_no'])->findOrFail()['config_json'];
+    check($settled['reserved_points'] === 0 && $settled['settled_points'] === 5, 'Group did not settle exactly once');
     Groups::delete(3, 8, $group['batch_no']);
     balance(95);
-    check(Db::name('user_account_log')->count() === 10, 'Unexpected number of charges or refunds');
-    echo "PASS smart-edit price snapshot, retry isolation, batch rollback, worker timeout and partial refund\n";
+    check(Db::name('user_account_log')->count() === 6, 'Group should have a single final settlement');
+
+    $pending = Groups::create(3, 8, array_replace($groupInput, ['expected_unit_points' => 9]));
+    $pendingGroup = Group::where('batch_no', $pending['batch_no'])->findOrFail();
+    balance(41);
+    Groups::failPending($pendingGroup, 'DUBBING_FAILED', 'fixture');
+    Groups::failPending($pendingGroup, 'DUBBING_FAILED', 'duplicate');
+    balance(95);
+    echo "PASS smart-edit reservations, terminal group settlement, retry, timeout and early failure\n";
 }

@@ -4,6 +4,7 @@ namespace app\common\job;
 
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\service\smart_edit\SmartEditDubbingService;
+use app\common\service\smart_edit\SmartEditGroupService;
 use think\facade\Log;
 
 /**
@@ -96,14 +97,24 @@ class SmartEditDubbingJob extends Job
             return;
         }
 
-        // 配音完成，转入展开
-        $group->save([
-            'status' => SmartEditGroup::STATUS_EXPANDING,
-            'error_code' => '',
-            'error_message' => '',
-            'update_time' => time(),
-        ]);
-        SmartEditGroupExpandJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+        // 配音过程中组可能已经删除或失败，只有当前状态仍在配音才能进入展开。
+        $changed = SmartEditGroup::where(['id' => (int)$group['id'], 'tenant_id' => $tenantId])
+            ->where('status', SmartEditGroup::STATUS_DUBBING)->update([
+                'status' => SmartEditGroup::STATUS_EXPANDING,
+                'error_code' => '',
+                'error_message' => '',
+                'update_time' => time(),
+            ]);
+        if (!$changed) {
+            return;
+        }
+        try {
+            SmartEditGroupExpandJob::dispatch(['batch_no' => $batchNo], 0, '', $tenantId);
+        } catch (\Throwable $e) {
+            $group['status'] = SmartEditGroup::STATUS_EXPANDING;
+            SmartEditGroupService::failPending($group, 'DISPATCH_FAILED', '任务投递失败：' . $e->getMessage());
+            return;
+        }
 
         Log::channel('mns')->info('[smart_edit] dubbing done, expand dispatched batch=' . $batchNo);
     }
@@ -131,11 +142,6 @@ class SmartEditDubbingJob extends Job
             }
         }
 
-        $group->save([
-            'status' => SmartEditGroup::STATUS_FAILED,
-            'error_code' => 'DUBBING_FAILED',
-            'error_message' => mb_substr('配音生成失败：' . $e->getMessage(), 0, 480),
-            'update_time' => time(),
-        ]);
+        SmartEditGroupService::failPending($group, 'DUBBING_FAILED', '配音生成失败：' . $e->getMessage());
     }
 }

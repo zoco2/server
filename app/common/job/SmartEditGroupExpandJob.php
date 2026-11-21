@@ -63,7 +63,7 @@ class SmartEditGroupExpandJob extends Job
         ));
 
         try {
-            // 锁组后再展开。重复投递只处理一次，余额不足时整批新任务一起回滚。
+            // 锁组后再展开，确保一份预占只对应一组子任务。
             $taskIds = Db::transaction(function () use ($tenantId, $batchNo) {
                 $locked = SmartEditGroup::where('tenant_id', $tenantId)->where('batch_no', $batchNo)
                     ->lock(true)->findOrEmpty();
@@ -150,11 +150,10 @@ class SmartEditGroupExpandJob extends Job
         $userId = (int)$group['user_id'];
 
         $combos = SmartEditGroupService::expandShots($shots);
-        // 已展开的组合包含软删除记录，重投时跳过建单和扣点。
+        // 已展开的组合包含软删除记录，重投时跳过建单。
         $existing = SmartEditTask::withTrashed()->where('tenant_id', $tenantId)->where('batch_no', $batchNo)
             ->column('id', 'combo_index');
         $taskIds = [];
-        $newCount = 0;
         foreach ($combos as $index => $clips) {
             $comboIndex = $index + 1;
             if (isset($existing[$comboIndex])) {
@@ -183,7 +182,6 @@ class SmartEditGroupExpandJob extends Job
                 ));
                 throw $e;
             }
-            $newCount++;
             $taskIds[] = (int)$task['id'];
         }
         Log::channel('mns')->info(sprintf(
@@ -191,7 +189,6 @@ class SmartEditGroupExpandJob extends Job
             $batchNo,
             count($taskIds)
         ));
-        SmartEditBillingService::charge($tenantId, $userId, (int)($shared['unit_points'] ?? 0), $newCount, $batchNo);
         return $taskIds;
     }
 
@@ -225,11 +222,6 @@ class SmartEditGroupExpandJob extends Job
             }
         }
 
-        SmartEditGroup::where('id', (int)$group['id'])->where('status', SmartEditGroup::STATUS_EXPANDING)->update([
-            'status' => SmartEditGroup::STATUS_FAILED,
-            'error_code' => 'EXPAND_FAILED',
-            'error_message' => mb_substr('生成任务失败：' . $e->getMessage(), 0, 480),
-            'update_time' => time(),
-        ]);
+        SmartEditGroupService::failPending($group, 'EXPAND_FAILED', '生成任务失败：' . $e->getMessage());
     }
 }
