@@ -3,6 +3,7 @@
 namespace app\common\command;
 
 use app\common\service\geo\GeoDiagnosisService;
+use app\common\service\pricing\BillingTenantScope;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Option;
@@ -29,7 +30,15 @@ class GeoDiagPoll extends Command
             $output->writeln('<info>开始同步GEO诊断...</info>');
         }
         try {
-            $stat = GeoDiagnosisService::syncDue($limit);
+            $stat = ['checked' => 0, 'completed' => 0, 'failed' => 0];
+            BillingTenantScope::each('geo_diag_batch', static function () use (&$stat, $limit): void {
+                $remaining = $limit - $stat['checked'];
+                if ($remaining > 0) {
+                    foreach (GeoDiagnosisService::syncDue($remaining) as $key => $count) {
+                        $stat[$key] += $count;
+                    }
+                }
+            });
             if (!$quiet) {
                 $output->writeln(sprintf('<info>同步完成：检查 %d 个，完成/变化 %d 个，失败 %d 个</info>', $stat['checked'], $stat['completed'], $stat['failed']));
             }

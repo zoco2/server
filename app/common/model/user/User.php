@@ -17,7 +17,7 @@ namespace app\common\model\user;
 
 
 use app\common\enum\user\UserEnum;
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 use app\common\model\user\UserAuth;
 use app\common\service\FileService;
 use think\model\concern\SoftDelete;
@@ -27,7 +27,7 @@ use think\model\concern\SoftDelete;
  * Class User
  * @package app\common\model\user
  */
-class User extends BaseModel
+class User extends TenantScopedWriteModel
 {
     use SoftDelete;
 

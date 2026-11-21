@@ -3,6 +3,7 @@
 namespace app\common\command;
 
 use app\common\service\geo\GeoOrderService;
+use app\common\service\pricing\BillingTenantScope;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Option;
@@ -38,7 +39,15 @@ class GeoOrderSync extends Command
         }
 
         try {
-            $stat = GeoOrderService::syncDue($limit);
+            $stat = ['pushed' => 0, 'queried' => 0, 'changed' => 0, 'failed' => 0];
+            BillingTenantScope::each('geo_order', static function () use (&$stat, $limit): void {
+                $remaining = $limit - max($stat['pushed'], $stat['queried']);
+                if ($remaining > 0) {
+                    foreach (GeoOrderService::syncDue($remaining) as $key => $count) {
+                        $stat[$key] += $count;
+                    }
+                }
+            });
             if (!$quiet) {
                 $output->writeln(sprintf(
                     '<info>同步完成：推送 %d 单，查询 %d 单，状态变化 %d 单，失败 %d 单</info>',

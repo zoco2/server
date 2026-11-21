@@ -56,8 +56,13 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
+        // 旧媒体接口也可修改同一倍率，保留原授权并覆盖尚未登记旧菜单的租户。
+        $mediaPriceWrite = $accessUri === 'geo.media/savemarkup'
+            || ($accessUri === 'geo.media/update' && array_key_exists('price_ratio', $request->post()));
         // 配置接口按区块授权，即使菜单升级尚未执行，也须先取得权限才能访问凭据。
         $configPermissions = [
+            'setting.businessprice/detail' => 'setting.businessprice/detail',
+            'setting.businessprice/save' => 'setting.businessprice/save',
             'smartedit.config/detail' => 'smartedit.config/detail',
             'smartedit.config/voicedetail' => 'smartedit.config/detail',
             'geo.diagnosisconfig/detail' => 'geo.manuscript/detail',
@@ -81,7 +86,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if ($configPermission === null && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if (!$mediaPriceWrite && $configPermission === null && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 
@@ -89,7 +94,7 @@ class AuthMiddleware
         $AdminUris = $adminAuthCache->getAdminUri() ?? [];
         $AdminUris = $this->formatUrl($AdminUris);
 
-        if (in_array($accessUri, $AdminUris)) {
+        if (in_array($accessUri, $AdminUris) || ($mediaPriceWrite && in_array('setting.businessprice/save', $AdminUris))) {
             return $next($request);
         }
         return JsonService::fail('权限不足，无法访问或操作');

@@ -1331,6 +1331,8 @@ CROSS JOIN (
     UNION ALL SELECT '查看剪辑配置','smart_edit.config/detail','core_tenant_base_edit_read'
     UNION ALL SELECT '查看分享配置','channel.share_setting/getConfig','core_tenant_base_share_read'
     UNION ALL SELECT '保存分享配置','channel.share_setting/setConfig','core_tenant_base_share_save'
+    UNION ALL SELECT '查看业务价格','setting.business_price/detail','core_tenant_price_read'
+    UNION ALL SELECT '保存业务价格','setting.business_price/save','core_tenant_price_save'
 ) action
 WHERE page.tenant_id={tenantId} AND page.source_menu_key='core_tenant_base_config'
   AND NOT EXISTS (

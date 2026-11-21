@@ -2,8 +2,7 @@
 
 namespace app\common\command;
 
-use app\common\model\smart_edit\SmartEditTask;
-use app\common\service\smart_edit\SmartEditService;
+use app\common\service\smart_edit\SmartEditPollService;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Option;
@@ -42,20 +41,14 @@ class SmartEditWorker extends Command
 
         $output->writeln('smart-edit worker started');
         while ($running) {
-            $tasks = SmartEditTask::whereIn('status', SmartEditTask::RUNNING_STATUSES)
-                ->where('provider_job_id', '<>', '')
-                ->where('next_poll_time', '<=', time())
-                ->order('next_poll_time', 'asc')
-                ->limit($batch)
-                ->select();
-            $count = 0;
-            foreach ($tasks as $task) {
-                try {
-                    SmartEditService::refresh((int)$task['id']);
-                    $count++;
-                } catch (\Throwable $e) {
-                    $output->writeln(sprintf('[%d] error: %s', (int)$task['id'], $e->getMessage()));
+            try {
+                $count = SmartEditPollService::run($batch);
+            } catch (Throwable $e) {
+                $output->writeln('<error>' . $e->getMessage() . '</error>');
+                if ($once) {
+                    return 1;
                 }
+                $count = 0;
             }
             if ($count > 0) {
                 $output->writeln(sprintf('polled %d task(s)', $count));

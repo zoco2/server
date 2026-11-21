@@ -5,6 +5,9 @@ namespace app\common\job;
 use app\common\model\smart_edit\SmartEditGroup;
 use app\common\service\smart_edit\SmartEditGroupService;
 use app\common\service\smart_edit\SmartEditService;
+use app\common\model\smart_edit\SmartEditTask;
+use app\common\service\smart_edit\SmartEditBillingService;
+use think\facade\Db;
 use think\facade\Log;
 
 /**
@@ -60,7 +63,22 @@ class SmartEditGroupExpandJob extends Job
         ));
 
         try {
-            $taskIds = $this->expand($group, $tenantId);
+            $taskIds = Db::transaction(function () use ($tenantId, $batchNo) {
+                $locked = SmartEditGroup::where('tenant_id', $tenantId)->where('batch_no', $batchNo)
+                    ->lock(true)->findOrEmpty();
+                if ($locked->isEmpty() || (string)$locked['status'] !== SmartEditGroup::STATUS_EXPANDING) {
+                    return [];
+                }
+                $taskIds = $this->expand($locked, $tenantId);
+                $locked->save([
+                    'status' => SmartEditGroup::STATUS_SUBMITTED, 'error_code' => '',
+                    'error_message' => '', 'update_time' => time(),
+                ]);
+                return $taskIds;
+            });
+            if ($taskIds === []) {
+                return;
+            }
         } catch (\Throwable $e) {
             Log::channel('mns')->error(sprintf(
                 '[smart_edit] group expand failed batch=%s attempt=%d %s',
@@ -84,7 +102,19 @@ class SmartEditGroupExpandJob extends Job
                     implode(',', $chunk)
                 ));
             } catch (\Throwable $e) {
-                // 提交消息投递失败：任务停在 submitting，用户可在列表里看到并重试
+                foreach ($chunk as $id) {
+                    $task = SmartEditTask::findOrEmpty((int)$id);
+                    if (!$task->isEmpty() && (string)$task['status'] === SmartEditTask::STATUS_SUBMITTING
+                        && SmartEditBillingService::attempt($task) === 0) {
+                        SmartEditBillingService::fail($task, [
+                            'status' => SmartEditTask::STATUS_FAILED,
+                            'error_code' => 'DISPATCH_FAILED',
+                            'error_message' => '剪辑任务投递失败，请重试',
+                            'update_time' => time(),
+                            'finish_time' => time(),
+                        ]);
+                    }
+                }
                 Log::channel('mns')->error(sprintf(
                     '[smart_edit] group submit dispatch failed batch=%s chunk=%d ids=%s %s',
                     $batchNo,
@@ -94,13 +124,6 @@ class SmartEditGroupExpandJob extends Job
                 ));
             }
         }
-
-        $group->save([
-            'status' => SmartEditGroup::STATUS_SUBMITTED,
-            'error_code' => '',
-            'error_message' => '',
-            'update_time' => time(),
-        ]);
 
         Log::channel('mns')->info(sprintf(
             '[smart_edit] group expanded batch=%s combos=%d tasks=%d',
@@ -126,9 +149,16 @@ class SmartEditGroupExpandJob extends Job
         $userId = (int)$group['user_id'];
 
         $combos = SmartEditGroupService::expandShots($shots);
+        $existing = SmartEditTask::withTrashed()->where('tenant_id', $tenantId)->where('batch_no', $batchNo)
+            ->column('id', 'combo_index');
         $taskIds = [];
+        $newCount = 0;
         foreach ($combos as $index => $clips) {
             $comboIndex = $index + 1;
+            if (isset($existing[$comboIndex])) {
+                $taskIds[] = (int)$existing[$comboIndex];
+                continue;
+            }
             // 多组标题按 combo 序号循环对应：C1→G0，C2→G1，…，用完从头再来
             $taskShared = SmartEditService::sharedForCombo($shared, $comboIndex);
             try {
@@ -151,6 +181,7 @@ class SmartEditGroupExpandJob extends Job
                 ));
                 throw $e;
             }
+            $newCount++;
             $taskIds[] = (int)$task['id'];
         }
         Log::channel('mns')->info(sprintf(
@@ -158,6 +189,7 @@ class SmartEditGroupExpandJob extends Job
             $batchNo,
             count($taskIds)
         ));
+        SmartEditBillingService::charge($tenantId, $userId, (int)($shared['unit_points'] ?? 0), $newCount, $batchNo);
         return $taskIds;
     }
 
@@ -191,7 +223,7 @@ class SmartEditGroupExpandJob extends Job
             }
         }
 
-        $group->save([
+        SmartEditGroup::where('id', (int)$group['id'])->where('status', SmartEditGroup::STATUS_EXPANDING)->update([
             'status' => SmartEditGroup::STATUS_FAILED,
             'error_code' => 'EXPAND_FAILED',
             'error_message' => mb_substr('生成任务失败：' . $e->getMessage(), 0, 480),

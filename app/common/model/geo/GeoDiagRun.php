@@ -2,12 +2,12 @@
 
 namespace app\common\model\geo;
 
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 
 /**
  * GEO 品牌诊断任务：一次问题提交。
  */
-class GeoDiagRun extends BaseModel
+class GeoDiagRun extends TenantScopedWriteModel
 {
     protected $name = 'geo_diag_run';
     protected $autoWriteTimestamp = 'int';

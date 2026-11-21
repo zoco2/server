@@ -29,6 +29,7 @@ namespace app\common\service\geo {
         public static string $mode = 'rejected';
         public static int $calls = 0;
         public function __construct(private int $tenantId) {}
+        public function platforms(): array { return [['id' => 'doubao', 'pricing' => ['baseCents' => 0]]]; }
         public function createRun(array $request, string $key): array {
             if ($this->tenantId !== 7) throw new \LogicException('Expected the brand owner tenant for GEO submission');
             self::$calls++;
@@ -77,6 +78,9 @@ namespace {
         Db::execute($sql);
     }
     Db::name('merchant_brand')->insert(['id' => 14, 'tenant_id' => 7, 'user_id' => 23, 'name' => '测试品牌']);
+    Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, delete_time INTEGER)');
+    Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
+    Db::name('tenant')->insert(['id' => 7, 'tactics' => 0]);
     $params = ['brand_id' => 14, 'questions' => ['品牌怎么样？'], 'platforms' => ['doubao'], 'repeat_count' => 1];
 
     // Manual submission: API rejection is returned to the caller, but the failed history survives.
@@ -111,27 +115,28 @@ namespace {
     GeoRankingTaskJob::start($run, null);
     check(Db::name('geo_diag_batch')->count() === 2 && GeoDiagProvider::$calls === 2, 'Repeated delivery must not resubmit rejected task');
 
-    // Unexpected exceptions and invalid success responses still roll back newly created records.
-    foreach (['exception', 'malformed'] as $mode) {
+    // A lost or incomplete receipt leaves a durable reservation for reconciliation under the same key.
+    foreach ([90 => 'exception', 92 => 'malformed'] as $runId => $mode) {
         GeoDiagProvider::$mode = $mode;
-        try { GeoDiagnosisService::create(23, $params, 90); throw new LogicException('Expected exception'); }
-        catch (Exception $e) {
-            check(!($e instanceof GeoDiagnosisSubmissionException) && !($e instanceof LogicException), 'Unexpected failure must not become a business rejection');
-        }
-        check(Db::name('geo_diag_batch')->count() === 2 && Db::name('geo_diag_run')->count() === 2, 'Unexpected error must roll back batch and problem rows');
+        $waiting = GeoDiagnosisService::create(23, $params, $runId);
+        $calls = GeoDiagProvider::$calls;
+        $repeat = GeoDiagnosisService::create(23, $params, $runId);
+        check($waiting['id'] === $repeat['id'] && $waiting['status'] === 'queued' && $waiting['next_poll_time'] > 0, 'Lost receipt must retain scheduled batch');
+        check(GeoDiagProvider::$calls === $calls, 'Scheduled replay created another upstream diagnosis');
     }
     // Failure to persist the API error itself must also roll back, never leave an incomplete failed batch.
     Db::execute("CREATE TRIGGER fail_error_write BEFORE UPDATE ON la_geo_diag_run WHEN NEW.status = 'failed' BEGIN SELECT RAISE(ABORT, 'write failed'); END");
     GeoDiagProvider::$mode = 'rejected';
     try { GeoDiagnosisService::create(23, $params); throw new LogicException('Expected storage exception'); }
     catch (Exception $e) { check(!($e instanceof GeoDiagnosisSubmissionException) && !($e instanceof LogicException), 'Storage error must propagate'); }
-    check(Db::name('geo_diag_batch')->count() === 2, 'Storage error must roll back entire submission');
+    check(Db::name('geo_diag_batch')->where('status', 'failed')->count() === 2, 'Storage error must roll back failed state');
+    check(Db::name('geo_diag_batch')->where('status', 'queued')->count() === 3, 'Storage error must preserve recoverable reservations');
     Db::execute('DROP TRIGGER fail_error_write');
 
     GeoDiagProvider::$mode = 'success';
     $success = GeoDiagnosisService::create(23, $params, 91);
     check($success['status'] === 'queued' && $success['upstream_batch_id'] === 'batch-123', 'Success path must retain provider IDs and queued state');
     check($success['runs'][0]['upstream_run_id'] === 'run-123' && $success['next_poll_time'] > 0, 'Success must remain pollable');
-    check(Db::name('geo_diag_batch')->count() === 3, 'Success must add exactly one batch');
-    echo "PASS: rejected API responses persist for manual/scheduled detection; unexpected and database errors roll back; success unchanged\n";
+    check(Db::name('geo_diag_batch')->count() === 6, 'Success must add exactly one batch');
+    echo "PASS: manual and scheduled rejection, durable reservations, idempotent replay, atomic status and success\n";
 }

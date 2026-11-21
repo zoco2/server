@@ -2,12 +2,12 @@
 
 namespace app\common\model\geo;
 
-use app\common\model\BaseModel;
+use app\common\model\TenantScopedWriteModel;
 
 /**
  * GEO 品牌诊断批次。
  */
-class GeoDiagBatch extends BaseModel
+class GeoDiagBatch extends TenantScopedWriteModel
 {
     protected $name = 'geo_diag_batch';
     protected $autoWriteTimestamp = 'int';
