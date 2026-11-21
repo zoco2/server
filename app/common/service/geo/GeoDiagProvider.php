@@ -102,7 +102,7 @@ class GeoDiagProvider
     /**
      * @param array<string, mixed> $body
      * @param string[] $extraHeaders
-     * @return array{data:mixed,status:int,request_id:string,charged_cents:int,balance_cents:int}
+     * @return array{data:mixed,status:int,request_id:string,charged_cents:?int,balance_cents:int}
      */
     private function request(string $method, string $path, array $body = [], array $extraHeaders = []): array
     {
@@ -157,7 +157,8 @@ class GeoDiagProvider
             'data' => $payload,
             'status' => $status,
             'request_id' => (string)($headersMap['x-request-id'] ?? ''),
-            'charged_cents' => (int)($headersMap['x-billing-charged-cents'] ?? 0),
+            'charged_cents' => isset($headersMap['x-billing-charged-cents']) && ctype_digit($headersMap['x-billing-charged-cents'])
+                ? (int)$headersMap['x-billing-charged-cents'] : null,
             'balance_cents' => (int)($headersMap['x-balance-cents'] ?? 0),
         ];
     }
