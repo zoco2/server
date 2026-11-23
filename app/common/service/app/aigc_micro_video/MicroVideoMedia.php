@@ -389,10 +389,28 @@ final class MicroVideoMedia
             // correct until the authenticated read endpoint resolves the URL.
             return parse_url($domain, PHP_URL_HOST) ? FileService::format($domain, $uri) : '/' . ltrim($uri, '/');
         }
-        $signed = StorageSignedUrlService::resolve($uri, (string)($storage['storage_scope'] ?? ''), (string)($storage['storage_engine'] ?? ''), (string)($storage['storage_domain'] ?? ''), $tenant);
-        $url = $signed ?? FileService::format((string)($storage['storage_domain'] ?? ''), $uri);
+        $url = self::cloudReadUrl($uri, $storage, $tenant);
         OpenSafeHttp::resolve($url, false);
         return $url;
+    }
+
+    /** Build the read URL from an authorized file's storage metadata. */
+    public static function cloudReadUrl(string $uri, array $storage, int $tenant): string
+    {
+        $scope = (string)$storage['storage_scope'];
+        $engine = (string)$storage['storage_engine'];
+        $domain = trim((string)($storage['storage_domain'] ?? ''));
+        if (!in_array($engine, ['aliyun', 'qcloud', 'qiniu'], true)) {
+            throw new RuntimeException('素材存储配置无效');
+        }
+        $signed = StorageSignedUrlService::resolve($uri, $scope, $engine, $domain, $tenant);
+        if ($signed !== null) return $signed;
+        if ($domain === '') {
+            $config = StorageConfigService::getStoredFileConfig($tenant, $scope, $engine);
+            $domain = trim((string)($config['engine'][$engine]['domain'] ?? ''));
+        }
+        if ($domain === '') throw new RuntimeException('素材存储缺少访问域名，请联系管理员');
+        return FileService::format($domain, $uri);
     }
 
     private static function sameObjectUrl(string $a, string $b): bool
