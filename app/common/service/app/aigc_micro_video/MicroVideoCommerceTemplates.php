@@ -26,7 +26,7 @@ final class MicroVideoCommerceTemplates
         $text=static fn(mixed $value): bool=>is_string($value)&&trim($value)!=='';
         $code=static fn(mixed $value): bool=>is_string($value)&&preg_match('/^[a-z][a-z0-9_]{0,79}$/D',$value)===1;
         $check(is_array($catalog)&&($catalog['version']??null)===1);
-        $check(is_array($catalog['categories']??null)&&array_is_list($catalog['categories'])&&count($catalog['categories'])===10);
+        $check(is_array($catalog['categories']??null)&&array_is_list($catalog['categories'])&&count($catalog['categories'])===13);
         $check(is_array($catalog['templates']??null)&&array_is_list($catalog['templates'])&&count($catalog['templates'])===31);
         $categories=[];
         foreach($catalog['categories'] as $category){

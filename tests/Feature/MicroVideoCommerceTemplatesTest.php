@@ -8,14 +8,14 @@ use app\common\service\app\aigc_micro_video\MicroVideoWorkbenchRecords as Record
 
 final class MicroVideoCommerceTemplatesTest extends TestCase
 {
-    public function testBundledCatalogContains31DistinctCompleteShortTemplatesAnd10NewCategories(): void
+    public function testBundledCatalogContains31DistinctCompleteShortTemplatesAnd13Categories(): void
     {
         $catalog=Catalog::catalog();
         self::assertSame(1,$catalog['version']);
         self::assertCount(31,$catalog['templates']);
-        self::assertCount(10,$catalog['categories']);
+        self::assertCount(13,$catalog['categories']);
         self::assertCount(31,array_unique(array_column($catalog['templates'],'code')));
-        self::assertCount(10,array_unique(array_column($catalog['categories'],'code')));
+        self::assertCount(13,array_unique(array_column($catalog['categories'],'code')));
         $categories=array_column($catalog['categories'],'code');
         foreach($catalog['templates'] as $template){
             self::assertContains($template['category'],$categories);
@@ -47,7 +47,12 @@ final class MicroVideoCommerceTemplatesTest extends TestCase
         $categories=Records::categories()['lists'];
         self::assertSame(['story','campus','office','palace','kungfu','twist','commerce','property'],array_column(array_slice($categories,0,8),'code'));
         self::assertSame(Catalog::catalog()['categories'],array_slice($categories,8));
-        self::assertCount(18,array_unique(array_column($categories,'code')));
+        self::assertSame([
+            ['code'=>'ecommerce_sales','name'=>'电商带货'],
+            ['code'=>'drama','name'=>'剧情'],
+            ['code'=>'local_store_visit','name'=>'同城探店'],
+        ],array_slice($categories,-3));
+        self::assertCount(21,array_unique(array_column($categories,'code')));
     }
 
     public function testHttpRoundTripKeepsTemplateDurationSegmentsAndRolesTyped(): void
