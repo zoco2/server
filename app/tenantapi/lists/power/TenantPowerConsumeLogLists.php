@@ -11,6 +11,8 @@ use app\common\model\tenant\TenantPointLog;
 use app\common\service\point\TenantPointService;
 use app\common\service\PointUnitService;
 use app\tenantapi\lists\BaseAdminDataLists;
+use think\db\Query;
+use think\db\Raw;
 
 class TenantPowerConsumeLogLists extends BaseAdminDataLists implements ListsSearchInterface, ListsExtendInterface
 {
@@ -21,11 +23,11 @@ class TenantPowerConsumeLogLists extends BaseAdminDataLists implements ListsSear
 
     public function lists(): array
     {
-        $lists = $this->baseQuery()
-            ->field(self::fields())
-            ->group('tpl.id')
+        $logs = $this->baseQuery()
             ->order('tpl.id', 'desc')
-            ->limit($this->limitOffset, $this->limitLength)
+            ->limit($this->limitOffset, $this->limitLength);
+        $lists = self::selectRows($logs)
+            ->order('tpl.id', 'desc')
             ->select()
             ->toArray();
 
@@ -34,7 +36,7 @@ class TenantPowerConsumeLogLists extends BaseAdminDataLists implements ListsSear
 
     public function count(): int
     {
-        return (int)$this->baseQuery()->distinct(true)->count('tpl.id');
+        return (int)$this->baseQuery()->count('DISTINCT tpl.id');
     }
 
     public function extend(): array
@@ -68,10 +70,8 @@ class TenantPowerConsumeLogLists extends BaseAdminDataLists implements ListsSear
 
     public static function detail(int $tenantId, int $id): array
     {
-        $row = self::buildQuery($tenantId, [])
-            ->field(self::fields())
+        $row = self::selectRows(self::buildQuery($tenantId, [])->where('tpl.id', $id))
             ->where('tpl.id', $id)
-            ->group('tpl.id')
             ->findOrEmpty()
             ->toArray();
 
@@ -81,6 +81,20 @@ class TenantPowerConsumeLogLists extends BaseAdminDataLists implements ListsSear
     private function baseQuery()
     {
         return self::buildQuery((int)$this->adminInfo['tenant_id'], $this->params);
+    }
+
+    private static function selectRows(Query $logs): Query
+    {
+        // 先筛选，再按最小用户流水 ID 为每笔租户流水选定一条关联记录。
+        $logs->field('tpl.id,MIN(ual.id) as user_log_id')->group('tpl.id');
+        $logs->parseOptions();
+        $sql = $logs->getConnection()->getBuilder()->select($logs);
+
+        return TenantPointLog::alias('tpl')
+            ->join([new Raw('(' . $sql . ') matched', $logs->getBind())], 'matched.id = tpl.id')
+            ->leftJoin('user_account_log ual', 'ual.id = matched.user_log_id')
+            ->leftJoin('user u', 'u.id = ual.user_id')
+            ->field(self::fields());
     }
 
     private static function buildQuery(int $tenantId, array $params)
