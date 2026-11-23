@@ -8,7 +8,6 @@ use app\common\service\app\aigc_video\AigcVideoAssetService;
 use app\common\service\FileService;
 use app\common\service\open_platform\OpenSafeHttp;
 use app\common\service\storage\StorageConfigService;
-use app\common\service\storage\StorageSignedUrlService;
 use think\facade\Db;
 use InvalidArgumentException;
 
@@ -80,7 +79,11 @@ final class MicroVideoWorkbenchAssets
     {
         $uri=ltrim((string)$source['uri'],'/');if(preg_match('#(^|/)\.{1,2}(/|$)|[\\\\%\x00-\x20]#',$uri))throw new InvalidArgumentException('源素材路径无效');
         if(($source['storage_engine']??'')==='local'){$root=realpath(public_path());$path=realpath(public_path().$uri);if(!$root||!$path||!str_starts_with($path,$root.DIRECTORY_SEPARATOR)||!is_file($path)||filesize($path)>$maxBytes)throw new InvalidArgumentException('源素材缺失或超过大小限制，请重新上传');$bytes=file_get_contents($path);}
-        else{$url=StorageSignedUrlService::resolve($uri,(string)$source['storage_scope'],(string)$source['storage_engine'],(string)$source['storage_domain'],$tenant);$url=(string)$url;$response=OpenSafeHttp::get($url,$maxBytes);$bytes=(string)$response['body'];}
+        else{
+            $url = MicroVideoMedia::cloudReadUrl($uri, $source, $tenant);
+            $response = OpenSafeHttp::get($url, $maxBytes);
+            $bytes = (string)$response['body'];
+        }
         if($bytes===''||strlen($bytes)>$maxBytes)throw new InvalidArgumentException('源素材读取失败或超过大小限制');return $bytes;
     }
 }
