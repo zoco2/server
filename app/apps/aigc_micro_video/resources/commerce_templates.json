@@ -40,6 +40,18 @@
     {
       "code": "romance_growth",
       "name": "心动与成长"
+    },
+    {
+      "code": "ecommerce_sales",
+      "name": "电商带货"
+    },
+    {
+      "code": "drama",
+      "name": "剧情"
+    },
+    {
+      "code": "local_store_visit",
+      "name": "同城探店"
     }
   ],
   "templates": [
