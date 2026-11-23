@@ -139,6 +139,23 @@ class ConfigService
         return $default_value !== null ? $default_value : config('project.' . $type . '.' . $name);
     }
 
+    /** 从平台配置读取，供租户 API 和后台任务共享。 */
+    public static function getPlatform(string $type, string $name, mixed $default = null): mixed
+    {
+        $value = Config::withoutGlobalScope()->where(['type' => $type, 'name' => $name])->value('value');
+        if ($value === null) {
+            return $default;
+        }
+
+        $decoded = json_decode((string)$value, true);
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
+    }
+
+    public static function platformCreatedAt(string $type, string $name): int
+    {
+        return (int)Config::withoutGlobalScope()->where(['type' => $type, 'name' => $name])->value('create_time');
+    }
+
     private static function shouldUseDefaultCopyright($value): bool
     {
         if (empty($value)) {

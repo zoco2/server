@@ -205,8 +205,32 @@ class GeoMediaSyncService
      * 租户默认加成倍率，配置在 geo_manuscript.markup，默认 1.0。
      * 资源行若单独设置了 price_ratio（大于 0）则优先用行上的值。
      */
+    public static function platformMarkup(): ?float
+    {
+        $prices = ConfigService::getPlatform('business_price', 'settings', []);
+        return isset($prices['media_markup_percent']) ? 1 + (float)$prices['media_markup_percent'] / 100 : null;
+    }
+
+    public static function priceRatio(float $localRatio, ?int $tenantId = null): float
+    {
+        return self::platformMarkup() ?? ($localRatio > 0 ? $localRatio : self::markup($tenantId));
+    }
+
+    // 价格筛选、区间统计和下单统一采用同一个倍率。
+    public static function priceExpression(): string
+    {
+        $platform = self::platformMarkup();
+        return $platform !== null
+            ? 'costprice * ' . $platform
+            : 'costprice * IF(price_ratio > 0, price_ratio, ' . self::markup() . ')';
+    }
+
     public static function markup(?int $tenantId = null): float
     {
+        $platform = self::platformMarkup();
+        if ($platform !== null) {
+            return $platform;
+        }
         $tenantId = $tenantId ?: (int)request()->tenantId;
         $value = self::tenantConfig($tenantId, 'markup');
         $markup = is_numeric($value) ? (float)$value : 1.0;

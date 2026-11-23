@@ -40,6 +40,7 @@ $controller = new PublishTaskController($app);
 
 Db::execute('CREATE TABLE test_tenant (id INTEGER PRIMARY KEY, sn TEXT, tactics INTEGER, delete_time INTEGER)');
 Db::execute('CREATE TABLE test_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
+Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
 Db::execute('CREATE TABLE test_merchant_staff (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, store_id INTEGER, appid TEXT, openid TEXT, delete_time INTEGER)');
 Db::execute('CREATE TABLE test_merchant_store (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, brand_id INTEGER, delete_time INTEGER)');
 Db::execute('CREATE TABLE test_publish_task_run (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, task_id INTEGER, tasksn TEXT)');

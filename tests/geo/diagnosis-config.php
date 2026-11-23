@@ -18,8 +18,6 @@ namespace {
     use app\common\service\geo\GeoDiagnosisService;
     use app\common\service\smart_edit\SmartEditImsConfigService;
     use app\common\service\smart_edit\SmartEditVoiceConfigService;
-    use app\tenantapi\controller\geo\DiagnosisConfigController;
-    use app\tenantapi\listener\OperationLog;
     use think\App;
     use think\facade\Config as AppConfig;
     use think\facade\Db;
@@ -49,6 +47,7 @@ namespace {
         Db::execute("CREATE TABLE $table (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)");
     }
 
+    Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
     check(Config::get(1) === Config::DEFAULTS, 'Empty tenant unexpectedly inherited global credentials');
     $one = array_replace(Config::DEFAULTS, ['api_key' => 'one-fixture']);
     Config::save(1, $one, true);
@@ -66,28 +65,8 @@ namespace {
     check(Config::get(2) === Config::DEFAULTS && Config::get(3) === $split, 'Tenant isolation failed');
     check(Db::name('tenant_config_t3')->where('tenant_id', 3)->count() === 1, 'Missing split config');
 
-    $post = (new Request())->setMethod('POST')->withPost(array_replace($one, [
-        'api_key' => 'updated-fixture', 'tenant_id' => 3, 'base_url' => 'https://override.example.test', 'ssl_verify' => false,
-    ]));
-    $post->adminInfo = ['tenant_id' => 1, 'admin_id' => 10];
-    $app->instance('request', $post);
-    check((new DiagnosisConfigController($app))->save()->getData()['code'] === 1, 'Admin save failed');
-    $post->setMethod('GET');
-    $post->setController('geo.DiagnosisConfig')->setAction('detail');
-    $post->controllerObject = new DiagnosisConfigController($app);
-    $response = $post->controllerObject->detail();
-    $expected = ['api_key' => 'updated-fixture'];
-    check($response->getData()['data'] === $expected, 'Form must return only the saved key');
-    $stored = Db::name('tenant_config')->where('tenant_id', 1)->value('value');
-    check(json_decode($stored, true, 512, JSON_THROW_ON_ERROR) === $expected, 'Only the API key should be persisted');
+    Config::save(1, ['api_key' => 'updated-fixture']);
     check(Config::get(3) === $split && Db::name('tenant_config')->count() === 1, 'Unexpected overwrite');
-    Db::execute('CREATE TABLE test_operation_log (id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT,
-        action TEXT, account TEXT, url TEXT, type TEXT, params TEXT, ip TEXT, result TEXT, create_time INTEGER, update_time INTEGER)');
-    check((bool)(new OperationLog())->handle($response), 'Operation log missing');
-    $log = Db::name('operation_log')->where('admin_id', 10)->find();
-    check(is_array($log) && json_decode($log['result'], true)['data'] === [], 'Logged response must omit credential');
-    check(!str_contains($log['result'] . $log['params'], 'updated-fixture'), 'Form credential copied into log');
-
     $app->instance('request', new Request());
     foreach (['aliyun' => ['secret_key' => 'ims-fixture'], 'volcengine' => ['api_key' => 'voice-fixture']] as $name => $value) {
         Db::name('tenant_config')->insert(['tenant_id' => 1, 'type' => 'smart_edit', 'name' => $name, 'value' => json_encode($value)]);

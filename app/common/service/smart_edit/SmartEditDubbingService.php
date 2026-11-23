@@ -79,7 +79,7 @@ class SmartEditDubbingService
         $key = SmartEditImsConfigService::generatedKey(
             $config,
             self::OUTPUT_PREFIX,
-            'preview/' . self::previewFileStem($voiceKey, $speed, $volume) . '.mp3'
+            'preview/' . $tenantId . '/' . self::previewFileStem($voiceKey, $speed, $volume) . '.mp3'
         );
         SmartEditImsConfigService::putObject($config, $key, $audio, 'audio/mpeg');
 

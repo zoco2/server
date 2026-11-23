@@ -185,6 +185,11 @@ class GeoMediaSync extends Command
      */
     private function configuredTenants(): array
     {
+        $platform = \app\common\service\ConfigService::getPlatform('geo_manuscript', 'account', []);
+        if (!empty($platform['token']) && !empty($platform['key'])) {
+            return array_map('intval', \app\common\model\tenant\Tenant::withoutGlobalScope()->column('id'));
+        }
+
         $ids = \think\facade\Db::name('tenant_config')
             ->where(['type' => 'geo_manuscript', 'name' => 'account'])
             ->whereLike('value', '%"token"%')

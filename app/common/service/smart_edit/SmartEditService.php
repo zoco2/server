@@ -447,7 +447,7 @@ class SmartEditService
         }
 
         try {
-            $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+            $config = SmartEditImsConfigService::require((int)$task['tenant_id'], (int)($task->getData()['create_time'] ?? 0));
             // 用提交时记录的地域，避免中途改配置导致查不到旧任务
             $region = (string)$task['region'] ?: $config['region'];
             $client = new ImsClient($config['access_key'], $config['secret_key'], $region);
@@ -492,7 +492,7 @@ class SmartEditService
      */
     public static function retry(SmartEditTask $task): void
     {
-        $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+        $config = SmartEditImsConfigService::require((int)$task['tenant_id'], (int)($task->getData()['create_time'] ?? 0));
         $output = SmartEditMaterialService::outputTarget($config, (string)$task['task_no']);
         if ((array)$task['timeline_json'] === []) {
             throw new Exception('任务参数缺失，无法重试');

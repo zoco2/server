@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\common\service\share;
 
 use app\common\service\wechat\WechatCredentialService;
+use app\common\service\ConfigService;
 use app\common\service\TenantConfigTable;
 use InvalidArgumentException;
 use RuntimeException;
@@ -18,21 +19,26 @@ final class TenantShareConfigService
         'xiaohongshu' => ['key' => 'app_key', 'secret' => 'app_secret', 'name' => '小红书'],
     ];
 
-    public function __construct(private readonly int $tenantId)
+    public function __construct(private readonly int $tenantId, private readonly bool $platform = false)
     {
-        if ($tenantId <= 0) {
+        if ($tenantId <= 0 && !$platform) {
             throw new InvalidArgumentException('缺少有效的租户信息');
         }
     }
 
     public function display(): array
     {
-        $table = TenantConfigTable::forTenant($this->tenantId);
+        $table = $this->platform ? null : TenantConfigTable::forTenant($this->tenantId);
         $result = [];
         foreach (self::PLATFORMS as $platform => $fields) {
-            $value = $this->read($table, $platform);
+            $value = $this->platform
+                ? ConfigService::getPlatform('social_share', $platform, [])
+                : $this->read($table, $platform);
             $secret = $this->decryptSecret((string)($value[$fields['secret']] ?? ''));
-            $result[$platform] = $this->publicConfig($value, $fields) + [$fields['secret'] => $secret];
+            $result[$platform] = $this->publicConfig($value, $fields);
+            if (!$this->platform) {
+                $result[$platform][$fields['secret']] = $secret;
+            }
             if ($secret === '') {
                 $result[$platform]['configured'] = false;
             }
@@ -51,26 +57,18 @@ final class TenantShareConfigService
         $key = $this->credential($params[$fields['key']] ?? null, 128, '应用标识');
         $secret = $this->credential($params[$fields['secret']] ?? '', 256, '应用密钥');
 
+        if ($this->platform) {
+            $old = ConfigService::getPlatform('social_share', $platform, []);
+            $value = $this->savedValue($old, $fields, $key, $secret);
+            ConfigService::set('social_share', $platform, $value);
+            return $this->publicConfig($value, $fields);
+        }
+
         return Db::transaction(function () use ($platform, $fields, $key, $secret): array {
             // 锁住租户行，首次插入配置也可串行化，防止重复配置或覆盖另一个编辑者的密钥。
             $table = TenantConfigTable::forTenant($this->tenantId, true);
             $old = $this->read($table, $platform);
-            if ($secret === '' && $key !== (string)($old[$fields['key']] ?? '')
-                && (string)($old[$fields['secret']] ?? '') !== '') {
-                throw new InvalidArgumentException('更换应用标识时请同时填写对应的新密钥');
-            }
-            $encrypted = (string)($old[$fields['secret']] ?? '');
-            if ($secret !== '') {
-                $cipher = WechatCredentialService::encrypt($secret);
-                if ($cipher === '') {
-                    throw new RuntimeException('分享密钥加密失败');
-                }
-                $encrypted = 'enc:v1:' . $cipher;
-            }
-            if ($key === '' || $encrypted === '') {
-                throw new InvalidArgumentException('请填写分享应用标识和密钥');
-            }
-            $value = ['enabled' => 1, $fields['key'] => $key, $fields['secret'] => $encrypted];
+            $value = $this->savedValue($old, $fields, $key, $secret);
             $where = ['tenant_id' => $this->tenantId, 'type' => 'social_share', 'name' => $platform];
             $id = Db::name($table)->where($where)->value('id');
             $row = ['value' => json_encode($value, JSON_THROW_ON_ERROR), 'update_time' => time()];
@@ -83,18 +81,39 @@ final class TenantShareConfigService
         });
     }
 
-    /** 用当前租户的凭据签名。 */
+    private function savedValue(array $old, array $fields, string $key, string $secret): array
+    {
+        if ($secret === '' && $key !== (string)($old[$fields['key']] ?? '')
+            && (string)($old[$fields['secret']] ?? '') !== '') {
+            throw new InvalidArgumentException('更换应用标识时请同时填写对应的新密钥');
+        }
+        $encrypted = (string)($old[$fields['secret']] ?? '');
+        if ($secret !== '') {
+            $cipher = WechatCredentialService::encrypt($secret);
+            if ($cipher === '') {
+                throw new RuntimeException('分享密钥加密失败');
+            }
+            $encrypted = 'enc:v1:' . $cipher;
+        }
+        if ($key === '' || $encrypted === '') {
+            throw new InvalidArgumentException('请填写分享应用标识和密钥');
+        }
+        return ['enabled' => 1, $fields['key'] => $key, $fields['secret'] => $encrypted];
+    }
+
+    /** 使用平台配置，迁移期间兼容租户原有凭据。 */
     public function runtime(string $platform): array
     {
         if (!isset(self::PLATFORMS[$platform])) {
             throw new InvalidArgumentException('不支持的分享平台');
         }
         $fields = self::PLATFORMS[$platform];
-        $value = $this->read(TenantConfigTable::forTenant($this->tenantId), $platform);
+        $value = ConfigService::getPlatform('social_share', $platform)
+            ?? $this->read(TenantConfigTable::forTenant($this->tenantId), $platform);
         $cipher = (string)($value[$fields['secret']] ?? '');
         $secret = $this->decryptSecret($cipher);
         if (empty($value[$fields['key']]) || $secret === '') {
-            throw new ShareServiceException($fields['name'] . '分享凭据不可用，请管理员在「基础配置 → 分享配置」重新填写并保存应用标识和密钥');
+            throw new ShareServiceException($fields['name'] . '分享凭据不可用，请平台管理员在「基础配置 → 分享配置」重新填写并保存应用标识和密钥');
         }
         return [
             $fields['key'] => $value[$fields['key']],

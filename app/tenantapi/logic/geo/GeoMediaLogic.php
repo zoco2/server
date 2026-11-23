@@ -26,12 +26,11 @@ class GeoMediaLogic extends BaseLogic
             ->field('resource_type, costprice, price_ratio')
             ->select()
             ->toArray();
-        $defaultRatio = GeoMediaSyncService::markup();
+
         $counts = [];
         foreach ($rows as $row) {
             $type = (int)$row['resource_type'];
-            $ratio = (float)($row['price_ratio'] ?? 0);
-            $ratio = $ratio > 0 ? $ratio : $defaultRatio;
+            $ratio = GeoMediaSyncService::priceRatio((float)($row['price_ratio'] ?? 0));
             $sale = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
             if (!isset($counts[$type])) {
                 $counts[$type] = ['total' => 0, 'min_price' => $sale, 'max_price' => $sale];

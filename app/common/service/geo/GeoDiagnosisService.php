@@ -6,6 +6,7 @@ use app\common\model\geo\GeoDiagBatch;
 use app\common\model\geo\GeoDiagRun;
 use app\common\model\geo\GeoDiagSample;
 use app\common\model\merchant\MerchantBrand;
+use app\common\service\ConfigService;
 use app\common\service\point\PointService;
 use app\common\service\user_task\GeoRankingTaskJob;
 use Exception;
@@ -48,6 +49,9 @@ class GeoDiagnosisService
     /** @return array<string, mixed> */
     public static function usage(int $tenantId): array
     {
+        if ($tenantId > 0 && ConfigService::getPlatform('geo_diag', 'provider') !== null) {
+            throw new \RuntimeException('服务商账户用量仅限平台查看');
+        }
         return (new GeoDiagProvider($tenantId))->usage();
     }
 
@@ -201,7 +205,7 @@ class GeoDiagnosisService
             }
             $now = time();
             try {
-                $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+                $provider = new GeoDiagProvider((int)$batch['tenant_id'], (int)($batch->getData()['create_time'] ?? 0));
                 $accepted = $provider->createRun(self::decode($batch['request_json'], []), (string)$batch['idempotency_key']);
             } catch (GeoDiagProviderException $e) {
                 if ($e->getCode() >= 400 && $e->getCode() < 500 && !in_array($e->getCode(), [408, 409, 429], true)) {
@@ -288,8 +292,9 @@ class GeoDiagnosisService
             ->limit(($pageNo - 1) * $pageSize, $pageSize)
             ->select()
             ->toArray();
+        $sharedAccount = ConfigService::getPlatform('geo_diag', 'provider') !== null;
         foreach ($lists as &$row) {
-            self::presentBatch($row);
+            self::presentBatch($row, $sharedAccount);
         }
         unset($row);
         return ['count' => $count, 'lists' => $lists];
@@ -307,7 +312,8 @@ class GeoDiagnosisService
             throw new Exception('诊断记录不存在');
         }
         $data = $batch->toArray();
-        self::presentBatch($data);
+        $sharedAccount = ConfigService::getPlatform('geo_diag', 'provider') !== null;
+        self::presentBatch($data, $sharedAccount);
         $runs = GeoDiagRun::where('batch_id', $id)->order('batch_item_index', 'asc')->select()->toArray();
         $samples = GeoDiagSample::where('batch_id', $id)->order('run_id', 'asc')->order('platform_id', 'asc')->order('sample_index', 'asc')->select()->toArray();
         foreach ($samples as &$sample) {
@@ -319,6 +325,9 @@ class GeoDiagnosisService
             $byRun[(int)$sample['run_id']][] = $sample;
         }
         foreach ($runs as &$run) {
+            if ($sharedAccount) {
+                unset($run['balance_cents']);
+            }
             $run['platforms'] = self::decode($run['platforms_json'], []);
             $run['samples'] = $byRun[(int)$run['id']] ?? [];
         }
@@ -398,7 +407,7 @@ class GeoDiagnosisService
             self::submitReserved((int)$batch['id'], true);
             return;
         }
-        $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+        $provider = new GeoDiagProvider((int)$batch['tenant_id'], (int)($batch->getData()['create_time'] ?? 0));
         $statusResponse = $provider->batchStatus($upstreamBatchId);
         $status = is_array($statusResponse['data']) ? $statusResponse['data'] : [];
         $pollAfter = (int)($status['pollAfterSeconds'] ?? self::DEFAULT_POLL_AFTER);
@@ -739,8 +748,11 @@ class GeoDiagnosisService
     }
 
     /** @param array<string, mixed> $row */
-    private static function presentBatch(array &$row): void
+    private static function presentBatch(array &$row, bool $sharedAccount): void
     {
+        if ($sharedAccount) {
+            unset($row['balance_cents']);
+        }
         $row['platforms'] = self::decode($row['platforms_json'] ?? '[]', []);
         $row['brand_aliases'] = self::decode($row['brand_aliases_json'] ?? '[]', []);
         $row['summary'] = self::decode($row['summary_json'] ?? '{}', []);

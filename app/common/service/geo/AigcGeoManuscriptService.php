@@ -99,16 +99,16 @@ class AigcGeoManuscriptService
      *
      * @param int $tenantId 租户 ID
      */
-    public static function accessToken(int $tenantId): string
+    public static function accessToken(int $tenantId, int $orderCreatedAt = 0): string
     {
-        $account = self::account($tenantId);
+        [$account, $cacheId] = self::accountScope($tenantId, $orderCreatedAt);
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置文稿代发账号');
         }
         $tokenCache = new GeoManuscriptTokenCache();
-        $cached = $tokenCache->getAccessToken($tenantId);
+        $cached = $tokenCache->getAccessToken($cacheId);
         $openToken = is_array($cached) ? trim((string)($cached['token'] ?? '')) : '';
         $issuedAt = is_array($cached) ? (int)($cached['issued_at'] ?? 0) : 0;
         if ($openToken !== '' && $issuedAt > 0 && time() < $issuedAt + self::TOKEN_TTL - self::TOKEN_REFRESH_AHEAD) {
@@ -123,7 +123,7 @@ class AigcGeoManuscriptService
                 $next = self::issueToken($accountToken, $accountKey);
             }
         }
-        $tokenCache->setAccessToken($tenantId, $next, self::TOKEN_TTL);
+        $tokenCache->setAccessToken($cacheId, $next, self::TOKEN_TTL);
         return $next;
     }
 
@@ -137,16 +137,16 @@ class AigcGeoManuscriptService
      * @param int $tenantId 租户 ID
      * @return string openToken
      */
-    public static function renewAccessToken(int $tenantId): string
+    public static function renewAccessToken(int $tenantId, int $orderCreatedAt = 0): string
     {
-        $account = self::account($tenantId);
+        [$account, $cacheId] = self::accountScope($tenantId, $orderCreatedAt);
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置文稿代发账号');
         }
-        (new GeoManuscriptTokenCache())->deleteAccessToken($tenantId);
-        return self::accessToken($tenantId);
+        (new GeoManuscriptTokenCache())->deleteAccessToken($cacheId);
+        return self::accessToken($tenantId, $orderCreatedAt);
     }
 
     /**
@@ -334,19 +334,26 @@ class AigcGeoManuscriptService
      *
      * @return array<string, mixed>
      */
-    private static function account(int $tenantId = 0): array
+    private static function account(int $tenantId): array
     {
-        $value = $tenantId > 0
-            ? GeoMediaSyncService::tenantConfig($tenantId, 'account', [])
-            : ConfigService::get('geo_manuscript', 'account', []);
-        return is_array($value) ? $value : [];
+        return self::accountScope($tenantId)[0];
     }
 
-    /**
-     * @param array<string, mixed> $params 请求参数
-     * @param string $field token 或 key
-     * @param string $current 已保存的值
-     */
+    private static function accountScope(int $tenantId, int $orderCreatedAt = 0): array
+    {
+        $platform = ConfigService::getPlatform('geo_manuscript', 'account');
+        // 已经发出的稿件继续通过原账号查单，避免共享账号看不到旧订单。
+        $legacyOrder = $platform !== null && $orderCreatedAt > 0
+            && $orderCreatedAt < ConfigService::platformCreatedAt('geo_manuscript', 'account');
+        if ($tenantId > 0 && ($platform === null || $legacyOrder)) {
+            $account = GeoMediaSyncService::tenantConfig($tenantId, 'account', []);
+            if (!empty($account['token']) && !empty($account['key'])) {
+                return [$account, $tenantId];
+            }
+        }
+        return [is_array($platform) ? $platform : [], 0];
+    }
+
     private static function incomingSecret(array $params, string $field, string $current): string
     {
         if (!array_key_exists($field, $params)) {

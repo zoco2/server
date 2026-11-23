@@ -4,6 +4,7 @@ namespace app\common\service\smart_edit;
 
 use Exception;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的配音音色目录。
@@ -789,16 +790,15 @@ class SmartEditVoiceService
      */
     public static function custom(int $tenantId): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
-
-        if (!is_string($raw) || $raw === '') {
-            return [];
+        $decoded = ConfigService::getPlatform(self::TYPE, self::NAME);
+        if ($tenantId > 0 && $decoded === null) {
+            $raw = TenantConfig::where([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+            ])->value('value');
+            $decoded = is_string($raw) ? json_decode($raw, true) : [];
         }
-        $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
             return [];
         }
@@ -829,7 +829,7 @@ class SmartEditVoiceService
      *
      * @param array $rows [{key,label,provider_asset_id,gender,scene}, ...]
      */
-    public static function saveCustom(int $tenantId, array $rows): void
+    public static function saveCustom(array $rows): void
     {
         $clean = [];
         foreach ($rows as $item) {
@@ -850,22 +850,6 @@ class SmartEditVoiceService
             ];
         }
 
-        $payload = json_encode($clean, JSON_UNESCAPED_UNICODE);
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
+        ConfigService::set(self::TYPE, self::NAME, $clean);
     }
 }

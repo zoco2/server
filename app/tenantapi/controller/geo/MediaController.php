@@ -45,7 +45,12 @@ class MediaController extends BaseAdminController
     public function update()
     {
         try {
-            return $this->success('保存成功', GeoMediaLogic::update($this->tenantId, $this->request->post()), 1, 1);
+            $params = $this->request->post();
+            if (isset($params['price_ratio']) && !array_key_exists('local_hidden', $params)) {
+                return $this->fail('发稿价格由平台统一配置');
+            }
+            unset($params['price_ratio']);
+            return $this->success('保存成功', GeoMediaLogic::update($this->tenantId, $params), 1, 1);
         } catch (Exception $e) {
             return $this->fail($e->getMessage());
         }
@@ -62,13 +67,9 @@ class MediaController extends BaseAdminController
         }
     }
 
-    /** 保存加成倍率 */
+    /** @notes 媒体价格已迁移至平台 */
     public function saveMarkup()
     {
-        try {
-            return $this->success('保存成功', ['markup' => GeoMediaLogic::saveMarkup($this->tenantId, $this->request->post())], 1, 1);
-        } catch (Exception $e) {
-            return $this->fail($e->getMessage());
-        }
+        return $this->fail('发稿价格由平台统一配置');
     }
 }

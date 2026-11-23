@@ -5,6 +5,7 @@ namespace app\common\service\smart_edit;
 use Exception;
 use OSS\OssClient;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的阿里云配置。
@@ -12,7 +13,7 @@ use app\common\model\TenantConfig;
  * 完全独立：AccessKey / SecretKey / 地域 / Bucket / 域名 都在这里配置，
  * 不读取、不依赖任何其他存储设置。智能剪辑的素材与成片都放在这套配置指向的 Bucket 里。
  *
- * 存在 la_tenant_config（type=smart_edit, name=aliyun），不新建表。
+ * 平台配置存在 la_config（type=smart_edit, name=aliyun），不新建表。
  */
 class SmartEditImsConfigService
 {
@@ -27,21 +28,20 @@ class SmartEditImsConfigService
      *
      * @return array{region:string,access_key:string,secret_key:string,bucket:string,domain:string,private_access:bool,output_prefix:string}
      */
-    public static function get(int $tenantId): array
+    public static function get(int $tenantId, int $taskCreatedAt = 0): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
-
-        $data = [];
-        if (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
-            }
+        $data = ConfigService::getPlatform(self::TYPE, self::NAME);
+        // 首次切换前已经创建的任务仍用原账号提交、重试和轮询。
+        $legacyTask = $data !== null && $taskCreatedAt > 0 && $taskCreatedAt < ConfigService::platformCreatedAt(self::TYPE, self::NAME);
+        if ($tenantId > 0 && ($data === null || $legacyTask)) {
+            $raw = TenantConfig::where([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+            ])->value('value');
+            $data = is_string($raw) ? json_decode($raw, true) : $data;
         }
+        $data = is_array($data) ? $data : [];
 
         return [
             'region' => trim((string)($data['region'] ?? '')),
@@ -59,9 +59,9 @@ class SmartEditImsConfigService
      *
      * @throws Exception
      */
-    public static function require(int $tenantId): array
+    public static function require(int $tenantId, int $taskCreatedAt = 0): array
     {
-        $config = self::get($tenantId);
+        $config = self::get($tenantId, $taskCreatedAt);
 
         $missing = [];
         if ($config['region'] === '') {
@@ -83,9 +83,9 @@ class SmartEditImsConfigService
         return $config;
     }
 
-    public static function save(int $tenantId, array $params): void
+    public static function save(array $params): void
     {
-        $payload = json_encode([
+        ConfigService::set(self::TYPE, self::NAME, [
             'region' => trim((string)($params['region'] ?? '')),
             'access_key' => trim((string)($params['access_key'] ?? '')),
             'secret_key' => trim((string)($params['secret_key'] ?? '')),
@@ -93,28 +93,11 @@ class SmartEditImsConfigService
             'domain' => trim((string)($params['domain'] ?? '')),
             'private_access' => !empty($params['private_access']),
             'output_prefix' => trim((string)($params['output_prefix'] ?? '')) ?: 'smart-edit-output',
-        ], JSON_UNESCAPED_UNICODE);
-
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
+        ]);
     }
 
     /**
-     * 租户后台配置表单回显。
+     * 平台后台配置表单回显。
      */
     public static function forDisplay(int $tenantId): array
     {

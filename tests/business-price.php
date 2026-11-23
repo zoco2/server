@@ -1,97 +1,180 @@
 <?php
-
 declare(strict_types=1);
 
+use app\common\enum\AdminTerminalEnum;
 use app\common\service\ConfigService;
-use app\tenantapi\controller\setting\BusinessPriceController;
+use app\common\service\database\SqlMigrationExecutor;
+use app\common\service\geo\AigcGeoManuscriptService;
+use app\common\service\geo\GeoDiagConfigService;
+use app\common\service\geo\GeoDiagnosisPricing;
+use app\common\service\geo\GeoMediaSyncService;
+use app\common\service\share\TenantShareConfigService;
+use app\common\service\smart_edit\SmartEditBillingService;
+use app\common\service\smart_edit\SmartEditImsConfigService;
+use app\common\service\smart_edit\SmartEditVoiceConfigService;
+use app\common\service\smart_edit\SmartEditVoiceService;
+use app\common\service\wenan\WenanConfigService;
+use app\platformapi\controller\setting\BusinessConfigController;
+use app\platformapi\http\middleware\AuthMiddleware;
 use think\App;
-use think\exception\HttpResponseException;
 use think\facade\Config;
 use think\facade\Db;
+use think\facade\Env;
 use think\Model;
-use think\Request;
-use think\service\ValidateService;
 
-require dirname(__DIR__) . '/vendor/autoload.php';
-require dirname(__DIR__) . '/vendor/topthink/framework/src/helper.php';
-
-function check(bool $condition, string $message): void
-{
-    if (!$condition) throw new RuntimeException($message);
-}
-
-$app = new App(dirname(__DIR__));
-Config::set(['default' => 'file', 'stores' => ['file' => ['type' => 'File']]], 'cache');
-Config::set(['default' => 'test', 'connections' => ['test' => [
-    'type' => 'sqlite', 'database' => ':memory:', 'prefix' => 'la_', 'trigger_sql' => false,
+$tree = dirname(__DIR__);
+require $tree . '/vendor/autoload.php';
+require $tree . '/vendor/topthink/framework/src/helper.php';
+set_exception_handler(static function (Throwable $e): void {
+    file_put_contents('php://stderr', (string)$e . PHP_EOL);
+    exit(1);
+});
+$app = new App($tree);
+Config::set(['default' => 'fixture', 'connections' => ['fixture' => [
+    'type' => 'sqlite', 'database' => ':memory:', 'prefix' => 'test_', 'trigger_sql' => false,
 ]]], 'database');
-(new ValidateService($app))->boot();
+Config::set(['default' => 'file', 'stores' => ['file' => ['type' => 'File']]], 'cache');
+Env::set(['wechat' => ['credential_key' => 'fixture-shared-configuration-key'], 'database' => ['prefix' => 'test_']]);
+(new \think\service\ValidateService($app))->boot();
 Model::setDb($app->make('db'));
-Model::maker(static fn(Model $model) => $model->setDateFormat('Y-m-d H:i:s'));
-Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, sn TEXT, delete_time INTEGER)');
-Db::name('tenant')->insertAll([
-    ['id' => 1, 'tactics' => 0, 'sn' => 'shared'], ['id' => 2, 'tactics' => 1, 'sn' => 'split'],
-]);
-foreach (['la_tenant_config', 'la_tenant_config_split'] as $table) {
-    Db::execute("CREATE TABLE $table (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT,
-        name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)");
-}
+Model::maker(static function (Model $model): void {
+    $model->isAutoWriteTimestamp(true);
+    $model->setDateFormat('Y-m-d H:i:s');
+});
+Db::execute('CREATE TABLE test_tenant (id INTEGER PRIMARY KEY, sn TEXT, tactics INTEGER, delete_time INTEGER)');
+Db::execute("INSERT INTO test_tenant VALUES (1, 'one', 0, NULL), (2, 'two', 0, NULL)");
+Db::execute('CREATE TABLE test_tenant_config (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
+Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
+Db::execute('CREATE TABLE test_power_market_product (id INTEGER PRIMARY KEY, resource_type INTEGER, model_type TEXT, status INTEGER, update_time INTEGER)');
 
-$call = static function (int $tenant, string $method, string $action, array $params = []) use ($app): array {
-    $request = (new Request())->setMethod($method)->withPost($params);
-    $request->tenantId = $tenant;
-    $request->adminInfo = ['tenant_id' => $tenant, 'admin_id' => 7];
+function fixtureRequest(App $app, string $source, int $tenant = 0, array $data = []): \app\Request
+{
+    $request = new \app\Request();
+    $request->setMethod($data === [] ? 'GET' : 'POST');
+    $request->source = $source;
+    if ($tenant > 0) $request->tenantId = $tenant;
+    $request->withPost($data);
     $app->instance('request', $request);
-    try {
-        return (new BusinessPriceController($app))->$action()->getData();
-    } catch (HttpResponseException $response) {
-        return $response->getResponse()->getData();
-    }
-};
-$read = static function (int $tenant) use ($call): array {
-    $response = $call($tenant, 'GET', 'detail');
-    check($response['code'] === 1, '后台价格读取失败');
-    return $response['data'];
-};
+    return $request;
+}
+function verify(bool $ok, string $case): void
+{
+    if (!$ok) throw new RuntimeException($case);
+    echo 'PASS ' . $case . PHP_EOL;
+}
 
-$zero = ['smart_edit_points' => 0, 'media_markup_percent' => 0, 'geo_markup_percent' => 0];
+fixtureRequest($app, AdminTerminalEnum::TENANT, 1);
+ConfigService::set('business_price', 'settings', ['smart_edit_points'=>15,'geo_markup_percent'=>10,'media_markup_percent'=>0]);
+ConfigService::set('smart_edit', 'aliyun', ['domain'=>'https://old-oss.example','access_key'=>'old-ak','secret_key'=>'old-sk','bucket'=>'old','region'=>'cn-old']);
+ConfigService::set('smart_edit', 'volcengine', ['api_key'=>'old-voice']);
+ConfigService::set('geo_diag', 'provider', ['api_key'=>'old-geo']);
+ConfigService::set('geo_manuscript', 'account', ['token'=>'old-token','key'=>'old-key']);
+ConfigService::set('geo_manuscript', 'markup', 1.3);
+ConfigService::set('wenan', 'model', ['text_model_id'=>'11']);
+(new TenantShareConfigService(1))->save(['platform'=>'douyin','client_key'=>'old-id','client_secret'=>'old-secret']);
+verify(SmartEditBillingService::unitPoints() === 15 && GeoDiagnosisPricing::markupPercent() === 10.0
+    && GeoMediaSyncService::priceRatio(2.5) === 2.5, 'legacy prices before platform setup');
+verify(SmartEditImsConfigService::get(1)['secret_key'] === 'old-sk' && GeoDiagConfigService::get(1)['api_key'] === 'old-geo'
+    && (new TenantShareConfigService(1))->runtime('douyin')['client_key'] === 'old-id', 'legacy provider settings before platform setup');
+fixtureRequest($app, AdminTerminalEnum::PLATFORM);
+SmartEditImsConfigService::save(['domain'=>'https://shared-oss.example','access_key'=>'shared-ak','secret_key'=>'shared-sk','bucket'=>'shared','region'=>'cn-shared']);
+SmartEditVoiceConfigService::save(['api_key'=>'shared-voice']);
+SmartEditVoiceService::saveCustom([['key'=>'test-voice','label'=>'Test','provider_asset_id'=>'example']]);
+GeoDiagConfigService::savePlatform(['api_key'=>'shared-geo']);
+ConfigService::set('geo_manuscript', 'account', ['token'=>'shared-token','key'=>'shared-key']);
+ConfigService::set('business_price', 'settings', ['smart_edit_points'=>21,'geo_markup_percent'=>25,'media_markup_percent'=>40]);
+WenanConfigService::save(0, ['text_model_id'=>'']);
+$shares = new TenantShareConfigService(0, true);
+$shares->save(['platform'=>'douyin','client_key'=>'shared-id','client_secret'=>'shared-secret']);
+$shares->save(['platform'=>'xiaohongshu','app_key'=>'shared-xhs','app_secret'=>'shared-xhs-secret']);
+verify(!array_key_exists('client_secret',$shares->display()['douyin']) && $shares->display()['douyin']['configured'], 'platform form only reports whether share credentials are set');
+verify(str_starts_with(json_decode((string)Db::name('config')->where(['type'=>'social_share','name'=>'douyin'])->value('value'), true)['client_secret'], 'enc:v1:'), 'shared share credentials stay encrypted at rest');
+
+foreach ([1,2] as $tenant) {
+    fixtureRequest($app, AdminTerminalEnum::TENANT, $tenant);
+    verify(SmartEditBillingService::unitPoints() === 21 && GeoDiagnosisPricing::markupPercent() === 25.0
+        && GeoMediaSyncService::priceRatio(9.0) === 1.4 && GeoMediaSyncService::priceExpression() === 'costprice * 1.4', 'shared prices for tenant ' . $tenant);
+    verify(SmartEditImsConfigService::get($tenant)['secret_key'] === 'shared-sk'
+        && SmartEditVoiceConfigService::get($tenant)['api_key'] === 'shared-voice'
+        && SmartEditVoiceService::get($tenant,'test-voice')['provider_asset_id'] === 'example'
+        && GeoDiagConfigService::get($tenant)['api_key'] === 'shared-geo'
+        && (new TenantShareConfigService($tenant))->runtime('douyin')['client_key'] === 'shared-id'
+        && (new TenantShareConfigService($tenant))->runtime('xiaohongshu')['app_key'] === 'shared-xhs'
+        && WenanConfigService::get($tenant)['text_model_id'] === '', 'shared runtime providers for tenant ' . $tenant);
+}
+$diagTime = ConfigService::platformCreatedAt('geo_diag', 'provider');
+verify(GeoDiagConfigService::get(1, $diagTime - 1)['api_key'] === 'old-geo'
+    && GeoDiagConfigService::get(1, $diagTime)['api_key'] === 'shared-geo', 'historical GEO batches retain their provider credentials');
+try {
+    \app\common\service\geo\GeoDiagnosisService::usage(1);
+    throw new LogicException('Tenant usage was exposed');
+} catch (RuntimeException $error) {
+    verify(str_contains($error->getMessage(), '仅限平台'), 'tenant cannot read the shared account balance');
+}
+$imsTime = ConfigService::platformCreatedAt('smart_edit','aliyun');
+$geoTime = ConfigService::platformCreatedAt('geo_manuscript','account');
+verify($imsTime > 0 && $geoTime > 0, 'platform configuration records track activation time');
+fixtureRequest($app, AdminTerminalEnum::TENANT, 1);
+verify(SmartEditImsConfigService::require(1,$imsTime-1)['secret_key'] === 'old-sk'
+    && SmartEditImsConfigService::require(1,$imsTime)['secret_key'] === 'shared-sk', 'historical IMS tasks keep their provider account');
+$geo = new ReflectionMethod(AigcGeoManuscriptService::class, 'accountScope');
+verify($geo->invoke(null, 1, $geoTime-1) === [['token'=>'old-token','key'=>'old-key'],1]
+    && $geo->invoke(null, 1, $geoTime) === [['token'=>'shared-token','key'=>'shared-key'],0]
+    && $geo->invoke(null, 2, $geoTime) === [['token'=>'shared-token','key'=>'shared-key'],0], 'old media orders and shared token namespaces');
+
+fixtureRequest($app, AdminTerminalEnum::PLATFORM);
+$controller = new BusinessConfigController($app);
+$detail = $controller->detail()->getData();
+verify((int)$detail['code'] === 1 && $detail['data']['prices']['smart_edit_points'] === 21
+    && !isset($detail['data']['ims']['secret_key']) && !isset($detail['data']['voice']['api_key']) && !isset($detail['data']['media']['key'])
+    && $detail['data']['geo']['api_key_set'], 'platform detail excludes provider secrets');
+fixtureRequest($app, AdminTerminalEnum::PLATFORM, 0, ['section'=>'prices','smart_edit_points'=>35,'media_markup_percent'=>10,'geo_markup_percent'=>4]);
+$controller = new BusinessConfigController($app);
+$response = $controller->save()->getData();
+verify((int)$response['code'] === 1 && ConfigService::getPlatform('business_price', 'settings')['smart_edit_points'] === 35, 'platform save uses existing price validation');
+fixtureRequest($app, AdminTerminalEnum::PLATFORM, 0, ['section'=>'prices','smart_edit_points'=>-1,'media_markup_percent'=>10,'geo_markup_percent'=>4]);
+$controller = new BusinessConfigController($app);
+$response = $controller->save()->getData();
+verify((int)$response['code'] !== 1 && ConfigService::getPlatform('business_price', 'settings')['smart_edit_points'] === 35, 'invalid prices are rejected before config writes');
+
 $max = ['smart_edit_points' => 99999999, 'media_markup_percent' => 9900, 'geo_markup_percent' => 9900];
-$decimal = ['smart_edit_points' => 123, 'media_markup_percent' => 22.25, 'geo_markup_percent' => 0.01];
-check($read(1) == $zero && $read(2) == $zero, '未配置的三个价格都应为 0');
-check($call(2, 'GET', 'save', $max)['code'] === 0, 'GET 不应写入价格');
-check($call(2, 'POST', 'detail')['code'] === 0, '读取接口只接受 GET');
-check($call(1, 'POST', 'save', $zero)['code'] === 1, '共享表接受零值');
-check($call(2, 'POST', 'save', $max + ['tenant_id' => 1])['code'] === 1, '分表接受上限值');
-check($read(1) == $zero && $read(2) == $max, '表单参数不能覆盖登录租户');
+fixtureRequest($app, AdminTerminalEnum::PLATFORM, 0, ['section' => 'prices'] + $max);
+verify((new BusinessConfigController($app))->save()->getData()['code'] === 1, 'maximum prices can be saved');
+$zero = ['smart_edit_points' => 0, 'media_markup_percent' => 0, 'geo_markup_percent' => 0];
+fixtureRequest($app, AdminTerminalEnum::PLATFORM, 0, ['section' => 'prices'] + $zero);
+verify((new BusinessConfigController($app))->save()->getData()['code'] === 1
+    && GeoMediaSyncService::priceRatio(3.0) === 1.0, 'zero platform markup overrides legacy media prices');
 
-// 两个物理表使用同一主键。连续更新分表配置必须始终落在分表，且只更新同一行。
-$sharedId = Db::name('tenant_config')->value('id');
-$splitId = Db::name('tenant_config_split')->value('id');
-check($sharedId !== null && $splitId === $sharedId, '测试需要两个物理表具有相同的配置 ID');
-foreach ([$zero, $decimal, $decimal] as $settings) {
-    check($call(2, 'POST', 'save', $settings)['code'] === 1, '分表更新失败');
-    check(ConfigService::get('business_price', 'settings') == $settings, 'ConfigService 未读回完整定价数组');
-    check($read(1) == $zero && $read(2) == $settings, '更新写入其他租户或价格回读有误');
-}
-check($call(1, 'POST', 'save', $max)['code'] === 1, '共享表更新失败');
-check($read(1) == $max && $read(2) == $decimal, '共享表更新覆盖了分表价格');
-foreach (['tenant_config' => [1, $max], 'tenant_config_split' => [2, $decimal]] as $table => [$tenant, $expected]) {
-    check(Db::name($table)->count() === 1, '一个租户只应有一行价格配置');
-    $row = Db::name($table)->where('id', $sharedId)->find();
-    check((int)$row['tenant_id'] === $tenant && $row['type'] === 'business_price'
-        && $row['name'] === 'settings', '配置行归属或键名有误');
-    check(json_decode($row['value'], true, 512, JSON_THROW_ON_ERROR) == $expected, '配置 JSON 与接口值不同');
-}
-
-foreach ([
-    'smart_edit_points' => [-1, 0.5, 100000000, 'abc'],
-    'media_markup_percent' => [-0.01, 9900.01, 0.001, null],
-    'geo_markup_percent' => [-0.01, 9900.01, 0.001, null],
-] as $field => $invalidValues) {
-    foreach ($invalidValues as $value) {
-        $params = array_replace($max, [$field => $value]);
-        check($call(2, 'POST', 'save', $params)['code'] === 0, "$field 应拒绝 " . json_encode($value));
-        check($read(2) == $decimal, '无效保存修改了已有价格');
+Db::execute('CREATE TABLE test_system_menu (id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER, type TEXT, name TEXT, icon TEXT, sort INTEGER, perms TEXT, paths TEXT, component TEXT, is_show INTEGER, is_disable INTEGER DEFAULT 0, source TEXT, source_menu_key TEXT, create_time INTEGER, update_time INTEGER)');
+Db::execute('CREATE TABLE test_tenant_system_menu (id INTEGER PRIMARY KEY, component TEXT, is_show INTEGER, is_disable INTEGER, source_menu_key TEXT, update_time INTEGER)');
+Db::execute("INSERT INTO test_system_menu (id,pid,type,paths) VALUES (1,0,'M','setting')");
+Db::execute("INSERT INTO test_tenant_system_menu VALUES (1,'setting/base-config',1,0,'core_tenant_base_config',0),(2,'geo/article',1,0,'another_menu',0)");
+Db::connect()->getPdo()->sqliteCreateFunction('UNIX_TIMESTAMP', static fn () => time());
+$menuSql = file_get_contents($tree . '/upgrade/20261123_platform_business_config.sql');
+foreach ([1,2] as $_) {
+    foreach (SqlMigrationExecutor::split($menuSql) as $statement) {
+        Db::execute(str_replace('la_', 'test_', $statement));
     }
 }
-echo "PASS tenant pricing defaults, method restrictions, validation and isolated config updates\n";
+verify(Db::name('system_menu')->count() === 3
+    && (int)Db::name('tenant_system_menu')->where('id',1)->value('is_disable') === 1
+    && (int)Db::name('tenant_system_menu')->where('id',2)->value('is_disable') === 0, 'idempotent platform menu and targeted tenant removal');
+
+Db::execute('CREATE TABLE test_admin_role (id INTEGER PRIMARY KEY, admin_id INTEGER, role_id INTEGER)');
+Db::execute('CREATE TABLE test_system_role_menu (id INTEGER PRIMARY KEY, role_id INTEGER, menu_id INTEGER)');
+$detailId = Db::name('system_menu')->where('source_menu_key', 'core_platform_business_config')->value('id');
+Db::name('admin_role')->insert(['admin_id' => 77, 'role_id' => 9]);
+Db::name('system_role_menu')->insert(['role_id' => 9, 'menu_id' => $detailId]);
+
+$req = fixtureRequest($app, AdminTerminalEnum::PLATFORM);
+$req->setController('setting.BusinessConfig')->setAction('detail')->withServer(['REMOTE_ADDR' => '127.0.0.1']);
+$req->adminInfo = ['admin_id' => 77, 'root' => 0, 'login_ip' => '127.0.0.1'];
+$req->controllerObject = new BusinessConfigController($app);
+$auth = new AuthMiddleware();
+$allowed = static fn () => 'allowed';
+verify($auth->handle($req, $allowed) === 'allowed', 'platform role with read permission can open the settings');
+foreach (['save', 'voicePreview'] as $action) {
+    $req->setAction($action);
+    $result = $auth->handle($req, $allowed);
+    verify($result !== 'allowed' && $result->getData()['code'] === 0, "read-only platform role cannot use $action");
+}

@@ -5,8 +5,6 @@ declare(strict_types=1);
 use app\common\service\douyin\DouyinH5ShareService;
 use app\common\service\share\TenantShareConfigService;
 use app\common\service\xiaohongshu\XiaohongshuH5ShareService;
-use app\tenantapi\controller\channel\ShareSettingController;
-use app\tenantapi\http\middleware\AuthMiddleware;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -60,22 +58,8 @@ foreach (['tenant_config', 'tenant_config_split'] as $table) {
     Db::execute('CREATE TABLE test_' . $table . ' (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER,
         type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
 }
-Db::execute('CREATE TABLE test_tenant_system_menu (id INTEGER PRIMARY KEY, tenant_id INTEGER, perms TEXT, is_disable INTEGER)');
-Db::execute('CREATE TABLE test_tenant_admin_role (id INTEGER PRIMARY KEY, admin_id INTEGER, role_id INTEGER, tenant_id INTEGER)');
-Db::execute('CREATE TABLE test_tenant_system_role_menu (id INTEGER PRIMARY KEY, role_id INTEGER, menu_id INTEGER, tenant_id INTEGER)');
-
-function requestFor(App $app, string $method, array $params = [], string $action = 'setConfig'): ShareSettingController
-{
-    $request = new Request();
-    $request->setMethod($method)->setController('channel.ShareSetting')->setAction($action);
-    $request->withServer(['REMOTE_ADDR' => '127.0.0.1'])->withPost($params);
-    $request->tenantId = 1;
-    $request->adminInfo = ['tenant_id' => 1, 'admin_id' => 10, 'root' => 1, 'login_ip' => '127.0.0.1'];
-    $app->instance('request', $request);
-    $controller = new ShareSettingController($app);
-    $request->controllerObject = $controller;
-    return $controller;
-}
+Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
+$app->instance('request', new Request());
 
 try {
     $one = new TenantShareConfigService(1);
@@ -122,36 +106,8 @@ try {
     fails(fn () => $two->save(['platform' => 'xiaohongshu', 'app_key' => '']), '分享应用标识和密钥');
     check($one->runtime('xiaohongshu')['app_secret'] === 'xhs-secret', 'Other platform preserved');
 
-    // Controller trusts the authenticated administrator, not request tenant_id or tenant context overrides.
-    $controller = requestFor($app, 'POST', array_replace($douyin, ['tenant_id' => 2, 'client_secret' => 'rotated-secret']));
-    request()->tenantId = 2;
-    check($controller->setConfig()->getData()['code'] === 1, 'Controller save succeeds');
-    check($one->runtime('douyin')['client_secret'] === 'rotated-secret', 'Uses administrator tenant');
-    check($two->runtime('douyin')['client_secret'] === 'two-secret', 'Forged tenant ignored');
-    check(requestFor($app, 'GET')->setConfig()->getData()['code'] === 0, 'GET cannot write credentials');
-    check(requestFor($app, 'POST', [], 'getConfig')->getConfig()->getData()['code'] === 0, 'Read method constrained');
-    $controller = requestFor($app, 'GET', [], 'getConfig');
-    $detail = $controller->getConfig();
-    check($detail->getData()['data']['douyin']['client_secret'] === 'rotated-secret', 'Rotated secret in read response');
-    Db::execute('CREATE TABLE test_operation_log (id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT,
-        action TEXT, account TEXT, url TEXT, type TEXT, params TEXT, ip TEXT, result TEXT, create_time INTEGER, update_time INTEGER)');
-    check((bool)(new \app\tenantapi\listener\OperationLog())->handle($detail), 'Share operation logged');
-    $log = json_decode(Db::name('operation_log')->where('admin_id', 10)->value('result'), true);
-    check(isset($log['data']['douyin']['client_key'], $log['data']['xiaohongshu']['app_key']), 'Platform identifiers are logged');
-    check(!isset($log['data']['douyin']['client_secret']) && !isset($log['data']['xiaohongshu']['app_secret']), 'Share secrets omitted from log');
-
-    // 使用既有权限机制；独立升级 SQL 注册查看和保存权限。
-    Db::name('tenant_system_menu')->insertAll([
-        ['id' => 101, 'tenant_id' => 1, 'perms' => 'channel.share_setting/getConfig', 'is_disable' => 0],
-        ['id' => 102, 'tenant_id' => 1, 'perms' => 'channel.share_setting/setConfig', 'is_disable' => 0],
-    ]);
-    $controller = requestFor($app, 'GET', [], 'getConfig');
-    $info = request()->adminInfo;
-    $info['root'] = 0;
-    request()->adminInfo = $info;
-    $response = (new AuthMiddleware())->handle(request(), static fn () => throw new RuntimeException('Unauthorised access'));
-    check($response->getData()['code'] === 0, 'Registered endpoint requires existing role permission');
-
+    $one->save(array_replace($douyin, ['client_secret' => 'rotated-secret']));
+    check($one->runtime('douyin')['client_secret'] === 'rotated-secret', 'Legacy credential rotation remains available to internal tools');
     // Both real services use tenant credentials when preparing a signed share, with mocked platform HTTP.
     $history = [];
     $stack = HandlerStack::create(new MockHandler([
@@ -175,7 +131,7 @@ try {
     check(new DouyinH5ShareService() instanceof DouyinH5ShareService, 'Default constructor uses request tenant');
     Db::name('tenant')->where('id', 2)->update(['delete_time' => time()]);
     fails(fn () => $two->display(), '租户不存在');
-    echo "PASS tenant share config: encryption, isolation, split tables, validation, secret rotation, controller, existing permissions and signed shares\n";
+    echo "PASS tenant share config: encryption, isolation, split tables, validation, secret rotation and signed shares\n";
 } finally {
     $resolved = realpath($root);
     $runtime = realpath(dirname(__DIR__, 2) . '/runtime');

@@ -11,7 +11,8 @@ final class GeoDiagnosisPricing
 
     public static function markupPercent(): float
     {
-        $settings = ConfigService::get('business_price', 'settings', []);
+        $settings = ConfigService::getPlatform('business_price', 'settings')
+            ?? ConfigService::get('business_price', 'settings', []);
         return (float)($settings['geo_markup_percent'] ?? 0);
     }
 

@@ -127,6 +127,6 @@ class GeoMedia extends BaseModel
     public static function ratio(array $data): float
     {
         $ratio = (float)($data['price_ratio'] ?? 0);
-        return $ratio > 0 ? $ratio : GeoMediaSyncService::markup();
+        return GeoMediaSyncService::priceRatio($ratio);
     }
 }

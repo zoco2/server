@@ -89,6 +89,7 @@ namespace {
     }
     Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, sn TEXT, delete_time INTEGER)');
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
+    Db::execute('CREATE TABLE la_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
     Db::name('tenant')->insert(['id' => 3, 'tactics' => 0, 'sn' => 'test']);
     Db::name('user')->insert(['id' => 8, 'tenant_id' => 3, 'user_money' => 100]);
     Db::name('tenant_config')->insert(['tenant_id' => 3, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"smart_edit_points":7}']);

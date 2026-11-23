@@ -2,6 +2,7 @@
 
 namespace app\tenantapi\controller\wenan;
 
+use app\common\service\ConfigService;
 use app\common\service\wenan\WenanConfigService;
 use app\tenantapi\controller\BaseAdminController;
 use Exception;
@@ -18,6 +19,9 @@ class ConfigController extends BaseAdminController
 
     public function setup()
     {
+        if (ConfigService::getPlatform('wenan', 'model') !== null) {
+            return $this->fail('文案模型由平台统一配置');
+        }
         try {
             WenanConfigService::save($this->tenantId, $this->request->post());
             return $this->success('保存成功', [], 1, 1);

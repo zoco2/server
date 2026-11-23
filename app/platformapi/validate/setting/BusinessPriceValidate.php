@@ -1,6 +1,6 @@
 <?php
 
-namespace app\tenantapi\validate\setting;
+namespace app\platformapi\validate\setting;
 
 use app\common\validate\BaseValidate;
 
