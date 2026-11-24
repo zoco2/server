@@ -17,22 +17,18 @@ final class PlatformShareConfigService
         'xiaohongshu' => ['key' => 'app_key', 'secret' => 'app_secret', 'name' => '小红书'],
     ];
 
-    public static function display(): array
+    public static function display(bool $includeSecret = false): array
     {
         $result = [];
         foreach (self::PLATFORMS as $platform => $fields) {
             $value = ConfigService::getPlatform('social_share', $platform, []);
-            $secret = self::decryptSecret((string)($value[$fields['secret']] ?? ''));
-            $result[$platform] = self::publicConfig($value, $fields);
-            if ($secret === '') {
-                $result[$platform]['configured'] = false;
-            }
+            $result[$platform] = self::formConfig($value, $fields, $includeSecret);
         }
         return $result;
     }
 
     /** 一次保存一个应用的凭据，密钥留空时保留该应用已有的值。 */
-    public static function save(array $params): array
+    public static function save(array $params, bool $includeSecret = false): array
     {
         $platform = $params['platform'] ?? null;
         if (!is_string($platform) || !isset(self::PLATFORMS[$platform])) {
@@ -45,7 +41,7 @@ final class PlatformShareConfigService
         $old = ConfigService::getPlatform('social_share', $platform, []);
         $value = self::savedValue($old, $fields, $key, $secret);
         ConfigService::set('social_share', $platform, $value);
-        return self::publicConfig($value, $fields);
+        return self::formConfig($value, $fields, $includeSecret);
     }
 
     private static function savedValue(array $old, array $fields, string $key, string $secret): array
@@ -93,16 +89,20 @@ final class PlatformShareConfigService
         return str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';
     }
 
-    private static function publicConfig(array $value, array $fields): array
+    private static function formConfig(array $value, array $fields, bool $includeSecret): array
     {
         $key = (string)($value[$fields['key']] ?? '');
-        $secretSet = (string)($value[$fields['secret']] ?? '') !== '';
-        return [
-
+        $cipher = (string)($value[$fields['secret']] ?? '');
+        $secret = self::decryptSecret($cipher);
+        $config = [
             $fields['key'] => $key,
-            $fields['secret'] . '_set' => $secretSet,
-            'configured' => $key !== '' && $secretSet,
+            $fields['secret'] . '_set' => $cipher !== '',
+            'configured' => $key !== '' && $secret !== '',
         ];
+        if ($includeSecret) {
+            $config[$fields['secret']] = $secret;
+        }
+        return $config;
     }
 
     private static function credential(mixed $value, int $maxLength, string $label): string

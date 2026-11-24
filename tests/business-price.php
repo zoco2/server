@@ -159,8 +159,27 @@ $req->controllerObject = new BusinessConfigController($app);
 $auth = new AuthMiddleware();
 $allowed = static fn () => 'allowed';
 verify($auth->handle($req, $allowed) === 'allowed', 'platform role with read permission can open the settings');
+$readOnlyShare = $req->controllerObject->detail()->getData()['data']['share'];
+verify(!isset($readOnlyShare['douyin']['client_secret']) && !isset($readOnlyShare['xiaohongshu']['app_secret'])
+    && $readOnlyShare['douyin']['configured'] && $readOnlyShare['xiaohongshu']['configured'], 'read-only role sees shared credential status');
 foreach (['save', 'voicePreview'] as $action) {
     $req->setAction($action);
     $result = $auth->handle($req, $allowed);
     verify($result !== 'allowed' && $result->getData()['code'] === 0, "read-only platform role cannot use $action");
 }
+
+$saveId = Db::name('system_menu')->where('source_menu_key', 'core_platform_business_config_save')->value('id');
+Db::name('admin_role')->insert(['admin_id' => 78, 'role_id' => 10]);
+Db::name('system_role_menu')->insertAll([['role_id' => 10, 'menu_id' => $detailId], ['role_id' => 10, 'menu_id' => $saveId]]);
+$req = fixtureRequest($app, AdminTerminalEnum::PLATFORM);
+$req->setController('setting.BusinessConfig')->setAction('detail')->withServer(['REMOTE_ADDR' => '127.0.0.1']);
+$req->adminInfo = ['admin_id' => 78, 'root' => 0, 'login_ip' => '127.0.0.1'];
+$req->controllerObject = new BusinessConfigController($app);
+$editing = $auth->handle($req, static fn ($request) => $request->controllerObject->detail());
+$share = $editing->getData()['data']['share'];
+verify($share['douyin']['client_secret'] === 'shared-secret' && $share['xiaohongshu']['app_secret'] === 'shared-xhs-secret',
+    'platform editor receives saved share secrets');
+
+$req->setAction('save')->setMethod('POST')->withPost(['section' => 'share', 'platform' => 'douyin', 'client_key' => 'shared-id', 'client_secret' => '']);
+$saved = $auth->handle($req, static fn ($request) => $request->controllerObject->save())->getData();
+verify($saved['code'] === 1 && $saved['data']['client_secret'] === 'shared-secret', 'share save returns the retained secret');

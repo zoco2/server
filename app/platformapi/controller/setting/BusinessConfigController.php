@@ -2,6 +2,7 @@
 
 namespace app\platformapi\controller\setting;
 
+use app\common\cache\AdminAuthCache;
 use app\common\service\ConfigService;
 use app\common\service\geo\AigcGeoManuscriptService;
 use app\common\service\geo\GeoDiagConfigService;
@@ -15,6 +16,7 @@ use app\platformapi\controller\BaseAdminController;
 use app\platformapi\validate\setting\BusinessPriceValidate;
 use InvalidArgumentException;
 use think\exception\HttpResponseException;
+use think\helper\Str;
 use Throwable;
 
 class BusinessConfigController extends BaseAdminController
@@ -36,7 +38,7 @@ class BusinessConfigController extends BaseAdminController
             $voice = SmartEditVoiceConfigService::getPlatform();
             $voice['api_key_set'] = $voice['api_key'] !== '';
             $media = AigcGeoManuscriptService::platformConfigDetail();
-            // 管理页只回显凭据状态，留空保存时沿用现有值。
+            // 剪辑与发稿凭据留空时沿用现有值。
             unset($ims['secret_key'], $voice['api_key'], $media['token'], $media['key']);
 
             return $this->data([
@@ -51,11 +53,25 @@ class BusinessConfigController extends BaseAdminController
                 'wenan' => WenanConfigService::forPlatformDisplay(),
                 'geo' => ['api_key_set' => GeoDiagConfigService::getPlatform()['api_key'] !== ''],
                 'media' => $media,
-                'share' => PlatformShareConfigService::display(),
+                'share' => PlatformShareConfigService::display($this->canEditBusinessConfig()),
             ])->header(['Cache-Control' => 'private, no-store']);
         } catch (Throwable) {
             return $this->fail('读取平台基础配置失败');
         }
+    }
+
+    /** 分享密钥沿用基础配置的保存权限。 */
+    private function canEditBusinessConfig(): bool
+    {
+        if ((int)($this->adminInfo['root'] ?? 0) === 1) {
+            return true;
+        }
+        if ($this->adminId <= 0) {
+            return false;
+        }
+        $uris = (new AdminAuthCache($this->adminId))->getAdminUri() ?? [];
+        $normalized = array_map(static fn ($uri) => strtolower(Str::camel((string)$uri)), $uris);
+        return in_array('setting.businessconfig/save', $normalized, true);
     }
 
     /** @notes 保存平台基础配置 */
@@ -112,8 +128,9 @@ class BusinessConfigController extends BaseAdminController
                     AigcGeoManuscriptService::savePlatformConfig($params);
                     break;
                 case 'share':
-                    PlatformShareConfigService::save($params);
-                    break;
+                    $share = PlatformShareConfigService::save($params, true);
+                    return $this->success('配置已保存', $share, 1, 1)
+                        ->header(['Cache-Control' => 'private, no-store']);
                 default:
                     throw new InvalidArgumentException('请选择有效的配置区块');
             }
