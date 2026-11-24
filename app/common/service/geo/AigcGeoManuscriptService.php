@@ -64,24 +64,22 @@ class AigcGeoManuscriptService
     /**
      * 后台查看代发配置。回传已保存的 token、key 原文，不返回访问令牌。
      *
-     * @param int $tenantId 租户 ID
      * @return array<string, mixed>
      */
-    public static function configDetail(int $tenantId): array
+    public static function configDetail(): array
     {
-        return self::present(self::account($tenantId));
+        return self::present(self::account());
     }
 
     /**
      * 保存海讯社 token、key。空值表示沿用已保存的值。保存前会先换取访问令牌。
      *
-     * @param int $tenantId 租户 ID
      * @param array<string, mixed> $params token、key
      * @return array<string, mixed>
      */
-    public static function saveConfig(int $tenantId, array $params): array
+    public static function saveConfig(array $params): array
     {
-        $current = self::account($tenantId);
+        $current = self::account();
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
         $key = self::incomingSecret($params, 'key', (string)($current['key'] ?? ''));
         if ($token === '' || $key === '') {
@@ -90,25 +88,24 @@ class AigcGeoManuscriptService
         $openToken = self::issueToken($token, $key);
         $account = ['token' => $token, 'key' => $key];
         ConfigService::set('geo_manuscript', 'account', $account);
-        (new GeoManuscriptTokenCache())->setAccessToken($tenantId, $openToken, self::TOKEN_TTL);
+        (new GeoManuscriptTokenCache())->setAccessToken(0, $openToken, self::TOKEN_TTL);
         return self::present($account);
     }
 
     /**
-     * 取出当前租户可用的访问令牌。距过期不足 100 秒时先刷新，刷新失败再用 token、key 重换。
+     * 取出平台共用的访问令牌。距过期不足 100 秒时先刷新，刷新失败再用 token、key 重换。
      *
-     * @param int $tenantId 租户 ID
      */
-    public static function accessToken(int $tenantId): string
+    public static function accessToken(): string
     {
-        $account = self::account($tenantId);
+        $account = self::account();
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置文稿代发账号');
         }
         $tokenCache = new GeoManuscriptTokenCache();
-        $cached = $tokenCache->getAccessToken($tenantId);
+        $cached = $tokenCache->getAccessToken(0);
         $openToken = is_array($cached) ? trim((string)($cached['token'] ?? '')) : '';
         $issuedAt = is_array($cached) ? (int)($cached['issued_at'] ?? 0) : 0;
         if ($openToken !== '' && $issuedAt > 0 && time() < $issuedAt + self::TOKEN_TTL - self::TOKEN_REFRESH_AHEAD) {
@@ -123,7 +120,7 @@ class AigcGeoManuscriptService
                 $next = self::issueToken($accountToken, $accountKey);
             }
         }
-        $tokenCache->setAccessToken($tenantId, $next, self::TOKEN_TTL);
+        $tokenCache->setAccessToken(0, $next, self::TOKEN_TTL);
         return $next;
     }
 
@@ -131,22 +128,21 @@ class AigcGeoManuscriptService
      * 强制换取一个新令牌，忽略缓存。
      *
      * 用途：长任务中途收到令牌失效时，手里的令牌多半已被别处刷新覆盖
-     * （缓存按租户共享，后台保存配置或另一个进程刷新都会让旧令牌作废），
+     * （缓存由所有租户共享，后台保存配置或另一个进程刷新都会让旧令牌作废），
      * 此时按缓存时间判断是否该刷新已经不可靠，只能换新。
      *
-     * @param int $tenantId 租户 ID
      * @return string openToken
      */
-    public static function renewAccessToken(int $tenantId): string
+    public static function renewAccessToken(): string
     {
-        $account = self::account($tenantId);
+        $account = self::account();
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置文稿代发账号');
         }
-        (new GeoManuscriptTokenCache())->deleteAccessToken($tenantId);
-        return self::accessToken($tenantId);
+        (new GeoManuscriptTokenCache())->deleteAccessToken(0);
+        return self::accessToken();
     }
 
     /**
@@ -334,19 +330,11 @@ class AigcGeoManuscriptService
      *
      * @return array<string, mixed>
      */
-    private static function account(int $tenantId = 0): array
+    private static function account(): array
     {
-        $value = $tenantId > 0
-            ? GeoMediaSyncService::tenantConfig($tenantId, 'account', [])
-            : ConfigService::get('geo_manuscript', 'account', []);
-        return is_array($value) ? $value : [];
+        return ConfigService::getPlatform('geo_manuscript', 'account', []);
     }
 
-    /**
-     * @param array<string, mixed> $params 请求参数
-     * @param string $field token 或 key
-     * @param string $current 已保存的值
-     */
     private static function incomingSecret(array $params, string $field, string $current): string
     {
         if (!array_key_exists($field, $params)) {

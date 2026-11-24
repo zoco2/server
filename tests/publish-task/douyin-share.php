@@ -6,7 +6,7 @@ use app\api\controller\PublishTaskController;
 use app\common\service\douyin\DouyinCredentialCache;
 use app\common\service\douyin\DouyinH5ShareService;
 use app\common\service\publish_task\PublishTaskService;
-use app\common\service\share\TenantShareConfigService;
+use app\common\service\share\PlatformShareConfigService;
 use think\App;
 use think\facade\Cache;
 use think\facade\Config;
@@ -39,7 +39,7 @@ $app->instance('request', $request);
 $controller = new PublishTaskController($app);
 
 Db::execute('CREATE TABLE test_tenant (id INTEGER PRIMARY KEY, sn TEXT, tactics INTEGER, delete_time INTEGER)');
-Db::execute('CREATE TABLE test_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
+Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
 Db::execute('CREATE TABLE test_merchant_staff (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, store_id INTEGER, appid TEXT, openid TEXT, delete_time INTEGER)');
 Db::execute('CREATE TABLE test_merchant_store (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, brand_id INTEGER, delete_time INTEGER)');
 Db::execute('CREATE TABLE test_publish_task_run (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, task_id INTEGER, tasksn TEXT)');
@@ -67,9 +67,12 @@ $expectError = static function (string $message) use ($call): void {
 };
 try {
     $expectError('抖音分享凭据不可用');
-    (new TenantShareConfigService(1))->save(['platform' => 'douyin', 'enabled' => 1, 'client_key' => 'test-key', 'client_secret' => 'test-secret']);
+    $source = request()->source;
+    request()->source = \app\common\enum\AdminTerminalEnum::PLATFORM;
+    PlatformShareConfigService::save(['platform' => 'douyin', 'enabled' => 1, 'client_key' => 'test-key', 'client_secret' => 'test-secret']);
+    request()->source = $source;
     // 旧数据可能仍保存 enabled=0，凭据完整的通知应当可以生成分享链接。
-    $config = Db::name('tenant_config')->where(['tenant_id' => 1, 'type' => 'social_share', 'name' => 'douyin']);
+    $config = Db::name('config')->where(['type' => 'social_share', 'name' => 'douyin']);
     $legacy = json_decode($config->value('value'), true, flags: JSON_THROW_ON_ERROR);
     $legacy['enabled'] = 0;
     $config->update(['value' => json_encode($legacy, JSON_THROW_ON_ERROR)]);

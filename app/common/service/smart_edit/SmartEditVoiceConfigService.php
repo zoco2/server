@@ -3,7 +3,6 @@
 namespace app\common\service\smart_edit;
 
 use Exception;
-use app\common\model\TenantConfig;
 use app\common\service\ConfigService;
 
 /**
@@ -12,7 +11,7 @@ use app\common\service\ConfigService;
  * 与阿里云那套一样独立：appid / access_token / 音色集群 都在这里配，
  * 不读取、不依赖任何其他语音设置。
  *
- * 存在 la_tenant_config（type=smart_edit, name=volcengine），不新建表。
+ * 配置保存在 la_config（type=smart_edit, name=volcengine），不新建表。
  *
  * 火山大模型语音合成 2.0 只认 V3 接口（/api/v3/tts/unidirectional），
  * 鉴权走 X-Api-Key，旧的 /api/v1/tts 不支持 2.0 音色。
@@ -36,24 +35,8 @@ class SmartEditVoiceConfigService
      */
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-            $data = is_array($data) ? $data : [];
-        } else {
-            $raw = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-            ])->value('value');
-
-            $data = [];
-            if (is_string($raw) && $raw !== '') {
-                $decoded = json_decode($raw, true);
-                if (is_array($decoded)) {
-                    $data = $decoded;
-                }
-            }
-        }
+        $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+        $data = is_array($data) ? $data : [];
 
         $resourceId = trim((string)($data['resource_id'] ?? ''));
         return [
@@ -109,30 +92,8 @@ class SmartEditVoiceConfigService
         ];
     }
 
-    public static function save(int $tenantId, array $params): void
-    {
-        $payload = json_encode(self::normalizeInput($params), JSON_UNESCAPED_UNICODE);
-
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
-    }
-
     /**
-     * 租户后台配置表单回显。
+     * 平台后台配置表单回显。
      */
     public static function forDisplay(int $tenantId): array
     {

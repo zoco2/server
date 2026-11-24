@@ -3,7 +3,6 @@
 namespace app\common\service\smart_edit;
 
 use Exception;
-use app\common\model\TenantConfig;
 use app\common\service\ConfigService;
 
 /**
@@ -614,7 +613,7 @@ class SmartEditVoiceService
     }
 
     /**
-     * 租户自定义音色（后台追加），与内置清单合并。
+     * 平台自定义音色（后台追加），与内置清单合并。
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string,custom:bool}>
      */
@@ -629,7 +628,7 @@ class SmartEditVoiceService
             if ($key === '') {
                 continue;
             }
-            // 自定义覆盖内置：同一个 key 以租户配置为准
+            // 自定义覆盖内置：同一个 key 以平台配置为准
             $rows[$key] = $item + ['custom' => true];
         }
         return array_values($rows);
@@ -645,7 +644,7 @@ class SmartEditVoiceService
      *
      * scene 即分类；avatar 为官方门户头像 URL。
      *
-     * @param int  $tenantId      租户 ID；0 表示只看内置清单
+     * @param int  $tenantId      租户 ID，配置统一由平台管理
      * @param bool $withAssetId   是否返回 provider_asset_id。租户后台的音色管理要编辑它，
      *                            用户端下拉只需要显示名，不必暴露底层 ID。
      * @return array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool}>
@@ -782,23 +781,13 @@ class SmartEditVoiceService
     }
 
     /**
-     * 租户自定义音色清单。
+     * 平台自定义音色清单。
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string}>
      */
     public static function custom(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-        } else {
-            $raw = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-            ])->value('value');
-
-            $decoded = is_string($raw) ? json_decode($raw, true) : [];
-        }
+        $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
         if (!is_array($decoded)) {
             return [];
         }
@@ -825,32 +814,10 @@ class SmartEditVoiceService
     }
 
     /**
-     * 保存租户自定义音色清单。
+     * 保存平台自定义音色清单。
      *
      * @param array $rows [{key,label,provider_asset_id,gender,scene}, ...]
      */
-    public static function saveCustom(int $tenantId, array $rows): void
-    {
-        $clean = self::cleanCustom($rows);
-        $payload = json_encode($clean, JSON_UNESCAPED_UNICODE);
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
-    }
-
     public static function savePlatform(array $rows): void
     {
         ConfigService::set(self::TYPE, self::NAME, self::cleanCustom($rows));

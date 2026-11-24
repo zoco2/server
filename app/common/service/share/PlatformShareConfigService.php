@@ -68,6 +68,26 @@ final class PlatformShareConfigService
         return ['enabled' => 1, $fields['key'] => $key, $fields['secret'] => $encrypted];
     }
 
+    public static function runtime(string $platform): array
+    {
+        if (!isset(self::PLATFORMS[$platform])) {
+            throw new InvalidArgumentException('不支持的分享平台');
+        }
+        $fields = self::PLATFORMS[$platform];
+        $value = ConfigService::getPlatform('social_share', $platform, []);
+        $cipher = (string)($value[$fields['secret']] ?? '');
+        $secret = self::decryptSecret($cipher);
+        if (empty($value[$fields['key']]) || $secret === '') {
+            throw new ShareServiceException($fields['name'] . '分享凭据不可用，请平台管理员在「基础配置 → 分享配置」重新填写并保存应用标识和密钥');
+        }
+        return [
+            $fields['key'] => $value[$fields['key']],
+            $fields['secret'] => $secret,
+            // 缓存驱动由部署配置控制，不允许租户传入连接名。
+            'cache_store' => (string)config($platform . '.cache_store', ''),
+        ];
+    }
+
     private static function decryptSecret(string $cipher): string
     {
         return str_starts_with($cipher, 'enc:v1:') ? WechatCredentialService::decrypt(substr($cipher, 7)) : '';

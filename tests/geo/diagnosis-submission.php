@@ -81,8 +81,9 @@ namespace {
     Db::name('merchant_brand')->insert(['id' => 14, 'tenant_id' => 7, 'user_id' => 23, 'name' => '测试品牌']);
     Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, delete_time INTEGER)');
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
+    Db::execute('CREATE TABLE la_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT)');
     Db::name('tenant')->insert(['id' => 7, 'tactics' => 0]);
-    Db::name('tenant_config')->insert(['tenant_id' => 7, 'type' => 'business_price', 'name' => 'settings', 'value' => '{}']);
+    Db::name('config')->insert(['type' => 'business_price', 'name' => 'settings', 'value' => '{}']);
     request()->tenantId = 7;
     request()->source = \app\common\enum\AdminTerminalEnum::USER;
     $params = ['brand_id' => 14, 'questions' => ['品牌怎么样？'], 'platforms' => ['doubao'], 'repeat_count' => 1];

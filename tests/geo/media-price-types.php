@@ -1,12 +1,20 @@
 <?php
 
-// Exercise the real model accessor, public catalog and order pricing without DB/API calls.
+// Exercise catalog and order pricing with platform settings in an isolated database.
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
 use app\common\model\geo\GeoMedia;
 use app\common\service\geo\GeoMediaCatalogService;
 use app\common\service\geo\GeoMediaSyncService;
 use app\common\service\geo\GeoOrderService;
+
+$db = new \think\DbManager();
+$db->setConfig(['default' => 'test', 'connections' => ['test' => [
+    'type' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'trigger_sql' => false,
+]]]);
+\think\Model::setDb($db);
+$db->execute('CREATE TABLE config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT)');
+$db->name('config')->insert(['type' => 'business_price', 'name' => 'settings', 'value' => '{"media_markup_percent":25}']);
 
 function checkPrice(bool $condition, string $message): void
 {
@@ -21,7 +29,7 @@ function mediaFixture(array $overrides = []): GeoMedia
         'resource_type' => 1,
         'name' => '单价媒体',
         'costprice' => 322,
-        'price_ratio' => 1.25,
+        'price_ratio' => 1.75,
         'price_type_json' => [],
     ]);
 }

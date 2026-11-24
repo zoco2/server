@@ -33,7 +33,7 @@ class BusinessConfigController extends BaseAdminController
         try {
             $ims = SmartEditImsConfigService::forDisplay(0);
             $voice = SmartEditVoiceConfigService::forDisplay(0);
-            $media = AigcGeoManuscriptService::configDetail(0);
+            $media = AigcGeoManuscriptService::configDetail();
             // 管理页只回显凭据状态，留空保存时沿用现有值。
             unset($ims['secret_key'], $voice['api_key'], $media['token'], $media['key']);
 
@@ -44,7 +44,7 @@ class BusinessConfigController extends BaseAdminController
                 'voices' => SmartEditVoiceService::custom(0),
                 'voice_options' => SmartEditVoiceService::options(0),
                 'wenan' => WenanConfigService::forDisplay(0),
-                'geo' => ['api_key_set' => GeoDiagConfigService::get(0)['api_key'] !== ''],
+                'geo' => ['api_key_set' => GeoDiagConfigService::get()['api_key'] !== ''],
                 'media' => $media,
                 'share' => PlatformShareConfigService::display(),
             ])->header(['Cache-Control' => 'private, no-store']);
@@ -100,11 +100,11 @@ class BusinessConfigController extends BaseAdminController
                     break;
                 case 'geo':
                     $params['api_key'] = trim((string)($params['api_key'] ?? ''))
-                        ?: GeoDiagConfigService::get(0)['api_key'];
+                        ?: GeoDiagConfigService::get()['api_key'];
                     GeoDiagConfigService::savePlatform($params);
                     break;
                 case 'media':
-                    AigcGeoManuscriptService::saveConfig(0, $params);
+                    AigcGeoManuscriptService::saveConfig($params);
                     break;
                 case 'share':
                     PlatformShareConfigService::save($params);

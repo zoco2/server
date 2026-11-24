@@ -4,7 +4,6 @@ namespace app\tenantapi\logic\geo;
 
 use app\common\logic\BaseLogic;
 use app\common\model\geo\GeoMedia;
-use app\common\service\ConfigService;
 use app\common\service\geo\GeoMediaSyncService;
 use Exception;
 
@@ -26,12 +25,11 @@ class GeoMediaLogic extends BaseLogic
             ->field('resource_type, costprice, price_ratio')
             ->select()
             ->toArray();
-        $defaultRatio = GeoMediaSyncService::markup();
+
         $counts = [];
+        $ratio = GeoMediaSyncService::markup();
         foreach ($rows as $row) {
             $type = (int)$row['resource_type'];
-            $ratio = (float)($row['price_ratio'] ?? 0);
-            $ratio = $ratio > 0 ? $ratio : $defaultRatio;
             $sale = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
             if (!isset($counts[$type])) {
                 $counts[$type] = ['total' => 0, 'min_price' => $sale, 'max_price' => $sale];
@@ -74,7 +72,7 @@ class GeoMediaLogic extends BaseLogic
      * 设置单个资源倍率与本地隐藏。售价由成本 × 倍率实时计算，不落库。
      *
      * @param int $tenantId 租户 ID
-     * @param array<string, mixed> $params id、price_ratio(0=用租户默认)、local_hidden
+     * @param array<string, mixed> $params id、local_hidden
      * @return array<string, mixed>
      */
     public static function update(int $tenantId, array $params): array
@@ -85,13 +83,6 @@ class GeoMediaLogic extends BaseLogic
             throw new Exception('资源不存在');
         }
         $data = ['update_time' => time()];
-        if (array_key_exists('price_ratio', $params)) {
-            $ratio = (float)$params['price_ratio'];
-            if ($ratio < 0 || $ratio > 100) {
-                throw new Exception('倍率需在 0~100 之间，0 表示使用租户默认倍率');
-            }
-            $data['price_ratio'] = round($ratio, 3);
-        }
         if (array_key_exists('local_hidden', $params)) {
             $data['local_hidden'] = (int)$params['local_hidden'] ? 1 : 0;
         }
@@ -126,24 +117,6 @@ class GeoMediaLogic extends BaseLogic
      */
     public static function markup(int $tenantId): float
     {
-        return GeoMediaSyncService::markup($tenantId);
-    }
-
-    /**
-     * 保存加成倍率。仅影响之后同步的成本变化，不批量改写已有售价。
-     *
-     * @param int $tenantId 租户 ID
-     * @param array<string, mixed> $params markup
-     * @return float
-     */
-    public static function saveMarkup(int $tenantId, array $params): float
-    {
-        $markup = $params['markup'] ?? null;
-        if (!is_numeric($markup) || (float)$markup <= 0 || (float)$markup > 100) {
-            throw new Exception('加成倍率需在 0~100 之间');
-        }
-        $markup = round((float)$markup, 3);
-        ConfigService::set('geo_manuscript', 'markup', $markup);
-        return $markup;
+        return GeoMediaSyncService::markup();
     }
 }

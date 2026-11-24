@@ -42,7 +42,7 @@ class GeoMediaSync extends Command
 
         $tenantIds = $tenantId > 0 ? [$tenantId] : $this->configuredTenants();
         if ($tenantIds === []) {
-            $output->writeln('<comment>没有已配置海讯社账号的租户</comment>');
+            $output->writeln('<comment>没有可同步的租户，请检查平台发稿配置</comment>');
             return 0;
         }
 
@@ -177,18 +177,11 @@ class GeoMediaSync extends Command
         return array_values(array_filter($types, static fn(int $type): bool => isset(GeoMediaSyncService::RESOURCE_TYPES[$type])));
     }
 
-    /**
-     * 已配置 geo_manuscript.account 的租户。租户配置表按 tenant_id 存一行，
-     * 这里直接查 la_tenant_config 里 name=account 且 type=geo_manuscript 的记录。
-     *
-     * @return array<int>
-     */
     private function configuredTenants(): array
     {
-        $ids = \think\facade\Db::name('tenant_config')
-            ->where(['type' => 'geo_manuscript', 'name' => 'account'])
-            ->whereLike('value', '%"token"%')
-            ->column('tenant_id');
-        return array_values(array_filter(array_map('intval', $ids)));
+        if (!\app\common\service\geo\AigcGeoManuscriptService::configDetail()['configured']) {
+            return [];
+        }
+        return array_map('intval', \app\common\model\tenant\Tenant::withoutGlobalScope()->column('id'));
     }
 }

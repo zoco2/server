@@ -38,10 +38,9 @@ class GeoMediaCatalogService
             ->column('count(*)', 'resource_type');
 
         // 价格区间在 SQL 里按 成本 × 行倍率 取极值，再统一换算成售价。
-        $markup = GeoMediaSyncService::markup();
+        $price = GeoMediaSyncService::priceExpression();
         $rows = (clone $base)
-            ->field('resource_type,MIN(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS min_price,'
-                . 'MAX(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS max_price')
+            ->field("resource_type,MIN($price) AS min_price,MAX($price) AS max_price")
             ->group('resource_type')
             ->select()
             ->toArray();
@@ -179,12 +178,12 @@ class GeoMediaCatalogService
             });
         }
         // 价格区间按最终售价比较：成本 × 行倍率（0 用租户默认），与列表展示口径一致。
-        $markup = (float)GeoMediaSyncService::markup();
+        $price = GeoMediaSyncService::priceExpression();
         if (isset($params['min_price']) && $params['min_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) >= ?', [$markup, (float)$params['min_price']]);
+            $query->whereRaw("$price >= ?", [(float)$params['min_price']]);
         }
         if (isset($params['max_price']) && $params['max_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) <= ?', [$markup, (float)$params['max_price']]);
+            $query->whereRaw("$price <= ?", [(float)$params['max_price']]);
         }
     }
 

@@ -8,7 +8,7 @@ use app\common\service\geo\GeoMediaSyncService;
 /**
  * GEO 媒体资源（海讯社镜像）。
  *
- * 售价不落库：sale_price 由 costprice × 倍率（行级 price_ratio，0 取租户默认）实时计算，
+ * 售价不落库：sale_price 由 costprice × 倍率（平台统一倍率）实时计算，
  * 否则调倍率要全表回写。多价格类别同理，读出时补上实时价格。
  *
  * 注意 JSON 字段：
@@ -51,7 +51,7 @@ class GeoMedia extends BaseModel
      */
     public function getSalePriceAttr($value, array $data): float
     {
-        return GeoMediaSyncService::suggestSalePrice((float)($data['costprice'] ?? 0), self::ratio($data));
+        return GeoMediaSyncService::suggestSalePrice((float)($data['costprice'] ?? 0), GeoMediaSyncService::markup());
     }
 
     /**
@@ -83,7 +83,7 @@ class GeoMedia extends BaseModel
             && is_finite($cost) && $cost > 0) {
             $items = [['type' => 1, 'price' => $cost]];
         }
-        $ratio = self::ratio($data);
+        $ratio = GeoMediaSyncService::markup();
         $result = [];
         foreach ($items as $item) {
             if (!is_array($item)) {

@@ -48,6 +48,9 @@ class GeoDiagnosisService
     /** @return array<string, mixed> */
     public static function usage(int $tenantId): array
     {
+        if ($tenantId > 0) {
+            throw new \RuntimeException('服务商账户用量仅限平台查看');
+        }
         return (new GeoDiagProvider($tenantId))->usage();
     }
 
@@ -319,6 +322,7 @@ class GeoDiagnosisService
             $byRun[(int)$sample['run_id']][] = $sample;
         }
         foreach ($runs as &$run) {
+            unset($run['balance_cents']);
             $run['platforms'] = self::decode($run['platforms_json'], []);
             $run['samples'] = $byRun[(int)$run['id']] ?? [];
         }
@@ -741,6 +745,7 @@ class GeoDiagnosisService
     /** @param array<string, mixed> $row */
     private static function presentBatch(array &$row): void
     {
+        unset($row['balance_cents']);
         $row['platforms'] = self::decode($row['platforms_json'] ?? '[]', []);
         $row['brand_aliases'] = self::decode($row['brand_aliases_json'] ?? '[]', []);
         $row['summary'] = self::decode($row['summary_json'] ?? '{}', []);

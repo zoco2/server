@@ -78,9 +78,9 @@ namespace {
     Db::name('tenant')->insert(['id' => 3, 'tactics' => 0]);
     Db::name('user')->insert(['id' => 8, 'tenant_id' => 3, 'user_money' => '500']);
     Db::name('merchant_brand')->insert(['id' => 6, 'tenant_id' => 3, 'user_id' => 8, 'name' => '示例']);
-    Db::name('tenant_config')->insertAll([
-        ['tenant_id' => 3, 'type' => 'geo_diag', 'name' => 'provider', 'value' => '{"api_key":"fixture"}'],
-        ['tenant_id' => 3, 'type' => 'business_price', 'name' => 'settings', 'value' => '{"geo_markup_percent":20}'],
+    Db::name('config')->insertAll([
+        ['type' => 'geo_diag', 'name' => 'provider', 'value' => '{"api_key":"fixture"}'],
+        ['type' => 'business_price', 'name' => 'settings', 'value' => '{"geo_markup_percent":20}'],
     ]);
 
     request()->tenantId = 3;
@@ -91,13 +91,13 @@ namespace {
     $GLOBALS['submit_status'] = 503;
     $GLOBALS['charged_cents'] = 0;
     $GLOBALS['submissions'] = [];
-    check(Diagnosis::platforms(3)[0]['markup_basis_points'] === 2000, 'Display should quote the tenant markup');
+    check(Diagnosis::platforms(3)[0]['markup_basis_points'] === 2000, 'Display should quote the platform markup');
     $batch = Diagnosis::create(8, $params);
     check($balance() === 314.0 && $batch['reserved_points'] === 186 && !$batch['upstream_batch_id'], 'Uncertain acceptance lost reservation');
     $GLOBALS['submit_status'] = 200;
     Diagnosis::syncOne((int)$batch['id'], 8);
     check(count($GLOBALS['submissions']) === 2 && $GLOBALS['submissions'][0] === $GLOBALS['submissions'][1], 'Retry changed idempotency key');
-    Db::name('tenant_config')->where('name', 'settings')->update(['value' => '{"geo_markup_percent":50}']);
+    Db::name('config')->where('name', 'settings')->update(['value' => '{"geo_markup_percent":50}']);
     $done = Diagnosis::syncOne((int)$batch['id'], 8);
     check($done['charged_points'] === 78 && $balance() === 422.0, 'Replayed zero-cost receipt erased the initial charge or historical markup');
     Diagnosis::syncOne((int)$batch['id'], 8);

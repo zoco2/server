@@ -3,14 +3,13 @@
 namespace app\common\service\wenan;
 
 use Exception;
-use app\common\model\TenantConfig;
 use app\common\service\ConfigService;
 use app\common\service\power\MarketTextModelRuntimeService;
 
 /**
  * 文案 LLM 模型配置（企业知识库 + 智能剪辑等共用）。
  *
- * 存在 la_tenant_config（type=wenan, name=model），不挂在 smart_edit 名下。
+ * 配置保存在 la_config（type=wenan, name=model），不挂在 smart_edit 名下。
  */
 class WenanConfigService
 {
@@ -25,39 +24,8 @@ class WenanConfigService
      */
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $platform = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-            return ['text_model_id' => trim((string)($platform['text_model_id'] ?? ''))];
-        }
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
-
-        // 兼容短暂误存到 smart_edit/wenan 的配置，读到后仍以本表为准写入
-        if (!is_string($raw) || $raw === '') {
-            $legacy = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => 'smart_edit',
-                'name' => 'wenan',
-            ])->value('value');
-            if (is_string($legacy) && $legacy !== '') {
-                $raw = $legacy;
-            }
-        }
-
-        $data = [];
-        if (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
-            }
-        }
-
-        return [
-            'text_model_id' => trim((string)($data['text_model_id'] ?? '')),
-        ];
+        $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+        return ['text_model_id' => trim((string)($data['text_model_id'] ?? ''))];
     }
 
     /**
@@ -107,30 +75,7 @@ class WenanConfigService
             }
         }
 
-        if ($tenantId <= 0) {
-            ConfigService::set(self::TYPE, self::NAME, ['text_model_id' => $selection]);
-            return;
-        }
-        $payload = json_encode([
-            'text_model_id' => $selection,
-        ], JSON_UNESCAPED_UNICODE);
-
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
+        ConfigService::set(self::TYPE, self::NAME, ['text_model_id' => $selection]);
     }
 
     /**
@@ -146,7 +91,7 @@ class WenanConfigService
             MarketTextModelRuntimeService::resolveModel($tenantId, $selection);
             return $selection;
         } catch (Exception) {
-            throw new Exception('文案模型不可用，请到租户后台「文案模型」重新选择');
+            throw new Exception('文案模型不可用，请平台管理员在「基础配置」重新选择');
         }
     }
 }

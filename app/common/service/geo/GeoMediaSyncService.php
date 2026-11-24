@@ -12,7 +12,7 @@ use Throwable;
 /**
  * 海讯社媒体资源同步。
  *
- * 账号 token/key 由 {@see AigcGeoManuscriptService::saveConfig()} 写入租户配置，
+ * 账号 token/key 由平台后台统一配置，
  * 这里只负责拉取 /api/media/resources/list{n}ON 并落本地镜像 la_geo_media。
  * 海讯列表接口不支持服务端搜索，前台筛选全部在本地表完成。
  */
@@ -50,7 +50,7 @@ class GeoMediaSyncService
         if (!isset(self::RESOURCE_TYPES[$type])) {
             throw new Exception('资源类型无效');
         }
-        $openToken = AigcGeoManuscriptService::accessToken($tenantId);
+        $openToken = AigcGeoManuscriptService::accessToken();
         $limit = max(0, $limit);
         $seen = [];
         $created = 0;
@@ -65,7 +65,6 @@ class GeoMediaSyncService
         do {
             // 令牌在循环里失效时自动换新并回写到 $openToken，后续页继续用新令牌。
             $payload = self::callWithToken(
-                $tenantId,
                 $openToken,
                 static fn (string $token): array => AigcGeoManuscriptService::resources($token, $type, $page, self::PAGE_SIZE)
             );
@@ -140,7 +139,7 @@ class GeoMediaSyncService
         if ($sourceIds === []) {
             return ['checked' => 0, 'down' => 0, 'removed' => 0];
         }
-        $openToken = AigcGeoManuscriptService::accessToken($tenantId);
+        $openToken = AigcGeoManuscriptService::accessToken();
         $checked = 0;
         $down = 0;
         $removed = 0;
@@ -148,7 +147,6 @@ class GeoMediaSyncService
             try {
                 // 逐个校正可能跑很久，同样交给带令牌自愈的调用器。
                 $state = self::callWithToken(
-                    $tenantId,
                     $openToken,
                     static fn (string $token): array => AigcGeoManuscriptService::resourceState($token, $sourceId)
                 );
@@ -201,41 +199,16 @@ class GeoMediaSyncService
         return $result;
     }
 
-    /**
-     * 租户默认加成倍率，配置在 geo_manuscript.markup，默认 1.0。
-     * 资源行若单独设置了 price_ratio（大于 0）则优先用行上的值。
-     */
-    public static function markup(?int $tenantId = null): float
+    /** 发稿售价统一使用平台设置的溢价。 */
+    public static function markup(): float
     {
-        $tenantId = $tenantId ?: (int)request()->tenantId;
-        $value = self::tenantConfig($tenantId, 'markup');
-        $markup = is_numeric($value) ? (float)$value : 1.0;
-        return $markup > 0 ? $markup : 1.0;
+        $prices = ConfigService::getPlatform('business_price', 'settings', []);
+        return 1 + (float)($prices['media_markup_percent'] ?? 0) / 100;
     }
 
-    /**
-     * 读租户级配置。ConfigService 依赖 request()->tenantId，
-     * 命令行/轮询任务里没有请求上下文时直接按 tenant_id 查 la_tenant_config。
-     *
-     * @param int $tenantId 租户 ID
-     * @param string $name 配置名
-     * @param mixed $default 默认值
-     * @param string $type 配置类型，默认 geo_manuscript
-     * @return mixed
-     */
-    public static function tenantConfig(int $tenantId, string $name, mixed $default = null, string $type = 'geo_manuscript'): mixed
+    public static function priceExpression(): string
     {
-        if ($tenantId > 0 && (int)(request()->tenantId ?? 0) !== $tenantId) {
-            $value = \think\facade\Db::name('tenant_config')
-                ->where(['tenant_id' => $tenantId, 'type' => $type, 'name' => $name])
-                ->value('value');
-            if ($value === null) {
-                return $default;
-            }
-            $json = json_decode((string)$value, true);
-            return json_last_error() === JSON_ERROR_NONE ? $json : $value;
-        }
-        return ConfigService::get($type, $name, $default);
+        return 'costprice * ' . self::markup();
     }
 
     /**
@@ -256,12 +229,11 @@ class GeoMediaSyncService
      * 后台保存配置或另一个进程刷新都会让手里的旧令牌当场作废。这里收到令牌失效
      * 就换新令牌立即重试，而不是拿同一个过期令牌空转到次数耗尽。
      *
-     * @param int $tenantId 租户 ID
      * @param string $openToken 访问令牌，失效换新后回写
      * @param callable $call 实际请求，签名为 fn(string $openToken): array
      * @return array<string, mixed>
      */
-    private static function callWithToken(int $tenantId, string &$openToken, callable $call): array
+    private static function callWithToken(string &$openToken, callable $call): array
     {
         $lastError = null;
         $renewed = 0;
@@ -275,7 +247,7 @@ class GeoMediaSyncService
                 }
                 $renewed++;
                 try {
-                    $openToken = AigcGeoManuscriptService::renewAccessToken($tenantId);
+                    $openToken = AigcGeoManuscriptService::renewAccessToken();
                 } catch (Exception $renewError) {
                     // 换令牌都失败了（账号被撤销、网络不通），重试没有意义。
                     throw new Exception('访问令牌已失效且无法重新获取：' . $renewError->getMessage());

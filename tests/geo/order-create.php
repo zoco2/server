@@ -31,9 +31,8 @@ namespace app\common\service\geo {
         {
             return $message;
         }
-        public static function accessToken(int $tenantId): string
+        public static function accessToken(): string
         {
-            if ($tenantId !== 7) throw new \RuntimeException('Wrong tenant');
             return 'test-token';
         }
         public static function createOrder(string $token, array $order): void
@@ -64,6 +63,8 @@ namespace {
         ]],
     ]);
     $connection = $db->connect();
+    $connection->execute('CREATE TABLE config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT)');
+    $connection->name('config')->insert(['type' => 'business_price', 'name' => 'settings', 'value' => '{"media_markup_percent":25}']);
     foreach ([
         'CREATE TABLE geo_article (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER,
             title TEXT, content TEXT, preview_url TEXT, delete_time INTEGER NULL, create_time INTEGER, update_time INTEGER)',
@@ -89,10 +90,10 @@ namespace {
     ]);
     $db->name('geo_media')->insertAll([
         ['id' => 59479, 'tenant_id' => 7, 'sourceid' => 'single-media', 'resource_type' => 1,
-            'name' => '单价媒体', 'costprice' => 322, 'price_ratio' => 1.25,
+            'name' => '单价媒体', 'costprice' => 322, 'price_ratio' => 1.75,
             'price_type_json' => '[]', 'flag' => 1, 'deleted' => 1],
         ['id' => 59480, 'tenant_id' => 7, 'sourceid' => 'multi-media', 'resource_type' => 12,
-            'name' => '多价媒体', 'costprice' => 80, 'price_ratio' => 1.25,
+            'name' => '多价媒体', 'costprice' => 80, 'price_ratio' => 1.75,
             'price_type_json' => '[{"type":2,"price":80},{"type":3,"price":120}]', 'flag' => 1, 'deleted' => 1],
     ]);
 
