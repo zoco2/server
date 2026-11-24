@@ -15,7 +15,7 @@ class GeoTextModelService
 
     public static function candidates(int $tenantId, bool $requiresTools): array
     {
-        $selection = WenanConfigService::get($tenantId)['text_model_id'];
+        $selection = WenanConfigService::getPlatform()['text_model_id'];
         if ($selection !== '') {
             try {
                 $model = MarketTextModelRuntimeService::resolveModel($tenantId, $selection);

@@ -48,12 +48,12 @@ namespace {
     }
 
     Db::execute('CREATE TABLE test_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT, create_time INTEGER, update_time INTEGER)');
-    check(Config::get() === Config::DEFAULTS, 'Empty platform credentials');
+    check(Config::getPlatform() === Config::DEFAULTS, 'Empty platform credentials');
     $request = new Request();
     $request->source = \app\common\enum\AdminTerminalEnum::PLATFORM;
     $app->instance('request', $request);
     Config::savePlatform(['api_key' => 'platform-fixture']);
-    check(Config::get() === ['api_key' => 'platform-fixture'], 'Platform GEO configuration was saved');
+    check(Config::getPlatform() === ['api_key' => 'platform-fixture'], 'Platform GEO configuration was saved');
 
     GeoDiagnosisService::usage(0);
     $request = $GLOBALS['geo_requests'][0];

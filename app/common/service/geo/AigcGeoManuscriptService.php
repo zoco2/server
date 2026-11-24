@@ -66,7 +66,7 @@ class AigcGeoManuscriptService
      *
      * @return array<string, mixed>
      */
-    public static function configDetail(): array
+    public static function platformConfigDetail(): array
     {
         return self::present(self::account());
     }
@@ -77,7 +77,7 @@ class AigcGeoManuscriptService
      * @param array<string, mixed> $params token、key
      * @return array<string, mixed>
      */
-    public static function saveConfig(array $params): array
+    public static function savePlatformConfig(array $params): array
     {
         $current = self::account();
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
@@ -88,7 +88,7 @@ class AigcGeoManuscriptService
         $openToken = self::issueToken($token, $key);
         $account = ['token' => $token, 'key' => $key];
         ConfigService::set('geo_manuscript', 'account', $account);
-        (new GeoManuscriptTokenCache())->setAccessToken(0, $openToken, self::TOKEN_TTL);
+        (new GeoManuscriptTokenCache())->setPlatformAccessToken($openToken, self::TOKEN_TTL);
         return self::present($account);
     }
 
@@ -105,7 +105,7 @@ class AigcGeoManuscriptService
             throw new Exception('请先配置文稿代发账号');
         }
         $tokenCache = new GeoManuscriptTokenCache();
-        $cached = $tokenCache->getAccessToken(0);
+        $cached = $tokenCache->getPlatformAccessToken();
         $openToken = is_array($cached) ? trim((string)($cached['token'] ?? '')) : '';
         $issuedAt = is_array($cached) ? (int)($cached['issued_at'] ?? 0) : 0;
         if ($openToken !== '' && $issuedAt > 0 && time() < $issuedAt + self::TOKEN_TTL - self::TOKEN_REFRESH_AHEAD) {
@@ -120,7 +120,7 @@ class AigcGeoManuscriptService
                 $next = self::issueToken($accountToken, $accountKey);
             }
         }
-        $tokenCache->setAccessToken(0, $next, self::TOKEN_TTL);
+        $tokenCache->setPlatformAccessToken($next, self::TOKEN_TTL);
         return $next;
     }
 
@@ -141,7 +141,7 @@ class AigcGeoManuscriptService
         if ($accountToken === '' || $accountKey === '') {
             throw new Exception('请先配置文稿代发账号');
         }
-        (new GeoManuscriptTokenCache())->deleteAccessToken(0);
+        (new GeoManuscriptTokenCache())->deletePlatformAccessToken();
         return self::accessToken();
     }
 

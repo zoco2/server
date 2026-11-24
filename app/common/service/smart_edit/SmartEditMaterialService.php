@@ -16,7 +16,7 @@ class SmartEditMaterialService
     /**
      * 素材 uri -> IMS 能拉取的公网地址。
      *
-     * @param array $config SmartEditImsConfigService::require() 的结果
+     * @param array $config SmartEditImsConfigService::requirePlatform() 的结果
      */
     public static function mediaUrl(array $config, int $tenantId, string $uri): string
     {

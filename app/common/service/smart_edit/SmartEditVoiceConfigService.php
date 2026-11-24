@@ -33,7 +33,7 @@ class SmartEditVoiceConfigService
      *
      * @return array{api_key:string,endpoint:string,resource_id:string,appid:string,default_speed:float}
      */
-    public static function get(int $tenantId): array
+    public static function getPlatform(): array
     {
         $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
         $data = is_array($data) ? $data : [];
@@ -56,9 +56,9 @@ class SmartEditVoiceConfigService
      *
      * @throws Exception
      */
-    public static function require(int $tenantId): array
+    public static function requirePlatform(): array
     {
-        $config = self::get($tenantId);
+        $config = self::getPlatform();
 
         $missing = [];
         if ($config['api_key'] === '') {
@@ -90,15 +90,5 @@ class SmartEditVoiceConfigService
                 ? (float)$params['default_speed']
                 : 1.0,
         ];
-    }
-
-    /**
-     * 平台后台配置表单回显。
-     */
-    public static function forDisplay(int $tenantId): array
-    {
-        $config = self::get($tenantId);
-        $config['api_key_set'] = $config['api_key'] !== '';
-        return $config;
     }
 }

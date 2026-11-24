@@ -133,7 +133,7 @@ foreach ([
 
 class SmartEditTransitionTestImsConfig
 {
-    public static function require(int $tenantId): array
+    public static function requirePlatform(): array
     {
         throw new RuntimeException('Reached IMS configuration after request validation');
     }

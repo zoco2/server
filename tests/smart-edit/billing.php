@@ -14,7 +14,7 @@ namespace app\common\service\mq {
 namespace app\common\service\smart_edit {
     class SmartEditImsConfigService
     {
-        public static function require(int $tenant): array { return ['region' => 'fixture', 'domain' => 'example.test', 'access_key' => 'fixture', 'secret_key' => 'fixture']; }
+        public static function requirePlatform(): array { return ['region' => 'fixture', 'domain' => 'example.test', 'access_key' => 'fixture', 'secret_key' => 'fixture']; }
     }
     class ImsClient
     {

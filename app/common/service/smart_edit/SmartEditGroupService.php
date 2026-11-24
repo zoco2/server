@@ -49,7 +49,7 @@ class SmartEditGroupService
         $comboCount = self::countCombos($shots);
 
         // 共用配置走与单任务完全相同的归一化，保证两边语义一致
-        $shared = SmartEditService::normalizeSharedForGroup($params, $tenantId);
+        $shared = SmartEditService::normalizeSharedForGroup($params);
         $boundaryCount = count($shots) - 1;
         if (array_key_exists('transition_policy', $params)) {
             $policy = SmartEditTimelineBuilder::normalizeTransitionPolicy($params['transition_policy'], $boundaryCount);

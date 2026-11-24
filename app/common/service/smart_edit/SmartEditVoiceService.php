@@ -617,13 +617,13 @@ class SmartEditVoiceService
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string,custom:bool}>
      */
-    public static function catalog(int $tenantId = 0): array
+    public static function platformCatalog(): array
     {
         $rows = [];
         foreach (self::builtin() as $key => $item) {
             $rows[$key] = $item + ['key' => $key, 'custom' => false];
         }
-        foreach (self::custom($tenantId) as $item) {
+        foreach (self::platformCustom() as $item) {
             $key = (string)$item['key'];
             if ($key === '') {
                 continue;
@@ -644,15 +644,14 @@ class SmartEditVoiceService
      *
      * scene 即分类；avatar 为官方门户头像 URL。
      *
-     * @param int  $tenantId      租户 ID，配置统一由平台管理
      * @param bool $withAssetId   是否返回 provider_asset_id。租户后台的音色管理要编辑它，
      *                            用户端下拉只需要显示名，不必暴露底层 ID。
      * @return array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool}>
      */
-    public static function options(int $tenantId = 0, bool $withAssetId = false): array
+    public static function options(bool $withAssetId = false): array
     {
         $result = [];
-        foreach (self::catalog($tenantId) as $item) {
+        foreach (self::platformCatalog() as $item) {
             $label = (string)$item['label'];
             $row = [
                 'key' => (string)$item['key'],
@@ -679,11 +678,11 @@ class SmartEditVoiceService
      *
      * @return array{tabs: array<int, array{key:string,label:string,badge?:string,badge_color?:string}>, voices: array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool,tabs:array<int,string>}>}
      */
-    public static function pickerCatalog(int $tenantId = 0): array
+    public static function pickerCatalog(): array
     {
         $voices = [];
         $sceneKeys = [];
-        foreach (self::catalog($tenantId) as $item) {
+        foreach (self::platformCatalog() as $item) {
             // 暂时只展示内置，跳过租户自定义 / 克隆
             if (!empty($item['custom'])) {
                 continue;
@@ -734,9 +733,9 @@ class SmartEditVoiceService
      *
      * @throws Exception
      */
-    public static function get(int $tenantId, string $key): array
+    public static function getPlatform(string $key): array
     {
-        foreach (self::catalog($tenantId) as $item) {
+        foreach (self::platformCatalog() as $item) {
             if ((string)$item['key'] === $key) {
                 return $item;
             }
@@ -751,7 +750,7 @@ class SmartEditVoiceService
      * @return array<int, string>
      * @throws Exception
      */
-    public static function normalizeKeys(int $tenantId, $raw): array
+    public static function normalizeKeys($raw): array
     {
         if (!is_array($raw) || $raw === []) {
             return [];
@@ -763,7 +762,7 @@ class SmartEditVoiceService
                 continue;
             }
             // 逐项校验：非法 key 直接报错，不要静默丢掉导致口播少了音色
-            self::get($tenantId, $key);
+            self::getPlatform($key);
             if (!in_array($key, $keys, true)) {
                 $keys[] = $key;
             }
@@ -785,7 +784,7 @@ class SmartEditVoiceService
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string}>
      */
-    public static function custom(int $tenantId): array
+    public static function platformCustom(): array
     {
         $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
         if (!is_array($decoded)) {

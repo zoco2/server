@@ -28,9 +28,9 @@ class GeoDiagnosisService
     ];
 
     /** @return array<int, array<string, mixed>> */
-    public static function platforms(int $tenantId): array
+    public static function platforms(): array
     {
-        $platforms = (new GeoDiagProvider($tenantId))->platforms();
+        $platforms = (new GeoDiagProvider())->platforms();
         $markup = GeoDiagnosisPricing::markupPercent();
         foreach ($platforms as &$platform) {
             $platform['markup_basis_points'] = (int)round($markup * 100);
@@ -40,9 +40,9 @@ class GeoDiagnosisService
     }
 
     /** @return array<string, mixed> */
-    public static function regions(int $tenantId): array
+    public static function regions(): array
     {
-        return (new GeoDiagProvider($tenantId))->regions();
+        return (new GeoDiagProvider())->regions();
     }
 
     /** @return array<string, mixed> */
@@ -51,7 +51,7 @@ class GeoDiagnosisService
         if ($tenantId > 0) {
             throw new \RuntimeException('服务商账户用量仅限平台查看');
         }
-        return (new GeoDiagProvider($tenantId))->usage();
+        return (new GeoDiagProvider())->usage();
     }
 
     /**
@@ -106,8 +106,7 @@ class GeoDiagnosisService
             }
         }
 
-        $tenantId = (int)$brand['tenant_id'];
-        $provider = new GeoDiagProvider($tenantId);
+        $provider = new GeoDiagProvider();
         $billing = GeoDiagnosisPricing::quote(
             $provider->platforms(), $platforms, count($questions) * $repeatCount, $screenshot, $conversationLink,
             GeoDiagnosisPricing::markupPercent()
@@ -204,7 +203,7 @@ class GeoDiagnosisService
             }
             $now = time();
             try {
-                $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+                $provider = new GeoDiagProvider();
                 $accepted = $provider->createRun(self::decode($batch['request_json'], []), (string)$batch['idempotency_key']);
             } catch (GeoDiagProviderException $e) {
                 if ($e->getCode() >= 400 && $e->getCode() < 500 && !in_array($e->getCode(), [408, 409, 429], true)) {
@@ -402,7 +401,7 @@ class GeoDiagnosisService
             self::submitReserved((int)$batch['id'], true);
             return;
         }
-        $provider = new GeoDiagProvider((int)$batch['tenant_id']);
+        $provider = new GeoDiagProvider();
         $statusResponse = $provider->batchStatus($upstreamBatchId);
         $status = is_array($statusResponse['data']) ? $statusResponse['data'] : [];
         $pollAfter = (int)($status['pollAfterSeconds'] ?? self::DEFAULT_POLL_AFTER);

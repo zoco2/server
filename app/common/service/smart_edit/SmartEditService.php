@@ -159,7 +159,7 @@ class SmartEditService
         $stickerInputs = (array)($shared['stickers'] ?? []);
         $audioInputs = (array)($shared['audios'] ?? []);
 
-        $config = SmartEditImsConfigService::require($tenantId);
+        $config = SmartEditImsConfigService::requirePlatform();
         $taskNo = self::newTaskNo();
         [, $outputHeight] = self::resolveOutputSize($aspectRatio);
 
@@ -447,7 +447,7 @@ class SmartEditService
         }
 
         try {
-            $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+            $config = SmartEditImsConfigService::requirePlatform();
             // 用提交时记录的地域，避免中途改配置导致查不到旧任务
             $region = (string)$task['region'] ?: $config['region'];
             $client = new ImsClient($config['access_key'], $config['secret_key'], $region);
@@ -492,7 +492,7 @@ class SmartEditService
      */
     public static function retry(SmartEditTask $task): void
     {
-        $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+        $config = SmartEditImsConfigService::requirePlatform();
         $output = SmartEditMaterialService::outputTarget($config, (string)$task['task_no']);
         if ((array)$task['timeline_json'] === []) {
             throw new Exception('任务参数缺失，无法重试');
@@ -720,10 +720,9 @@ class SmartEditService
      * 与 validate() 共用同一套子方法，保证组和单任务对同名字段的理解一致。
      *
      * @param array $params   前端参数
-     * @param int   $tenantId 租户 ID，用于校验配音音色是否在当前租户的清单内
      * @return array{edit_type: string, title: string, cover_uri: string, aspect_ratio: string, title_overlay: array, title_groups: array, stickers: array, sticker_groups: array, audios: array, audio_groups: array, subtitle_groups: array, subtitle_gap: float, voice_speed: float|null, voice_volume: float|null, voices: array}
      */
-    public static function normalizeSharedForGroup(array $params, int $tenantId = 0): array
+    public static function normalizeSharedForGroup(array $params): array
     {
         $editType = trim((string)($params['edit_type'] ?? SmartEditTask::TYPE_MERGE));
         if ($editType !== SmartEditTask::TYPE_MERGE) {
@@ -745,7 +744,7 @@ class SmartEditService
         $stickerGroups = self::normalizeStickerGroups($params);
         $audioGroups = self::normalizeAudioGroups($params);
         $subtitles = self::normalizeSubtitles($params);
-        $voices = SmartEditVoiceService::normalizeKeys($tenantId, $params['voices'] ?? []);
+        $voices = SmartEditVoiceService::normalizeKeys($params['voices'] ?? []);
         return [
             'edit_type' => $editType,
             'title' => mb_substr($title, 0, 100),
@@ -1037,7 +1036,7 @@ class SmartEditService
      */
     public static function assertSharedResolvable(int $tenantId, array $shared): void
     {
-        $config = SmartEditImsConfigService::require($tenantId);
+        $config = SmartEditImsConfigService::requirePlatform();
 
         // 多封面：每一张都要能被 IMS 拉到，避免部分组合在展开后才失败
         $coverUris = $shared['cover_uris'] ?? null;

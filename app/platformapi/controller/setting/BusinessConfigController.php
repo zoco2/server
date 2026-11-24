@@ -31,9 +31,11 @@ class BusinessConfigController extends BaseAdminController
         }
 
         try {
-            $ims = SmartEditImsConfigService::forDisplay(0);
-            $voice = SmartEditVoiceConfigService::forDisplay(0);
-            $media = AigcGeoManuscriptService::configDetail();
+            $ims = SmartEditImsConfigService::getPlatform();
+            $ims['secret_key_set'] = $ims['secret_key'] !== '';
+            $voice = SmartEditVoiceConfigService::getPlatform();
+            $voice['api_key_set'] = $voice['api_key'] !== '';
+            $media = AigcGeoManuscriptService::platformConfigDetail();
             // 管理页只回显凭据状态，留空保存时沿用现有值。
             unset($ims['secret_key'], $voice['api_key'], $media['token'], $media['key']);
 
@@ -41,10 +43,13 @@ class BusinessConfigController extends BaseAdminController
                 'prices' => ConfigService::getPlatform('business_price', 'settings', []) + self::PRICES,
                 'ims' => $ims,
                 'voice' => $voice,
-                'voices' => SmartEditVoiceService::custom(0),
-                'voice_options' => SmartEditVoiceService::options(0),
-                'wenan' => WenanConfigService::forDisplay(0),
-                'geo' => ['api_key_set' => GeoDiagConfigService::get()['api_key'] !== ''],
+                'voices' => SmartEditVoiceService::platformCustom(),
+                'voice_options' => array_map(
+                    static fn(array $voice): array => ['key' => $voice['key'], 'label' => $voice['label']],
+                    SmartEditVoiceService::platformCatalog()
+                ),
+                'wenan' => WenanConfigService::forPlatformDisplay(),
+                'geo' => ['api_key_set' => GeoDiagConfigService::getPlatform()['api_key'] !== ''],
                 'media' => $media,
                 'share' => PlatformShareConfigService::display(),
             ])->header(['Cache-Control' => 'private, no-store']);
@@ -73,7 +78,7 @@ class BusinessConfigController extends BaseAdminController
                     break;
                 case 'ims':
                     $params['secret_key'] = trim((string)($params['secret_key'] ?? ''))
-                        ?: SmartEditImsConfigService::get(0)['secret_key'];
+                        ?: SmartEditImsConfigService::getPlatform()['secret_key'];
                     foreach (['region', 'access_key', 'secret_key', 'bucket', 'domain'] as $field) {
                         if (trim((string)($params[$field] ?? '')) === '') {
                             throw new InvalidArgumentException('请填写完整的智能剪辑阿里云配置');
@@ -83,7 +88,7 @@ class BusinessConfigController extends BaseAdminController
                     break;
                 case 'voice':
                     $params['api_key'] = trim((string)($params['api_key'] ?? ''))
-                        ?: SmartEditVoiceConfigService::get(0)['api_key'];
+                        ?: SmartEditVoiceConfigService::getPlatform()['api_key'];
                     if ($params['api_key'] === '') {
                         throw new InvalidArgumentException('请填写火山语音 API Key');
                     }
@@ -96,15 +101,15 @@ class BusinessConfigController extends BaseAdminController
                     SmartEditVoiceService::savePlatform($params['voices']);
                     break;
                 case 'wenan':
-                    WenanConfigService::save(0, $params);
+                    WenanConfigService::savePlatform($params);
                     break;
                 case 'geo':
                     $params['api_key'] = trim((string)($params['api_key'] ?? ''))
-                        ?: GeoDiagConfigService::get()['api_key'];
+                        ?: GeoDiagConfigService::getPlatform()['api_key'];
                     GeoDiagConfigService::savePlatform($params);
                     break;
                 case 'media':
-                    AigcGeoManuscriptService::saveConfig($params);
+                    AigcGeoManuscriptService::savePlatformConfig($params);
                     break;
                 case 'share':
                     PlatformShareConfigService::save($params);
@@ -131,7 +136,7 @@ class BusinessConfigController extends BaseAdminController
         }
 
         try {
-            $result = SmartEditDubbingService::preview(0, (string)$this->request->post('voice_key', ''));
+            $result = SmartEditDubbingService::previewPlatform((string)$this->request->post('voice_key', ''));
             return $this->data($result);
         } catch (Throwable) {
             return $this->fail('音色试听失败，请核对阿里云和火山语音配置');

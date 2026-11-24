@@ -27,7 +27,7 @@ class SmartEditImsConfigService
      *
      * @return array{region:string,access_key:string,secret_key:string,bucket:string,domain:string,private_access:bool,output_prefix:string}
      */
-    public static function get(int $tenantId): array
+    public static function getPlatform(): array
     {
         $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
         $data = is_array($data) ? $data : [];
@@ -48,9 +48,9 @@ class SmartEditImsConfigService
      *
      * @throws Exception
      */
-    public static function require(int $tenantId): array
+    public static function requirePlatform(): array
     {
-        $config = self::get($tenantId);
+        $config = self::getPlatform();
 
         $missing = [];
         if ($config['region'] === '') {
@@ -91,22 +91,12 @@ class SmartEditImsConfigService
     }
 
     /**
-     * 平台后台配置表单回显。
-     */
-    public static function forDisplay(int $tenantId): array
-    {
-        $config = self::get($tenantId);
-        $config['secret_key_set'] = $config['secret_key'] !== '';
-        return $config;
-    }
-
-    /**
      * 上传内容到这套配置指向的 Bucket。
      *
      * IMS 只能拉 OSS 上的在线资源，所以 TTS 产物、字幕附件这类后端生成的文件
      * 必须写进这套 Bucket，落到租户通用存储里 IMS 是读不到的。
      *
-     * @param array  $config SmartEditImsConfigService::require() 的结果
+     * @param array  $config SmartEditImsConfigService::requirePlatform() 的结果
      * @param string $key    对象 key
      * @param string $content 文件二进制内容
      * @param string $mime   Content-Type，如 audio/mpeg
@@ -139,7 +129,7 @@ class SmartEditImsConfigService
     /**
      * 生成后端产物的对象 key，按年月分目录，避免单目录文件过多。
      *
-     * @param array  $config   SmartEditImsConfigService::require() 的结果
+     * @param array  $config   SmartEditImsConfigService::requirePlatform() 的结果
      * @param string $prefix   业务前缀，如 dubbing
      * @param string $filename 文件名
      */

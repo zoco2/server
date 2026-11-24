@@ -28,10 +28,9 @@ namespace app\common\service\geo {
     class GeoDiagProvider {
         public static string $mode = 'rejected';
         public static int $calls = 0;
-        public function __construct(private int $tenantId) {}
         public function platforms(): array { return [['id' => 'doubao', 'pricing' => ['baseCents' => 0]]]; }
         public function createRun(array $request, string $key): array {
-            if ($this->tenantId !== 7) throw new \LogicException('Expected the brand owner tenant for GEO submission');
+            if (!preg_match('/^gdiag-(?:task-)?7-23-/', $key)) throw new \LogicException('GEO submission must retain brand ownership in the idempotency key');
             self::$calls++;
             if (self::$mode === 'rejected') throw new GeoDiagProviderException('余额不足', 402);
             if (self::$mode === 'exception') throw new \RuntimeException('unexpected transport failure');

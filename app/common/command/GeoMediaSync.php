@@ -179,7 +179,7 @@ class GeoMediaSync extends Command
 
     private function configuredTenants(): array
     {
-        if (!\app\common\service\geo\AigcGeoManuscriptService::configDetail()['configured']) {
+        if (!\app\common\service\geo\AigcGeoManuscriptService::platformConfigDetail()['configured']) {
             return [];
         }
         return array_map('intval', \app\common\model\tenant\Tenant::withoutGlobalScope()->column('id'));

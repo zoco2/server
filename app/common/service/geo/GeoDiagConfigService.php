@@ -10,7 +10,7 @@ final class GeoDiagConfigService
 {
     public const DEFAULTS = ['api_key' => ''];
 
-    public static function get(): array
+    public static function getPlatform(): array
     {
         $data = ConfigService::getPlatform('geo_diag', 'provider', self::DEFAULTS);
         if (!is_string($data['api_key'] ?? null)) {

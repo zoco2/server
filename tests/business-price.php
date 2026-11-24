@@ -74,8 +74,8 @@ ConfigService::set('wenan', 'model', ['text_model_id'=>'11']);
 ConfigService::set('social_share', 'douyin', ['client_key'=>'old-id','client_secret'=>'old-secret']);
 verify(SmartEditBillingService::unitPoints() === 0 && GeoDiagnosisPricing::markupPercent() === 0.0
     && GeoMediaSyncService::markup() === 1.0, 'prices never fall back to tenant data');
-verify(SmartEditImsConfigService::get(1)['secret_key'] === '' && GeoDiagConfigService::get()['api_key'] === ''
-    && !AigcGeoManuscriptService::configDetail()['configured'], 'provider settings never fall back to tenant data');
+verify(SmartEditImsConfigService::getPlatform()['secret_key'] === '' && GeoDiagConfigService::getPlatform()['api_key'] === ''
+    && !AigcGeoManuscriptService::platformConfigDetail()['configured'], 'provider settings never fall back to tenant data');
 fixtureRequest($app, AdminTerminalEnum::PLATFORM);
 SmartEditImsConfigService::savePlatform(['domain'=>'https://shared-oss.example','access_key'=>'shared-ak','secret_key'=>'shared-sk','bucket'=>'shared','region'=>'cn-shared']);
 SmartEditVoiceConfigService::savePlatform(['api_key'=>'shared-voice']);
@@ -83,7 +83,7 @@ SmartEditVoiceService::savePlatform([['key'=>'test-voice','label'=>'Test','provi
 GeoDiagConfigService::savePlatform(['api_key'=>'shared-geo']);
 ConfigService::set('geo_manuscript', 'account', ['token'=>'shared-token','key'=>'shared-key']);
 ConfigService::set('business_price', 'settings', ['smart_edit_points'=>21,'geo_markup_percent'=>25,'media_markup_percent'=>40]);
-WenanConfigService::save(0, ['text_model_id'=>'']);
+WenanConfigService::savePlatform(['text_model_id'=>'']);
 PlatformShareConfigService::save(['platform'=>'douyin','client_key'=>'shared-id','client_secret'=>'shared-secret']);
 PlatformShareConfigService::save(['platform'=>'xiaohongshu','app_key'=>'shared-xhs','app_secret'=>'shared-xhs-secret']);
 verify(!array_key_exists('client_secret',PlatformShareConfigService::display()['douyin']) && PlatformShareConfigService::display()['douyin']['configured'], 'platform form only reports whether share credentials are set');
@@ -93,13 +93,13 @@ foreach ([1,2] as $tenant) {
     fixtureRequest($app, AdminTerminalEnum::TENANT, $tenant);
     verify(SmartEditBillingService::unitPoints() === 21 && GeoDiagnosisPricing::markupPercent() === 25.0
         && GeoMediaSyncService::markup() === 1.4 && GeoMediaSyncService::priceExpression() === 'costprice * 1.4', 'shared prices for tenant ' . $tenant);
-    verify(SmartEditImsConfigService::get($tenant)['secret_key'] === 'shared-sk'
-        && SmartEditVoiceConfigService::get($tenant)['api_key'] === 'shared-voice'
-        && SmartEditVoiceService::get($tenant,'test-voice')['provider_asset_id'] === 'example'
-        && GeoDiagConfigService::get()['api_key'] === 'shared-geo'
+    verify(SmartEditImsConfigService::getPlatform()['secret_key'] === 'shared-sk'
+        && SmartEditVoiceConfigService::getPlatform()['api_key'] === 'shared-voice'
+        && SmartEditVoiceService::getPlatform('test-voice')['provider_asset_id'] === 'example'
+        && GeoDiagConfigService::getPlatform()['api_key'] === 'shared-geo'
         && PlatformShareConfigService::runtime('douyin')['client_key'] === 'shared-id'
         && PlatformShareConfigService::runtime('xiaohongshu')['app_key'] === 'shared-xhs'
-        && WenanConfigService::get($tenant)['text_model_id'] === '', 'shared runtime providers for tenant ' . $tenant);
+        && WenanConfigService::getPlatform()['text_model_id'] === '', 'shared runtime providers for tenant ' . $tenant);
 }
 try {
     \app\common\service\geo\GeoDiagnosisService::usage(1);
