@@ -30,25 +30,23 @@ class SmartEditImsConfigService
      */
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-            $data = is_array($data) ? $data : [];
-        } else {
-            $raw = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-            ])->value('value');
+        $raw = TenantConfig::where([
+            'tenant_id' => $tenantId,
+            'type' => self::TYPE,
+            'name' => self::NAME,
+        ])->value('value');
 
-            $data = [];
-            if (is_string($raw) && $raw !== '') {
-                $decoded = json_decode($raw, true);
-                if (is_array($decoded)) {
-                    $data = $decoded;
-                }
-            }
-        }
+        return self::normalize(is_string($raw) ? json_decode($raw, true) : null);
+    }
 
+    public static function getPlatform(): array
+    {
+        return self::normalize(ConfigService::getPlatform(self::TYPE, self::NAME));
+    }
+
+    private static function normalize(mixed $data): array
+    {
+        $data = is_array($data) ? $data : [];
         return [
             'region' => trim((string)($data['region'] ?? '')),
             'access_key' => trim((string)($data['access_key'] ?? '')),
@@ -67,8 +65,16 @@ class SmartEditImsConfigService
      */
     public static function require(int $tenantId): array
     {
-        $config = self::get($tenantId);
+        return self::validate(self::get($tenantId));
+    }
 
+    public static function requirePlatform(): array
+    {
+        return self::validate(self::getPlatform());
+    }
+
+    private static function validate(array $config): array
+    {
         $missing = [];
         if ($config['region'] === '') {
             $missing[] = '地域';

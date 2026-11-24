@@ -36,25 +36,23 @@ class SmartEditVoiceConfigService
      */
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-            $data = is_array($data) ? $data : [];
-        } else {
-            $raw = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-            ])->value('value');
+        $raw = TenantConfig::where([
+            'tenant_id' => $tenantId,
+            'type' => self::TYPE,
+            'name' => self::NAME,
+        ])->value('value');
 
-            $data = [];
-            if (is_string($raw) && $raw !== '') {
-                $decoded = json_decode($raw, true);
-                if (is_array($decoded)) {
-                    $data = $decoded;
-                }
-            }
-        }
+        return self::normalize(is_string($raw) ? json_decode($raw, true) : null);
+    }
 
+    public static function getPlatform(): array
+    {
+        return self::normalize(ConfigService::getPlatform(self::TYPE, self::NAME));
+    }
+
+    private static function normalize(mixed $data): array
+    {
+        $data = is_array($data) ? $data : [];
         $resourceId = trim((string)($data['resource_id'] ?? ''));
         return [
             'api_key' => trim((string)($data['api_key'] ?? '')),
@@ -75,8 +73,16 @@ class SmartEditVoiceConfigService
      */
     public static function require(int $tenantId): array
     {
-        $config = self::get($tenantId);
+        return self::validate(self::get($tenantId));
+    }
 
+    public static function requirePlatform(): array
+    {
+        return self::validate(self::getPlatform());
+    }
+
+    private static function validate(array $config): array
+    {
         $missing = [];
         if ($config['api_key'] === '') {
             $missing[] = 'API Key';

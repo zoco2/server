@@ -49,7 +49,37 @@ class SmartEditDubbingService
         ?float $speed = null,
         ?float $volume = null
     ): array {
-        $voice = SmartEditVoiceService::get($tenantId, $voiceKey);
+        return self::synthesizePreview(
+            SmartEditVoiceService::get($tenantId, $voiceKey),
+            SmartEditImsConfigService::require($tenantId),
+            SmartEditVoiceConfigService::require($tenantId),
+            'preview/',
+            $text,
+            $speed,
+            $volume
+        );
+    }
+
+    /** 使用平台配置试听，音频存放在平台后台专用目录。 */
+    public static function previewPlatform(string $voiceKey): array
+    {
+        return self::synthesizePreview(
+            SmartEditVoiceService::getPlatform($voiceKey),
+            SmartEditImsConfigService::requirePlatform(),
+            SmartEditVoiceConfigService::requirePlatform(),
+            'preview/platform/'
+        );
+    }
+
+    private static function synthesizePreview(
+        array $voice,
+        array $config,
+        array $voiceConfig,
+        string $directory,
+        string $text = '',
+        ?float $speed = null,
+        ?float $volume = null
+    ): array {
         $text = trim($text);
         if ($text === '') {
             $text = SmartEditVoiceService::previewText();
@@ -57,8 +87,6 @@ class SmartEditDubbingService
         // 试听没必要念长文，截断避免误点就产生大额计费
         $text = mb_substr($text, 0, 60);
 
-        $config = SmartEditImsConfigService::require($tenantId);
-        $voiceConfig = SmartEditVoiceConfigService::require($tenantId);
         $client = new VolcTtsClient(
             $voiceConfig['api_key'],
             $voiceConfig['endpoint'],
@@ -79,7 +107,7 @@ class SmartEditDubbingService
         $key = SmartEditImsConfigService::generatedKey(
             $config,
             self::OUTPUT_PREFIX,
-            'preview/' . self::previewFileStem($voiceKey, $speed, $volume) . '.mp3'
+            $directory . self::previewFileStem($voice['key'], $speed, $volume) . '.mp3'
         );
         SmartEditImsConfigService::putObject($config, $key, $audio, 'audio/mpeg');
 

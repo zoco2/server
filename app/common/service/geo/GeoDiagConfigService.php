@@ -21,15 +21,18 @@ final class GeoDiagConfigService
 
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $data = ConfigService::getPlatform('geo_diag', 'provider');
-        } else {
-            $raw = self::query($tenantId)->value('value');
-            $data = $raw === null ? null : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        }
-        if ($data === null) {
-            return self::DEFAULTS;
-        }
+        $raw = self::query($tenantId)->value('value');
+        return $raw === null ? self::DEFAULTS : self::readStored(json_decode($raw, true));
+    }
+
+    public static function getPlatform(): array
+    {
+        $data = ConfigService::getPlatform('geo_diag', 'provider');
+        return $data === null ? self::DEFAULTS : self::readStored($data);
+    }
+
+    private static function readStored(mixed $data): array
+    {
         if (!is_string($data['api_key'] ?? null)) {
             throw new RuntimeException('GEO 检测配置数据异常');
         }

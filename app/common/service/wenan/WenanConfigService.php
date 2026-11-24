@@ -18,6 +18,9 @@ class WenanConfigService
 
     private const NAME = 'model';
 
+    // 算力市场使用这个作用域查询平台上架的模型。
+    private const PLATFORM_MARKET_SCOPE = 0;
+
     /**
      * 读取原始配置。
      *
@@ -25,10 +28,6 @@ class WenanConfigService
      */
     public static function get(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $platform = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-            return ['text_model_id' => trim((string)($platform['text_model_id'] ?? ''))];
-        }
         $raw = TenantConfig::where([
             'tenant_id' => $tenantId,
             'type' => self::TYPE,
@@ -57,6 +56,19 @@ class WenanConfigService
 
         return [
             'text_model_id' => trim((string)($data['text_model_id'] ?? '')),
+        ];
+    }
+
+    public static function getPlatform(): array
+    {
+        $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+        return ['text_model_id' => trim((string)($data['text_model_id'] ?? ''))];
+    }
+
+    public static function forPlatformDisplay(): array
+    {
+        return self::getPlatform() + [
+            'model_options' => self::modelOptions(self::PLATFORM_MARKET_SCOPE),
         ];
     }
 
@@ -95,22 +107,7 @@ class WenanConfigService
      */
     public static function save(int $tenantId, array $params): void
     {
-        $selection = trim((string)($params['text_model_id'] ?? ''));
-        if ($selection !== '') {
-            if (!preg_match('/^[1-9][0-9]*$/D', $selection)) {
-                throw new Exception('请选择有效的文案模型');
-            }
-            try {
-                MarketTextModelRuntimeService::resolveModel($tenantId, $selection);
-            } catch (Exception $e) {
-                throw new Exception('所选文案模型未上架或已不可用：' . $e->getMessage());
-            }
-        }
-
-        if ($tenantId <= 0) {
-            ConfigService::set(self::TYPE, self::NAME, ['text_model_id' => $selection]);
-            return;
-        }
+        $selection = self::validateSelection($tenantId, $params);
         $payload = json_encode([
             'text_model_id' => $selection,
         ], JSON_UNESCAPED_UNICODE);
@@ -131,6 +128,28 @@ class WenanConfigService
             return;
         }
         $row->save(['value' => $payload]);
+    }
+
+    public static function savePlatform(array $params): void
+    {
+        $selection = self::validateSelection(self::PLATFORM_MARKET_SCOPE, $params);
+        ConfigService::set(self::TYPE, self::NAME, ['text_model_id' => $selection]);
+    }
+
+    private static function validateSelection(int $marketScope, array $params): string
+    {
+        $selection = trim((string)($params['text_model_id'] ?? ''));
+        if ($selection !== '') {
+            if (!preg_match('/^[1-9][0-9]*$/D', $selection)) {
+                throw new Exception('请选择有效的文案模型');
+            }
+            try {
+                MarketTextModelRuntimeService::resolveModel($marketScope, $selection);
+            } catch (Exception $e) {
+                throw new Exception('所选文案模型未上架或已不可用：' . $e->getMessage());
+            }
+        }
+        return $selection;
     }
 
     /**

@@ -81,17 +81,41 @@ class AigcGeoManuscriptService
      */
     public static function saveConfig(int $tenantId, array $params): array
     {
-        $current = self::account($tenantId);
+        $account = self::credentials($params, self::account($tenantId));
+        $openToken = self::issueToken($account['token'], $account['key']);
+        ConfigService::set('geo_manuscript', 'account', $account);
+        (new GeoManuscriptTokenCache())->setAccessToken($tenantId, $openToken, self::TOKEN_TTL);
+        return self::present($account);
+    }
+
+    public static function platformConfigDetail(): array
+    {
+        return self::present(self::platformAccount());
+    }
+
+    public static function savePlatformConfig(array $params): array
+    {
+        $account = self::credentials($params, self::platformAccount());
+        $openToken = self::issueToken($account['token'], $account['key']);
+        ConfigService::set('geo_manuscript', 'account', $account);
+        (new GeoManuscriptTokenCache())->setPlatformAccessToken($openToken, self::TOKEN_TTL);
+        return self::present($account);
+    }
+
+    private static function platformAccount(): array
+    {
+        $data = ConfigService::getPlatform('geo_manuscript', 'account', []);
+        return is_array($data) ? $data : [];
+    }
+
+    private static function credentials(array $params, array $current): array
+    {
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
         $key = self::incomingSecret($params, 'key', (string)($current['key'] ?? ''));
         if ($token === '' || $key === '') {
             throw new Exception('请填写文稿代发 Token 和 Key');
         }
-        $openToken = self::issueToken($token, $key);
-        $account = ['token' => $token, 'key' => $key];
-        ConfigService::set('geo_manuscript', 'account', $account);
-        (new GeoManuscriptTokenCache())->setAccessToken($tenantId, $openToken, self::TOKEN_TTL);
-        return self::present($account);
+        return ['token' => $token, 'key' => $key];
     }
 
     /**

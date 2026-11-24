@@ -620,16 +620,26 @@ class SmartEditVoiceService
      */
     public static function catalog(int $tenantId = 0): array
     {
+        return self::mergeCatalog($tenantId > 0 ? self::custom($tenantId) : []);
+    }
+
+    public static function platformCatalog(): array
+    {
+        return self::mergeCatalog(self::platformCustom());
+    }
+
+    private static function mergeCatalog(array $custom): array
+    {
         $rows = [];
         foreach (self::builtin() as $key => $item) {
             $rows[$key] = $item + ['key' => $key, 'custom' => false];
         }
-        foreach (self::custom($tenantId) as $item) {
+        foreach ($custom as $item) {
             $key = (string)$item['key'];
             if ($key === '') {
                 continue;
             }
-            // 自定义覆盖内置：同一个 key 以租户配置为准
+            // 自定义覆盖内置：同一个 key 以自定义配置为准
             $rows[$key] = $item + ['custom' => true];
         }
         return array_values($rows);
@@ -737,7 +747,17 @@ class SmartEditVoiceService
      */
     public static function get(int $tenantId, string $key): array
     {
-        foreach (self::catalog($tenantId) as $item) {
+        return self::findVoice(self::catalog($tenantId), $key);
+    }
+
+    public static function getPlatform(string $key): array
+    {
+        return self::findVoice(self::platformCatalog(), $key);
+    }
+
+    private static function findVoice(array $catalog, string $key): array
+    {
+        foreach ($catalog as $item) {
             if ((string)$item['key'] === $key) {
                 return $item;
             }
@@ -788,17 +808,22 @@ class SmartEditVoiceService
      */
     public static function custom(int $tenantId): array
     {
-        if ($tenantId === 0) {
-            $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
-        } else {
-            $raw = TenantConfig::where([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-            ])->value('value');
+        $raw = TenantConfig::where([
+            'tenant_id' => $tenantId,
+            'type' => self::TYPE,
+            'name' => self::NAME,
+        ])->value('value');
 
-            $decoded = is_string($raw) ? json_decode($raw, true) : [];
-        }
+        return self::normalizeCustom(is_string($raw) ? json_decode($raw, true) : null);
+    }
+
+    public static function platformCustom(): array
+    {
+        return self::normalizeCustom(ConfigService::getPlatform(self::TYPE, self::NAME));
+    }
+
+    private static function normalizeCustom(mixed $decoded): array
+    {
         if (!is_array($decoded)) {
             return [];
         }
