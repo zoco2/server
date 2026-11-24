@@ -15,15 +15,29 @@ final class WorkspaceSmartEditAssetService
 {
     private const FIELDS = 'id,title,status,duration,create_time,output_uri,cover_uri,storage_domain';
 
-    public static function lists(int $tenant, int $user, int $page, int $size, string $keyword): array
+    public static function lists(int $tenant, int $user, int $page, int $size, string $keyword, ?int $groupId = null): array
     {
         if ($page < 1 || $size < 1 || $size > 100 || $page > intdiv(PHP_INT_MAX, $size)) {
             throw new InvalidArgumentException('页码须大于 0，每页数量须在 1 到 100 之间');
         }
 
+        $scope = ['tenant_id' => $tenant, 'user_id' => $user, 'type' => 'video'];
+        $membership = '';
+        if ($groupId === 0) {
+            $excluded = DefaultWorkGroup::excludedItems($scope)->field('source_ref')->buildSql();
+            $membership = "CONCAT('smart_edit:task:', id) NOT IN " . $excluded;
+        } elseif ($groupId !== null) {
+            if (!Db::name('work_group')->where($scope)->where('id', $groupId)->whereNull('delete_time')->count()) {
+                throw new InvalidArgumentException('成片组不存在或已删除');
+            }
+            $members = Db::name('work_item')->where($scope)->where('group_id', $groupId)
+                ->whereNull('delete_time')->field('source_ref')->buildSql();
+            $membership = "CONCAT('smart_edit:task:', id) IN " . $members;
+        }
+
         // 租户模型解析分表时会修改查询，列表和总数分别创建查询实例。
-        $count = self::visibleTasks($tenant, $user, $keyword)->count();
-        $rows = self::visibleTasks($tenant, $user, $keyword)->field(self::FIELDS)->order(['create_time' => 'desc', 'id' => 'desc'])
+        $count = self::visibleTasks($tenant, $user, $keyword, $membership)->count();
+        $rows = self::visibleTasks($tenant, $user, $keyword, $membership)->field(self::FIELDS)->order(['create_time' => 'desc', 'id' => 'desc'])
             ->page($page, $size)->select();
         $items = [];
         foreach ($rows as $row) {
@@ -32,12 +46,15 @@ final class WorkspaceSmartEditAssetService
         return ['lists' => $items, 'count' => $count, 'has_more' => $page * $size < $count];
     }
 
-    private static function visibleTasks(int $tenant, int $user, string $keyword): Query
+    private static function visibleTasks(int $tenant, int $user, string $keyword, string $membership): Query
     {
         $query = self::finishedTasks($tenant, $user);
         $hidden = Db::name('user_asset_state')->where(['tenant_id' => $tenant, 'user_id' => $user])
             ->whereRaw('(trashed_at > 0 OR hidden_at > 0)')->field('asset_ref')->buildSql();
         $query->whereRaw("CONCAT('smart_edit:task:', id) NOT IN " . $hidden);
+        if ($membership !== '') {
+            $query->whereRaw($membership);
+        }
         if ($keyword !== '') {
             $literal = strtr($keyword, ['!' => '!!', '%' => '!%', '_' => '!_']);
             $query->whereRaw("title LIKE ? ESCAPE '!'", ['%' . $literal . '%']);

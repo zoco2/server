@@ -22,9 +22,16 @@ class WorkspaceAssetController extends BaseApiController
             if (!is_string($keyword)) {
                 throw new InvalidArgumentException('作品关键词格式无效');
             }
+            $groupId = $this->request->get('work_group_id', null, null);
+            if ($groupId !== null) {
+                $groupId = filter_var($groupId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                if ($groupId === false) {
+                    throw new InvalidArgumentException('成片组编号无效');
+                }
+            }
             return WorkspaceSmartEditAssetService::lists(
                 $tenant, $user, (int)$this->request->get('page_no', 1),
-                (int)$this->request->get('page_size', 100), trim($keyword)
+                (int)$this->request->get('page_size', 100), trim($keyword), $groupId
             );
         });
     }

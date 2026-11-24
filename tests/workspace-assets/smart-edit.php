@@ -89,6 +89,23 @@ foreach ([6=>'hidden_at',7=>'trashed_at'] as $id=>$flag) {
     Db::name('user_asset_state')->insert(['tenant_id'=>2,'user_id'=>7,'asset_ref'=>'smart_edit:task:'.$id,$flag=>100]);
 }
 
+Db::execute('CREATE TABLE la_work_group(id INTEGER PRIMARY KEY,tenant_id INTEGER,user_id INTEGER,type TEXT,delete_time INTEGER)');
+Db::execute('CREATE TABLE la_work_item(tenant_id INTEGER,user_id INTEGER,type TEXT,group_id INTEGER,source_ref TEXT,delete_time INTEGER)');
+Db::execute("INSERT INTO la_work_group VALUES (10,2,7,'video',NULL),(11,1,7,'video',NULL),(12,2,7,'video',77),(13,2,7,'copy',NULL)");
+foreach ([1,2,6,7,8] as $taskId) {
+    Db::name('work_item')->insert([
+        'tenant_id'=>2,'user_id'=>7,'type'=>'video','group_id'=>10,
+        'source_ref'=>'smart_edit:task:'.$taskId,'delete_time'=>$taskId === 8 ? 100 : null,
+    ]);
+}
+$groupPage = listPage(['work_group_id'=>'10','page_size'=>1]);
+verify($groupPage['count'] === 1 && !$groupPage['has_more'] && $groupPage['lists'][0]['ref'] === 'smart_edit:task:1', 'only visible finished group members');
+verify(listPage(['work_group_id'=>0])['count'] === 0 && listPage(['work_group_id'=>0],1)['count'] === 1, 'default includes unregistered history in its own tenant');
+foreach ([11,12,13,'invalid',-1] as $invalidGroup) {
+    verify(libraryCall('smartEdit',['work_group_id'=>$invalidGroup])['code'] !== 1, 'reject unavailable group');
+}
+verify(libraryCall('smartEdit',['work_group_id'=>10],2,9)['code'] !== 1, 'reject another user group');
+
 $page = listPage(['page_size'=>1]);
 verify($page['count'] === 2 && $page['has_more'] && $page['lists'][0]['ref'] === 'smart_edit:task:8', 'visibility before pagination');
 $next = listPage(['page_no'=>2,'page_size'=>1]);
@@ -103,6 +120,7 @@ verify(listPage([],2,9)['count'] === 1, 'user isolation');
 
 Db::name('smart_edit_task_separate')->where('id',2)->update(['status'=>'success']);
 verify(listPage()['count'] === 3 && listPage()['count'] === 3, 'newly completed task appears once');
+verify(listPage(['work_group_id'=>10,'page_size'=>1,'page_no'=>2])['lists'][0]['ref'] === 'smart_edit:task:1', 'group paginates across newly completed tasks');
 verify(Db::name('user_asset_state')->count() === 2, 'list did not create state rows');
 $ref = 'smart_edit:task:2';
 verify(WorkspaceAssetService::visibleAsset(2,7,$ref)['ref'] === $ref, 'eligible task ref resolves');

@@ -16,7 +16,11 @@ class GenerateController extends BaseApiController
     public function index()
     {
         try {
-            $result = SmartEditService::generate((int)$this->request->tenantId, $this->userId, $this->request->post());
+            $params = $this->request->post();
+            if (array_key_exists('work_group_id', $params)) {
+                $params['work_group_id'] = $this->request->post('work_group_id', null, null);
+            }
+            $result = SmartEditService::generate((int)$this->request->tenantId, $this->userId, $params);
             return $this->success('提交成功', $result);
         } catch (Throwable $e) {
             if (!$e instanceof Exception) {
