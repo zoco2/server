@@ -5,6 +5,7 @@ namespace app\api\controller\merchant;
 use app\api\controller\BaseApiController;
 use app\api\lists\merchant\CopyLists;
 use app\common\model\merchant\MerchantCopy;
+use app\common\service\DefaultWorkGroup;
 
 class CopyController extends BaseApiController
 {
@@ -26,12 +27,13 @@ class CopyController extends BaseApiController
             return $this->fail('请输入 1 到 20000 字的文案正文');
         }
 
-        $copy = MerchantCopy::create([
-            'tenant_id' => (int)$this->request->tenantId,
-            'user_id' => $this->userId,
-            'name' => $name,
-            'content' => $content,
-        ]);
+        try {
+            $copy = DefaultWorkGroup::createTextItem('copy', $this->userId, fn() =>
+                MerchantCopy::create(['user_id' => $this->userId, 'name' => $name, 'content' => $content])
+            );
+        } catch (\InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
         return $this->data([
             'id' => (int)$copy->id,
             'name' => $name,

@@ -6,6 +6,7 @@ use app\api\controller\BaseApiController;
 use app\api\lists\merchant\TopicLists;
 use app\api\validate\merchant\TopicValidate;
 use app\common\model\merchant\MerchantTopic;
+use app\common\service\DefaultWorkGroup;
 
 /** 商家话题库。 */
 class TopicController extends BaseApiController
@@ -22,10 +23,13 @@ class TopicController extends BaseApiController
         $name = is_string($name) ? trim(preg_replace('/^[#＃\s]+/u', '', $name) ?? '') : '';
         $params = (new TopicValidate())->post()->goCheck(null, ['name' => $name]);
 
-        $topic = MerchantTopic::create([
-            'user_id' => $this->userId,
-            'name' => $params['name'],
-        ]);
+        try {
+            $topic = DefaultWorkGroup::createTextItem('topic', $this->userId, fn() =>
+                MerchantTopic::create(['user_id' => $this->userId, 'name' => $params['name']])
+            );
+        } catch (\InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
 
         return $this->data([
             'id' => (int)$topic->id,

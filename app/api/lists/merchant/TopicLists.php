@@ -27,8 +27,9 @@ class TopicLists extends BaseApiDataLists
     private function query()
     {
         $query = MerchantTopic::where('user_id', $this->userId);
-        if (in_array($this->params['work_group_id'] ?? null, [0, '0'], true)) {
-            DefaultWorkGroup::filterTextList($query, (int)$this->request->tenantId, $this->userId, 'topic');
+        $groupId = filter_var($this->params['work_group_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+        if ($groupId !== false) {
+            DefaultWorkGroup::filterTextList($query, (int)$this->request->tenantId, $this->userId, 'topic', $groupId);
         }
         $keyword = $this->params['keyword'] ?? '';
         $keyword = is_string($keyword) ? trim(preg_replace('/^[#＃\s]+/u', '', $keyword) ?? '') : '';
