@@ -66,7 +66,7 @@ class SmartEditImsConfigService
             $missing[] = '访问域名';
         }
         if ($missing !== []) {
-            throw new Exception('请先在「智能剪辑 → 阿里云配置」中填写：' . implode('、', $missing));
+            throw new Exception('请平台管理员在「基础配置 → 智能剪辑」填写：' . implode('、', $missing));
         }
 
         return $config;

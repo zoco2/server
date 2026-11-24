@@ -99,7 +99,7 @@ foreach ([1,2] as $tenant) {
         && GeoDiagConfigService::getPlatform()['api_key'] === 'shared-geo'
         && PlatformShareConfigService::runtime('douyin')['client_key'] === 'shared-id'
         && PlatformShareConfigService::runtime('xiaohongshu')['app_key'] === 'shared-xhs'
-        && WenanConfigService::getPlatform()['text_model_id'] === '', 'shared runtime providers for tenant ' . $tenant);
+        && WenanConfigService::resolveTextModelId($tenant) === '', 'shared runtime providers for tenant ' . $tenant);
 }
 try {
     \app\common\service\geo\GeoDiagnosisService::usage(1);

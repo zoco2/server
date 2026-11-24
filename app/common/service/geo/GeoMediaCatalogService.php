@@ -14,7 +14,7 @@ class GeoMediaCatalogService
 {
     /** 前台可见字段：不含 price_ratio / sourceid / detail_json 等内部列；costprice 只用于算售价，输出前剔除 */
     public const PUBLIC_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,'
-        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
+        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,update_time';
 
@@ -117,11 +117,11 @@ class GeoMediaCatalogService
      */
     public static function publicRow(array $row): array
     {
-        $ratio = GeoMedia::ratio($row);
+        $ratio = GeoMediaSyncService::markup();
         $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
 
         // 多价格类别：库里叫 price_type_json，对外仍叫 price_types。
-        // getter 已按倍率补好 sale_price，这里再去掉成本价 price，避免前端推算倍率。
+        // 统一按平台倍率计算，仅返回售价。
         $priceTypes = [];
         foreach ((array)($row['price_type_json'] ?? []) as $item) {
             if (!is_array($item)) {
@@ -133,8 +133,7 @@ class GeoMediaCatalogService
             }
             $priceTypes[] = [
                 'type' => $type,
-                'sale_price' => $item['sale_price']
-                    ?? GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
+                'sale_price' => GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
             ];
         }
 

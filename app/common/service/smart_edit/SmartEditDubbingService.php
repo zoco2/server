@@ -172,7 +172,7 @@ class SmartEditDubbingService
             $voiceConfig['resource_id']
         );
 
-        // 语速优先用本次提交的值，缺省回落租户配置；音量缺省按原声
+        // 语速优先用本次提交的值，缺省使用平台配置；音量缺省按原声
         $effectiveSpeed = self::clampSpeed($speed ?? (float)$voiceConfig['default_speed']);
         $effectiveVolume = self::clampVolume($volume ?? 1.0);
 

@@ -86,7 +86,7 @@ class WenanConfigService
      */
     public static function resolveTextModelId(int $tenantId): string
     {
-        $selection = self::get($tenantId)['text_model_id'];
+        $selection = self::getPlatform()['text_model_id'];
         if ($selection === '') {
             return '';
         }

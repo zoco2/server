@@ -2,6 +2,7 @@
 
 namespace app\common\command;
 
+use app\common\service\geo\AigcGeoManuscriptService;
 use app\common\service\geo\GeoMediaSyncService;
 use think\console\Command;
 use think\console\Input;
@@ -24,7 +25,7 @@ class GeoMediaSync extends Command
     protected function configure()
     {
         $this->setName('geo:media-sync')
-            ->addOption('tenant', 't', Option::VALUE_REQUIRED, '租户ID，不传则遍历已配置海讯账号的租户')
+            ->addOption('tenant', 't', Option::VALUE_REQUIRED, '同步媒体目录的租户 ID，不传则同步全部租户')
             ->addOption('type', null, Option::VALUE_REQUIRED, '资源类型，多个用逗号分隔，默认全部')
             ->addOption('limit', null, Option::VALUE_REQUIRED, '每个类型最多处理多少条，0 或不传不限')
             ->addOption('state', null, Option::VALUE_NONE, '额外用 stateON 校正本次资源的上下架状态')
@@ -47,7 +48,7 @@ class GeoMediaSync extends Command
         }
 
         foreach ($tenantIds as $id) {
-            // 命令行没有请求中间件，先模拟租户访问上下文，否则 ConfigService 读不到租户配置。
+            // 绑定租户上下文，让同步结果写入对应的租户媒体目录。
             $this->bindTenant($id);
             $output->writeln(sprintf('<info>租户 %d 开始同步</info>', $id));
             try {
@@ -98,7 +99,7 @@ class GeoMediaSync extends Command
 
     /**
      * 模拟租户访问上下文。与 LikeAdminAllowMiddleware 解析到租户后的状态保持一致，
-     * 这样 ConfigService / BaseModel 全局租户作用域 / AdminTerminalEnum 都按租户端工作。
+     * BaseModel 依靠此上下文访问对应租户的媒体目录。
      *
      * @param int $tenantId 租户 ID
      */
@@ -118,8 +119,6 @@ class GeoMediaSync extends Command
         $request->tenantId = (int)$tenant->id;
         $request->tenantSn = (string)$tenant->sn;
         $request->tenantResolveMode = 'console';
-        // 租户端入口：AdminTerminalEnum::isTenant() / BaseModel::checkTenant() 都依赖 source，
-        // 命令行默认没有 source，会被当成平台端去读 la_config。
         $request->source = \app\common\enum\AdminTerminalEnum::TENANT;
     }
 
@@ -179,7 +178,7 @@ class GeoMediaSync extends Command
 
     private function configuredTenants(): array
     {
-        if (!\app\common\service\geo\AigcGeoManuscriptService::platformConfigDetail()['configured']) {
+        if (!AigcGeoManuscriptService::platformConfigDetail()['configured']) {
             return [];
         }
         return array_map('intval', \app\common\model\tenant\Tenant::withoutGlobalScope()->column('id'));

@@ -67,6 +67,10 @@ try {
     $app->instance('request', $request);
     $douyin = ['platform'=>'douyin','client_key'=>'platform-douyin','client_secret'=>'platform-secret'];
     $xhs = ['platform'=>'xiaohongshu','app_key'=>'platform-xhs','app_secret'=>'xhs-secret'];
+    Db::name('tenant_config')->insert(['tenant_id'=>1,'type'=>'social_share','name'=>'douyin','value'=>'{"client_key":"old-tenant"}']);
+    $request->tenantId = 1;
+    fails(fn () => new DouyinH5ShareService(), '基础配置');
+    fails(fn () => new XiaohongshuH5ShareService(), '基础配置');
     PlatformShareConfigService::save($douyin);
     PlatformShareConfigService::save($xhs);
     $display = PlatformShareConfigService::display();
@@ -82,9 +86,9 @@ try {
     ]));
     $stack->push(Middleware::history($history));
     $http = new Client(['handler' => $stack]);
-    $share = DouyinH5ShareService::forTenant(1, $http)->createShare(['video_path'=>'https://cdn.example.com/v.mp4']);
+    $share = (new DouyinH5ShareService(http: $http))->createShare(['video_path'=>'https://cdn.example.com/v.mp4']);
     check($share['params']['client_key'] === 'platform-douyin', 'Douyin uses the platform configuration');
-    $share = XiaohongshuH5ShareService::forTenant(2, $http)->createShare(['type'=>'normal','images'=>['https://cdn.example.com/a.jpg']]);
+    $share = (new XiaohongshuH5ShareService(http: $http))->createShare(['type'=>'normal','images'=>['https://cdn.example.com/a.jpg']]);
     check($share['verifyConfig']['appKey'] === 'platform-xhs', 'Xiaohongshu uses the platform configuration');
     echo "PASS platform share credentials and signed shares\n";
 } finally {

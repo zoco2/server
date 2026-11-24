@@ -762,7 +762,7 @@ class SmartEditService
             // 全局字幕只有一组；subtitle_groups 保留一层是为了以后支持分镜字幕
             'subtitle_groups' => $subtitles === [] ? [] : [$subtitles],
             'subtitle_gap' => self::normalizeSubtitleGap($params),
-            // 配音音频参数：语速缺省时用租户配置的默认语速，音量缺省按原声
+            // 配音音频参数：语速缺省时用平台配置的默认语速，音量缺省按原声
             'voice_speed' => self::normalizeVoiceSpeed($params),
             'voice_volume' => self::normalizeVoiceVolume($params),
             // 配音演员：每个音色一套口播，成片按 combo 轮换
@@ -935,7 +935,7 @@ class SmartEditService
     /**
      * 配音语速倍数：0.5 ~ 2，缺省 null。
      *
-     * null 表示前端没传，合成时回落到租户配置的默认语速，
+     * null 表示前端没传，合成时使用平台配置的默认语速，
      * 避免改版前的调用方行为发生变化。
      */
     private static function normalizeVoiceSpeed(array $params): ?float

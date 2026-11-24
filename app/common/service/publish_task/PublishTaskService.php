@@ -214,7 +214,7 @@ final class PublishTaskService
         }
         $tenantId = (int)request()->tenantId;
         $content = self::douyinMedia($tenantId, (int)$task->user_id, (int)$task->douyin_file_id);
-        $share = DouyinH5ShareService::forTenant($tenantId)->createShare($content);
+        $share = (new DouyinH5ShareService())->createShare($content);
         return ['schema' => $share['schema']];
     }
 

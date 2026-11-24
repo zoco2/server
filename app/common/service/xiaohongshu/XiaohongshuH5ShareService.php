@@ -26,11 +26,7 @@ final class XiaohongshuH5ShareService
 
     public function __construct(?array $config = null, ?ClientInterface $http = null, ?Driver $cache = null)
     {
-        if ($config === null) {
-            $config = (int)(request()->tenantId ?? 0) > 0
-                ? PlatformShareConfigService::runtime('xiaohongshu')
-                : config('xiaohongshu', []);
-        }
+        $config ??= PlatformShareConfigService::runtime('xiaohongshu');
         $this->appKey = trim((string)($config['app_key'] ?? ''));
         $this->appSecret = trim((string)($config['app_secret'] ?? ''));
         if ($this->appKey === '' || $this->appSecret === '') {
@@ -41,14 +37,6 @@ final class XiaohongshuH5ShareService
         $this->tokens = new XiaohongshuTokenCache(
             $cache ?? Cache::store($store === '' ? null : $store), $this->appKey, $this->appSecret
         );
-    }
-
-    public static function forTenant(int $tenantId, ?ClientInterface $http = null, ?Driver $cache = null): self
-    {
-        if ($tenantId <= 0) {
-            throw new InvalidArgumentException('缺少有效的租户信息');
-        }
-        return new self(PlatformShareConfigService::runtime('xiaohongshu'), $http, $cache);
     }
 
     /**

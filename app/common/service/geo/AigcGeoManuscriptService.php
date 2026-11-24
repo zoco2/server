@@ -102,7 +102,7 @@ class AigcGeoManuscriptService
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
-            throw new Exception('请先配置文稿代发账号');
+            throw new Exception('请平台管理员在「基础配置 → 媒体发稿」设置代发账号');
         }
         $tokenCache = new GeoManuscriptTokenCache();
         $cached = $tokenCache->getPlatformAccessToken();
@@ -139,7 +139,7 @@ class AigcGeoManuscriptService
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
-            throw new Exception('请先配置文稿代发账号');
+            throw new Exception('请平台管理员在「基础配置 → 媒体发稿」设置代发账号');
         }
         (new GeoManuscriptTokenCache())->deletePlatformAccessToken();
         return self::accessToken();

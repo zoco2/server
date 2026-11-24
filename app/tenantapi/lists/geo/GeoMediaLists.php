@@ -24,7 +24,7 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
 
     public function setSortFields(): array
     {
-        return ['id' => 'id', 'costprice' => 'costprice', 'price_ratio' => 'price_ratio', 'update_time' => 'update_time'];
+        return ['id' => 'id', 'costprice' => 'costprice', 'update_time' => 'update_time'];
     }
 
     public function setDefaultOrder(): array
@@ -42,7 +42,7 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
             ->order($this->sortOrder)
             ->select()
             ->toArray();
-        // 售价不落库：按行级倍率（0 用租户默认）在这里补成成交后的值，供前端直接展示与排序。
+        // 售价不落库：按平台统一倍率换算展示价格。
         $ratio = GeoMediaSyncService::markup();
         foreach ($rows as &$row) {
             $row['effective_ratio'] = $ratio;
@@ -73,7 +73,7 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
      */
     private function applyExtra($query): void
     {
-        // 售价不落库，价格区间直接按 成本×行倍率（0 用租户默认） 计算。
+        // 售价不落库，价格区间直接按 成本 × 平台倍率 计算。
         $price = GeoMediaSyncService::priceExpression();
         $minPrice = $this->params['min_price'] ?? '';
         $maxPrice = $this->params['max_price'] ?? '';

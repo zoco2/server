@@ -68,7 +68,7 @@ class SmartEditVoiceConfigService
             $missing[] = '接口地址';
         }
         if ($missing !== []) {
-            throw new Exception('请先在「智能剪辑 → 火山语音配置」中填写：' . implode('、', $missing));
+            throw new Exception('请平台管理员在「基础配置 → 火山语音」填写：' . implode('、', $missing));
         }
 
         return $config;

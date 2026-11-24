@@ -87,13 +87,6 @@ try {
         fails(fn () => XiaohongshuH5ShareService::signature(...$args), '签名', InvalidArgumentException::class);
     }
 
-    new App(dirname(__DIR__, 2));
-    \think\facade\Env::set(['XIAOHONGSHU' => ['APP_KEY' => 'config-key', 'APP_SECRET' => 'config-secret', 'CACHE_STORE' => 'xhs_test']]);
-    \think\facade\Config::set(require dirname(__DIR__, 2) . '/config/xiaohongshu.php', 'xiaohongshu');
-    \think\facade\Config::set(['default' => 'xhs_test', 'stores' => ['xhs_test' => ['type' => 'File', 'path' => $root . '/config']]], 'cache');
-    $configured = new XiaohongshuH5ShareService(null, new Client(['handler' => HandlerStack::create(new MockHandler([token()]))]));
-    same('config-key', $configured->createShare($image)['verifyConfig']['appKey'], 'framework config and cache wiring');
-
     $history = [];
     $expiry = XiaohongshuTokenCache::nowMs() + 7200000;
     $service = fixture($root . '/basic', [token('server-token', $expiry)], $history);

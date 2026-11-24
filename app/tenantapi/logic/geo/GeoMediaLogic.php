@@ -22,7 +22,7 @@ class GeoMediaLogic extends BaseLogic
         // 全局作用域已按当前租户过滤，这里不再重复写 tenant_id。
         // 售价不落库，按成本 × 倍率在内存里算区间。
         $rows = GeoMedia::where(['flag' => 1, 'deleted' => 1, 'local_hidden' => 0])
-            ->field('resource_type, costprice, price_ratio')
+            ->field('resource_type, costprice')
             ->select()
             ->toArray();
 
@@ -69,7 +69,7 @@ class GeoMediaLogic extends BaseLogic
     }
 
     /**
-     * 设置单个资源倍率与本地隐藏。售价由成本 × 倍率实时计算，不落库。
+     * 设置单个资源的本地隐藏状态。
      *
      * @param int $tenantId 租户 ID
      * @param array<string, mixed> $params id、local_hidden
@@ -82,12 +82,14 @@ class GeoMediaLogic extends BaseLogic
         if ($row->isEmpty()) {
             throw new Exception('资源不存在');
         }
-        $data = ['update_time' => time()];
-        if (array_key_exists('local_hidden', $params)) {
-            $data['local_hidden'] = (int)$params['local_hidden'] ? 1 : 0;
+        if (!array_key_exists('local_hidden', $params)) {
+            throw new Exception('请提供本地隐藏状态');
         }
-        $row->save($data);
-        return $row->refresh()->toArray();
+        $row->save([
+            'local_hidden' => (int)$params['local_hidden'] ? 1 : 0,
+            'update_time' => time(),
+        ]);
+        return $row->refresh()->hidden(['price_ratio'])->toArray();
     }
 
     /**
@@ -110,12 +112,8 @@ class GeoMediaLogic extends BaseLogic
         return GeoMediaSyncService::refreshStates($tenantId, $sourceIds);
     }
 
-    /**
-     * 读取当前租户加成倍率。
-     *
-     * @param int $tenantId 租户 ID
-     */
-    public static function markup(int $tenantId): float
+    /** 读取平台发稿加成倍率。 */
+    public static function markup(): float
     {
         return GeoMediaSyncService::markup();
     }

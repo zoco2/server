@@ -23,11 +23,7 @@ final class DouyinH5ShareService
 
     public function __construct(?array $config = null, ?ClientInterface $http = null, ?Driver $cache = null)
     {
-        if ($config === null) {
-            $config = (int)(request()->tenantId ?? 0) > 0
-                ? PlatformShareConfigService::runtime('douyin')
-                : config('douyin', []);
-        }
+        $config ??= PlatformShareConfigService::runtime('douyin');
         $this->clientKey = trim((string)($config['client_key'] ?? ''));
         $this->clientSecret = trim((string)($config['client_secret'] ?? ''));
         if ($this->clientKey === '' || $this->clientSecret === '') {
@@ -38,14 +34,6 @@ final class DouyinH5ShareService
         $this->credentials = new DouyinCredentialCache(
             $cache ?? Cache::store($store === '' ? null : $store), $this->clientKey, $this->clientSecret
         );
-    }
-
-    public static function forTenant(int $tenantId, ?ClientInterface $http = null, ?Driver $cache = null): self
-    {
-        if ($tenantId <= 0) {
-            throw new InvalidArgumentException('缺少有效的租户信息');
-        }
-        return new self(PlatformShareConfigService::runtime('douyin'), $http, $cache);
     }
 
     /**
