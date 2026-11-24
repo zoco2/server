@@ -284,6 +284,7 @@ class SmartEditService
             'params_json' => [
                 // 预占时固定单价，等整次提交结束再记录实扣。
                 'unit_points' => (int)($shared['unit_points'] ?? 0),
+                'work_group_id' => $workGroupId,
                 'edit_type' => $editType,
                 'title' => $title,
                 'clips' => $clips,
@@ -443,14 +444,13 @@ class SmartEditService
             // 走查询构造器的批量插入：不触发模型事件，tenant_id/user_id/create_time 已在行内显式写入。
             SmartEditTaskItem::insertAll($rows);
         }
-        if ($workGroupId > 0) {
-            $now = time();
-            Db::name('work_item')->insert([
-                'tenant_id' => $tenantId, 'user_id' => $userId, 'type' => 'video', 'group_id' => $workGroupId,
-                'source_ref' => 'smart_edit:task:' . $task['id'], 'title' => $title,
-                'create_time' => $now, 'update_time' => $now,
-            ]);
-        }
+        SmartEditOutputGroupService::registerTask(
+            $tenantId,
+            $userId,
+            $workGroupId,
+            (int)$task['id'],
+            $title
+        );
 
         return $task;
     }
@@ -1801,6 +1801,7 @@ class SmartEditService
             'finish_time' => time(),
             'update_time' => time(),
         ]);
+        SmartEditOutputGroupService::repairTask($task);
 
         // 成片直接写在配置的 Bucket 上，这里补一条文件记录，和普通上传保持一致。
         $exists = TenantFile::where([

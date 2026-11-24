@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\api\controller;
 
 use app\common\service\DefaultWorkGroup;
+use app\common\service\smart_edit\SmartEditOutputGroupService;
 use InvalidArgumentException;
 use think\facade\Db;
 
@@ -92,6 +93,13 @@ final class WorkGroupController extends BaseApiController
         }
         if ($refs === []) {
             return $this->data(['refs' => []]);
+        }
+        if ($scope['type'] === 'video') {
+            SmartEditOutputGroupService::repairRefs(
+                (int)$scope['tenant_id'],
+                (int)$scope['user_id'],
+                $refs
+            );
         }
         $hits = DefaultWorkGroup::excludedItems($scope)
             ->whereIn('source_ref', $refs)->column('source_ref');
