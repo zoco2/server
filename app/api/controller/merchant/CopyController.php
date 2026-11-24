@@ -27,26 +27,10 @@ class CopyController extends BaseApiController
             return $this->fail('请输入 1 到 20000 字的文案正文');
         }
 
-        $groupId = filter_var($this->request->post('work_group_id', 0, null), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
-        if ($groupId === false) {
-            return $this->fail('成片组无效');
-        }
-        $tenantId = (int)$this->request->tenantId;
-        $create = fn() => MerchantCopy::create([
-            'tenant_id' => (int)$this->request->tenantId,
-            'user_id' => $this->userId,
-            'name' => $name,
-            'content' => $content,
-        ]);
-        if ($groupId > 0 && $tenantId <= 0) {
-            return $this->fail('缺少租户上下文，请重新登录');
-        }
         try {
-            $copy = $groupId === 0 ? $create() : DefaultWorkGroup::createTextItem([
-                'tenant_id' => $tenantId,
-                'user_id' => $this->userId,
-                'type' => 'copy',
-            ], $groupId, $create);
+            $copy = DefaultWorkGroup::createTextItem('copy', $this->userId, fn() =>
+                MerchantCopy::create(['user_id' => $this->userId, 'name' => $name, 'content' => $content])
+            );
         } catch (\InvalidArgumentException $e) {
             return $this->fail($e->getMessage());
         }

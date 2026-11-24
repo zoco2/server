@@ -18,8 +18,20 @@ final class DefaultWorkGroup
             ->whereRaw('(group_id <> 0 OR delete_time IS NOT NULL)');
     }
 
-    public static function createTextItem(array $scope, int $groupId, callable $create)
+    public static function createTextItem(string $type, int $userId, callable $create)
     {
+        $request = request();
+        $groupId = filter_var($request->post('work_group_id', 0, null), FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 0],
+        ]);
+        if ($groupId === false) {
+            throw new \InvalidArgumentException('成片组无效');
+        }
+        if ($groupId === 0) {
+            return $create();
+        }
+
+        $scope = ['tenant_id' => (int)$request->tenantId, 'user_id' => $userId, 'type' => $type];
         return Db::transaction(static function () use ($scope, $groupId, $create) {
             $group = Db::name('work_group')->where($scope)->where('id', $groupId)
                 ->whereNull('delete_time')->lock(true)->find();
