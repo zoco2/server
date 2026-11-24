@@ -284,6 +284,7 @@ class SmartEditService
             'params_json' => [
                 // 预占时固定单价，等整次提交结束再记录实扣。
                 'unit_points' => (int)($shared['unit_points'] ?? 0),
+                // 分组 ID 随任务保存，work_item 索引缺失时仍可从任务/批次快照恢复。
                 'work_group_id' => $workGroupId,
                 'edit_type' => $editType,
                 'title' => $title,
@@ -444,6 +445,7 @@ class SmartEditService
             // 走查询构造器的批量插入：不触发模型事件，tenant_id/user_id/create_time 已在行内显式写入。
             SmartEditTaskItem::insertAll($rows);
         }
+        // 主链路：任务与归组索引在同一事务内落库；重复执行不会覆盖已有作品记录。
         SmartEditOutputGroupService::registerTask(
             $tenantId,
             $userId,
@@ -1801,6 +1803,7 @@ class SmartEditService
             'finish_time' => time(),
             'update_time' => time(),
         ]);
+        // 完成态兜底：兼容旧 worker 已创建任务、但没有写 work_item 的过渡数据。
         SmartEditOutputGroupService::repairTask($task);
 
         // 成片直接写在配置的 Bucket 上，这里补一条文件记录，和普通上传保持一致。

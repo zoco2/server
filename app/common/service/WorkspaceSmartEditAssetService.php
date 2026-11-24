@@ -25,6 +25,7 @@ final class WorkspaceSmartEditAssetService
         $scope = ['tenant_id' => $tenant, 'user_id' => $user, 'type' => 'video'];
         $membership = '';
         if ($groupId === 0) {
+            // 先修复自定义组索引，避免漏写 work_item 的成片同时出现在默认组。
             SmartEditOutputGroupService::repairMissingMemberships($tenant, $user);
             $excluded = DefaultWorkGroup::excludedItems($scope)->field('source_ref')->buildSql();
             $membership = "CONCAT('smart_edit:task:', id) NOT IN " . $excluded;
@@ -32,6 +33,7 @@ final class WorkspaceSmartEditAssetService
             if (!Db::name('work_group')->where($scope)->where('id', $groupId)->whereNull('delete_time')->count()) {
                 throw new InvalidArgumentException('成片组不存在或已删除');
             }
+            // 自定义组为空时，以批次 config_json 中的 work_group_id 为依据补齐历史成员。
             SmartEditOutputGroupService::repairMissingMemberships($tenant, $user, $groupId);
             $members = Db::name('work_item')->where($scope)->where('group_id', $groupId)
                 ->whereNull('delete_time')->field('source_ref')->buildSql();

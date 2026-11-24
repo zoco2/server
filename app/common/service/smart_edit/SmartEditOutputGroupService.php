@@ -11,8 +11,13 @@ use think\facade\Db;
 /**
  * 智能剪辑成片与作品分组的归属索引。
  *
- * smart_edit_group.config_json 是批次提交快照，work_item 是作品库查询索引。
- * 常驻 worker 未及时重启时可能只保留前者；读取作品库前可据此幂等补齐后者。
+ * smart_edit_group.config_json 是批次提交快照（事实来源），work_item 是作品库查询索引。
+ * 常驻 worker 未及时重启时可能只保留前者，因此使用三层防线保证最终一致：
+ * 1. createTask 正常创建任务时立即登记；
+ * 2. markSuccess 成片完成时按任务或批次快照再登记一次；
+ * 3. 成片库读取分组时扫描批次快照，补齐历史遗漏行。
+ *
+ * 所有补偿都只新增缺失行；uk_owner_source 冲突时保留原记录，避免覆盖人工移组、回收或删除。
  */
 final class SmartEditOutputGroupService
 {

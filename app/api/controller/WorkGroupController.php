@@ -95,6 +95,7 @@ final class WorkGroupController extends BaseApiController
             return $this->data(['refs' => []]);
         }
         if ($scope['type'] === 'video') {
+            // 默认组按当前页 refs 做差集；只修复这些任务，避免每次分页扫描全部智能剪辑批次。
             SmartEditOutputGroupService::repairRefs(
                 (int)$scope['tenant_id'],
                 (int)$scope['user_id'],
