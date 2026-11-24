@@ -2,6 +2,7 @@
 
 namespace app\common\service\geo;
 
+use app\common\service\ConfigService;
 use app\common\service\TenantConfigTable;
 use InvalidArgumentException;
 use RuntimeException;
@@ -20,24 +21,38 @@ final class GeoDiagConfigService
 
     public static function get(int $tenantId): array
     {
-        $raw = self::query($tenantId)->value('value');
-        if ($raw === null) {
+        if ($tenantId === 0) {
+            $data = ConfigService::getPlatform('geo_diag', 'provider');
+        } else {
+            $raw = self::query($tenantId)->value('value');
+            $data = $raw === null ? null : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        }
+        if ($data === null) {
             return self::DEFAULTS;
         }
-        $data = json_decode($raw, true);
         if (!is_string($data['api_key'] ?? null)) {
             throw new RuntimeException('GEO 检测配置数据异常');
         }
         return ['api_key' => $data['api_key']];
     }
 
-    public static function save(int $tenantId, array $input, bool $onlyIfMissing = false): array
+    public static function savePlatform(array $input): void
+    {
+        ConfigService::set('geo_diag', 'provider', self::validate($input));
+    }
+
+    private static function validate(array $input): array
     {
         $key = is_string($input['api_key'] ?? null) ? trim($input['api_key']) : '';
         if ($key === '' || strlen($key) > 1024 || preg_match('/[\x00-\x20\x7f]/', $key)) {
             throw new InvalidArgumentException('请填写有效的 GEO 检测 API Key');
         }
-        $config = ['api_key' => $key];
+        return ['api_key' => $key];
+    }
+
+    public static function save(int $tenantId, array $input, bool $onlyIfMissing = false): array
+    {
+        $config = self::validate($input);
         return Db::transaction(function () use ($tenantId, $config, $onlyIfMissing) {
             $query = self::query($tenantId, true);
             $id = (clone $query)->value('id');

@@ -4,6 +4,7 @@ namespace app\common\service\wenan;
 
 use Exception;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 use app\common\service\power\MarketTextModelRuntimeService;
 
 /**
@@ -24,6 +25,10 @@ class WenanConfigService
      */
     public static function get(int $tenantId): array
     {
+        if ($tenantId === 0) {
+            $platform = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+            return ['text_model_id' => trim((string)($platform['text_model_id'] ?? ''))];
+        }
         $raw = TenantConfig::where([
             'tenant_id' => $tenantId,
             'type' => self::TYPE,
@@ -102,6 +107,10 @@ class WenanConfigService
             }
         }
 
+        if ($tenantId <= 0) {
+            ConfigService::set(self::TYPE, self::NAME, ['text_model_id' => $selection]);
+            return;
+        }
         $payload = json_encode([
             'text_model_id' => $selection,
         ], JSON_UNESCAPED_UNICODE);

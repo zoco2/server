@@ -4,6 +4,7 @@ namespace app\common\service\smart_edit;
 
 use Exception;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的配音音色目录。
@@ -623,15 +624,13 @@ class SmartEditVoiceService
         foreach (self::builtin() as $key => $item) {
             $rows[$key] = $item + ['key' => $key, 'custom' => false];
         }
-        if ($tenantId > 0) {
-            foreach (self::custom($tenantId) as $item) {
-                $key = (string)$item['key'];
-                if ($key === '') {
-                    continue;
-                }
-                // 自定义覆盖内置：同一个 key 以租户配置为准
-                $rows[$key] = $item + ['custom' => true];
+        foreach (self::custom($tenantId) as $item) {
+            $key = (string)$item['key'];
+            if ($key === '') {
+                continue;
             }
+            // 自定义覆盖内置：同一个 key 以租户配置为准
+            $rows[$key] = $item + ['custom' => true];
         }
         return array_values($rows);
     }
@@ -789,16 +788,17 @@ class SmartEditVoiceService
      */
     public static function custom(int $tenantId): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
+        if ($tenantId === 0) {
+            $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+        } else {
+            $raw = TenantConfig::where([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+            ])->value('value');
 
-        if (!is_string($raw) || $raw === '') {
-            return [];
+            $decoded = is_string($raw) ? json_decode($raw, true) : [];
         }
-        $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
             return [];
         }
@@ -831,6 +831,33 @@ class SmartEditVoiceService
      */
     public static function saveCustom(int $tenantId, array $rows): void
     {
+        $clean = self::cleanCustom($rows);
+        $payload = json_encode($clean, JSON_UNESCAPED_UNICODE);
+        $row = TenantConfig::where([
+            'tenant_id' => $tenantId,
+            'type' => self::TYPE,
+            'name' => self::NAME,
+        ])->findOrEmpty();
+
+        if ($row->isEmpty()) {
+            TenantConfig::create([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+                'value' => $payload,
+            ]);
+            return;
+        }
+        $row->save(['value' => $payload]);
+    }
+
+    public static function savePlatform(array $rows): void
+    {
+        ConfigService::set(self::TYPE, self::NAME, self::cleanCustom($rows));
+    }
+
+    private static function cleanCustom(array $rows): array
+    {
         $clean = [];
         foreach ($rows as $item) {
             if (!is_array($item)) {
@@ -849,23 +876,6 @@ class SmartEditVoiceService
                 'scene' => trim((string)($item['scene'] ?? '自定义')),
             ];
         }
-
-        $payload = json_encode($clean, JSON_UNESCAPED_UNICODE);
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
+        return $clean;
     }
 }

@@ -46,6 +46,11 @@ class OperationLog
         }
 
         $params = $request->param();
+        $businessConfig = strtolower(str_replace('_', '', $request->controller())) === 'setting.businessconfig';
+        if ($businessConfig) {
+            // 共享凭据不写入操作日志。
+            $params = array_intersect_key($params, ['section' => true]);
+        }
 
         //过滤密码参数
         if (isset($params['password'])) {
@@ -67,11 +72,11 @@ class OperationLog
         $systemLog->admin_name = $request->adminInfo['name'] ?? '';
         $systemLog->action = $notes;
         $systemLog->account = $request->adminInfo['account'] ?? '';
-        $systemLog->url = $request->url(true);
+        $systemLog->url = $businessConfig ? $request->baseUrl(true) : $request->url(true);
         $systemLog->type = $request->isGet() ? 'GET' : 'POST';
         $systemLog->params = json_encode($params, true);
         $systemLog->ip = $request->ip();
-        $systemLog->result = $this->formatResult($response->getContent());
+        $systemLog->result = $businessConfig ? (string)$response->getCode() : $this->formatResult($response->getContent());
         try {
             return $systemLog->save();
         } catch (\Throwable $e) {

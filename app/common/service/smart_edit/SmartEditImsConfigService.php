@@ -5,6 +5,7 @@ namespace app\common\service\smart_edit;
 use Exception;
 use OSS\OssClient;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的阿里云配置。
@@ -29,17 +30,22 @@ class SmartEditImsConfigService
      */
     public static function get(int $tenantId): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
+        if ($tenantId === 0) {
+            $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+            $data = is_array($data) ? $data : [];
+        } else {
+            $raw = TenantConfig::where([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+            ])->value('value');
 
-        $data = [];
-        if (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
+            $data = [];
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $data = $decoded;
+                }
             }
         }
 
@@ -83,9 +89,14 @@ class SmartEditImsConfigService
         return $config;
     }
 
-    public static function save(int $tenantId, array $params): void
+    public static function savePlatform(array $params): void
     {
-        $payload = json_encode([
+        ConfigService::set(self::TYPE, self::NAME, self::normalizeInput($params));
+    }
+
+    private static function normalizeInput(array $params): array
+    {
+        return [
             'region' => trim((string)($params['region'] ?? '')),
             'access_key' => trim((string)($params['access_key'] ?? '')),
             'secret_key' => trim((string)($params['secret_key'] ?? '')),
@@ -93,7 +104,12 @@ class SmartEditImsConfigService
             'domain' => trim((string)($params['domain'] ?? '')),
             'private_access' => !empty($params['private_access']),
             'output_prefix' => trim((string)($params['output_prefix'] ?? '')) ?: 'smart-edit-output',
-        ], JSON_UNESCAPED_UNICODE);
+        ];
+    }
+
+    public static function save(int $tenantId, array $params): void
+    {
+        $payload = json_encode(self::normalizeInput($params), JSON_UNESCAPED_UNICODE);
 
         $row = TenantConfig::where([
             'tenant_id' => $tenantId,

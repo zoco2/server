@@ -57,13 +57,20 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
+        $businessConfig = str_starts_with(str_replace('_', '', $accessUri), 'setting.businessconfig/');
+        if ($businessConfig) {
+            $accessUri = str_replace('_', '', $accessUri);
+            if ($accessUri === 'setting.businessconfig/voicepreview') {
+                $accessUri = 'setting.businessconfig/save';
+            }
+        }
         $marketPricingAction = in_array($accessUri, ['power.market/pricingrules', 'power.market/previewpricing', 'power.market/applypricing'], true);
         if ($marketPricingAction) $accessUri = 'power.market/saveprices';
         // 全部路由
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if (!$marketPricingAction && !in_array($accessUri, $allUri)) {
+        if (!$businessConfig && !$marketPricingAction && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 

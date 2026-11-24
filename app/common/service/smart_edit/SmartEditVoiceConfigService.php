@@ -4,6 +4,7 @@ namespace app\common\service\smart_edit;
 
 use Exception;
 use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的火山引擎语音合成配置。
@@ -35,17 +36,22 @@ class SmartEditVoiceConfigService
      */
     public static function get(int $tenantId): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
+        if ($tenantId === 0) {
+            $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+            $data = is_array($data) ? $data : [];
+        } else {
+            $raw = TenantConfig::where([
+                'tenant_id' => $tenantId,
+                'type' => self::TYPE,
+                'name' => self::NAME,
+            ])->value('value');
 
-        $data = [];
-        if (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
+            $data = [];
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $data = $decoded;
+                }
             }
         }
 
@@ -85,9 +91,14 @@ class SmartEditVoiceConfigService
         return $config;
     }
 
-    public static function save(int $tenantId, array $params): void
+    public static function savePlatform(array $params): void
     {
-        $payload = json_encode([
+        ConfigService::set(self::TYPE, self::NAME, self::normalizeInput($params));
+    }
+
+    private static function normalizeInput(array $params): array
+    {
+        return [
             'api_key' => trim((string)($params['api_key'] ?? '')),
             'endpoint' => trim((string)($params['endpoint'] ?? '')) ?: self::DEFAULT_ENDPOINT,
             'resource_id' => trim((string)($params['resource_id'] ?? '')) ?: self::RESOURCE_ID_2_0,
@@ -95,7 +106,12 @@ class SmartEditVoiceConfigService
             'default_speed' => isset($params['default_speed']) && is_numeric($params['default_speed'])
                 ? (float)$params['default_speed']
                 : 1.0,
-        ], JSON_UNESCAPED_UNICODE);
+        ];
+    }
+
+    public static function save(int $tenantId, array $params): void
+    {
+        $payload = json_encode(self::normalizeInput($params), JSON_UNESCAPED_UNICODE);
 
         $row = TenantConfig::where([
             'tenant_id' => $tenantId,
