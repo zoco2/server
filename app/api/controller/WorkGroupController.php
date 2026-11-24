@@ -100,9 +100,9 @@ final class WorkGroupController extends BaseApiController
 
     private function scope(mixed $type): array
     {
-        $tenantId = (int)($this->userInfo['tenant_id'] ?? 0);
-        if ($tenantId <= 0 || $this->userId <= 0 || (int)$this->request->tenantId !== $tenantId) {
-            throw new InvalidArgumentException('账号与租户不匹配，请重新登录');
+        $tenantId = (int)$this->request->tenantId;
+        if ($tenantId <= 0 || $this->userId <= 0) {
+            throw new InvalidArgumentException('缺少租户或登录信息，请重新登录');
         }
         if (!in_array($type, self::TYPES, true)) {
             throw new InvalidArgumentException('请选择视频、成品图片、文案或发布话题');

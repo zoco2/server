@@ -38,10 +38,10 @@ class CopyController extends BaseApiController
             'name' => $name,
             'content' => $content,
         ]);
+        if ($groupId > 0 && $tenantId <= 0) {
+            return $this->fail('缺少租户上下文，请重新登录');
+        }
         try {
-            if ($groupId > 0 && ($tenantId <= 0 || $tenantId !== (int)($this->userInfo['tenant_id'] ?? 0))) {
-                return $this->fail('账号与租户不匹配，请重新登录');
-            }
             $copy = $groupId === 0 ? $create() : DefaultWorkGroup::createTextItem([
                 'tenant_id' => $tenantId,
                 'user_id' => $this->userId,
