@@ -13,11 +13,11 @@ class GeoDiagProvider
 
     private string $apiKey;
 
-    public function __construct(int $tenantId)
+    public function __construct()
     {
-        $this->apiKey = GeoDiagConfigService::get($tenantId)['api_key'];
+        $this->apiKey = GeoDiagConfigService::getPlatform()['api_key'];
         if ($this->apiKey === '') {
-            throw new Exception('请先在租户后台「基础配置 → GEO 检测」填写 API Key');
+            throw new Exception('请平台管理员先在「基础配置 → GEO 检测」填写 API Key');
         }
     }
 

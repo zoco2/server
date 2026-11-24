@@ -10,25 +10,16 @@
 
 ## 配置
 
-租户应用请在后台 **系统设置 → 基础配置 → 分享配置** 中设置 App Key、App Secret，详见 [租户分享配置](tenant-share-config.md)。已有租户上下文时服务自动读取该租户配置，缺少分享凭据时提示在租户后台配置。下面的环境凭据仅用于无租户上下文的旧调用。
+应用的 App Key 和 App Secret 由平台管理员在 **系统设置 → 基础配置 → 分享配置** 中保存。详见 [平台分享配置](tenant-share-config.md)。
 
-在 server `.env` 中添加：
-
-```ini
-[XIAOHONGSHU]
-APP_KEY = 平台审核通过后分配的appKey
-APP_SECRET = 平台审核通过后分配的appSecret
-CACHE_STORE = redis
-```
-
-配置文件为 `config/xiaohongshu.php`。使用进程环境变量时，按 ThinkPHP 约定设置 `PHP_XIAOHONGSHU_APP_KEY`、`PHP_XIAOHONGSHU_APP_SECRET`、`PHP_XIAOHONGSHU_CACHE_STORE`。`CACHE_STORE` 留空沿用默认缓存，支持 file/redis；多实例必须共享 Redis 及缓存前缀。测试环境和生产环境须使用独立的应用凭据。
+缓存通过 `PHP_XIAOHONGSHU_CACHE_STORE` 配置，留空时使用系统默认缓存。多实例使用同一个 Redis 缓存及前缀。
 
 ## 调用
 
 ```php
 use app\common\service\xiaohongshu\XiaohongshuH5ShareService;
 
-$service = XiaohongshuH5ShareService::forTenant($tenantId);
+$service = new XiaohongshuH5ShareService();
 $share = $service->createShare([
     'type' => 'normal',
     'images' => ['https://cdn.example.com/store/1.jpg', 'https://cdn.example.com/store/2.jpg'],

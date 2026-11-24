@@ -38,7 +38,7 @@ class SmartEditDubbingService
      * @param int    $tenantId 租户 ID
      * @param string $voiceKey 音色 key
      * @param string $text     试听文本，为空时用默认短句
-     * @param float|null $speed  语速倍数，null 用租户默认值
+     * @param float|null $speed  语速倍数，null 用平台默认值
      * @param float|null $volume 音量倍数，null 按原声
      * @return array{url:string,duration:float}
      */
@@ -49,7 +49,37 @@ class SmartEditDubbingService
         ?float $speed = null,
         ?float $volume = null
     ): array {
-        $voice = SmartEditVoiceService::get($tenantId, $voiceKey);
+        return self::synthesizePreview(
+            SmartEditVoiceService::getPlatform($voiceKey),
+            SmartEditImsConfigService::requirePlatform(),
+            SmartEditVoiceConfigService::requirePlatform(),
+            'preview/' . $tenantId . '/',
+            $text,
+            $speed,
+            $volume
+        );
+    }
+
+    /** 使用平台配置试听，音频存放在平台后台专用目录。 */
+    public static function previewPlatform(string $voiceKey): array
+    {
+        return self::synthesizePreview(
+            SmartEditVoiceService::getPlatform($voiceKey),
+            SmartEditImsConfigService::requirePlatform(),
+            SmartEditVoiceConfigService::requirePlatform(),
+            'preview/platform/'
+        );
+    }
+
+    private static function synthesizePreview(
+        array $voice,
+        array $config,
+        array $voiceConfig,
+        string $directory,
+        string $text = '',
+        ?float $speed = null,
+        ?float $volume = null
+    ): array {
         $text = trim($text);
         if ($text === '') {
             $text = SmartEditVoiceService::previewText();
@@ -57,8 +87,6 @@ class SmartEditDubbingService
         // 试听没必要念长文，截断避免误点就产生大额计费
         $text = mb_substr($text, 0, 60);
 
-        $config = SmartEditImsConfigService::require($tenantId);
-        $voiceConfig = SmartEditVoiceConfigService::require($tenantId);
         $client = new VolcTtsClient(
             $voiceConfig['api_key'],
             $voiceConfig['endpoint'],
@@ -79,7 +107,7 @@ class SmartEditDubbingService
         $key = SmartEditImsConfigService::generatedKey(
             $config,
             self::OUTPUT_PREFIX,
-            'preview/' . self::previewFileStem($voiceKey, $speed, $volume) . '.mp3'
+            $directory . self::previewFileStem($voice['key'], $speed, $volume) . '.mp3'
         );
         SmartEditImsConfigService::putObject($config, $key, $audio, 'audio/mpeg');
 
@@ -136,21 +164,21 @@ class SmartEditDubbingService
         $lines = self::splitLongLines($lines);
         $gap = max(0.0, min(5.0, $gap));
 
-        $config = SmartEditImsConfigService::require($tenantId);
-        $voiceConfig = SmartEditVoiceConfigService::require($tenantId);
+        $config = SmartEditImsConfigService::requirePlatform();
+        $voiceConfig = SmartEditVoiceConfigService::requirePlatform();
         $client = new VolcTtsClient(
             $voiceConfig['api_key'],
             $voiceConfig['endpoint'],
             $voiceConfig['resource_id']
         );
 
-        // 语速优先用本次提交的值，缺省回落租户配置；音量缺省按原声
+        // 语速优先用本次提交的值，缺省使用平台配置；音量缺省按原声
         $effectiveSpeed = self::clampSpeed($speed ?? (float)$voiceConfig['default_speed']);
         $effectiveVolume = self::clampVolume($volume ?? 1.0);
 
         $done = 0;
         foreach (array_values($voiceKeys) as $voiceIndex => $voiceKey) {
-            $voice = SmartEditVoiceService::get($tenantId, $voiceKey);
+            $voice = SmartEditVoiceService::getPlatform($voiceKey);
             $row = self::findOrCreateRow($tenantId, $userId, $batchNo, $voiceIndex, $voice);
             // 已成功的不重复合成，避免重跑整组时重复计费
             if ((string)$row['status'] === SmartEditDubbing::STATUS_SUCCESS && (string)$row['audio_uri'] !== '') {

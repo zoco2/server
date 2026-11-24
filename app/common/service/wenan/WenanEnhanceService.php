@@ -150,7 +150,7 @@ class WenanEnhanceService
         if ($isTitleList && $mode !== 'write') {
             throw new Exception('拓展标题请使用帮写接口');
         }
-        // 模型来自租户「文案模型」配置（知识库/智能剪辑共用）；未配置时走市场默认。
+        // 模型来自平台基础配置（知识库和智能剪辑共用）；未配置时走市场默认。
         // 不传 enable_thinking / max_tokens，避免上游 422。
         $request = [
             'system_prompt' => self::systemPrompt($mode, $scene, $sceneMeta, $maxLength, $tone),

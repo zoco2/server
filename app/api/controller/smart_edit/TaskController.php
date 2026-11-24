@@ -44,7 +44,7 @@ class TaskController extends BaseApiController
     {
         return $this->success(
             '获取成功',
-            SmartEditVoiceService::pickerCatalog((int)$this->request->tenantId)
+            SmartEditVoiceService::pickerCatalog()
         );
     }
 

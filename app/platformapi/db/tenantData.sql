@@ -1339,3 +1339,10 @@ WHERE page.tenant_id={tenantId} AND page.source_menu_key='core_tenant_base_confi
       SELECT 1 FROM `la_tenant_system_menu_{tenantSn}` existing
       WHERE existing.tenant_id=page.tenant_id AND existing.perms=action.permission
   );
+
+UPDATE `la_tenant_system_menu`
+SET is_disable=1,is_show=0,update_time=UNIX_TIMESTAMP()
+WHERE tenant_id={tenantId} AND is_disable=0 AND (
+    source_menu_key='core_tenant_base_config'
+    OR component IN ('setting/base-config','setting/business-price','smart_edit/config','geo/config','channel/share_setting')
+);

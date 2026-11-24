@@ -122,7 +122,6 @@ class GeoOrderService
 
         try {
             self::callWithToken(
-                (int)$order['tenant_id'],
                 // createOrder 返回 void，包一层返回空数组以匹配调用器签名。
                 static function (string $token) use ($order, $costPrice): array {
                     AigcGeoManuscriptService::createOrder($token, [
@@ -174,7 +173,6 @@ class GeoOrderService
             throw new Exception('订单尚未推送，无法查询');
         }
         $result = self::callWithToken(
-            (int)$order['tenant_id'],
             static fn (string $token): array => AigcGeoManuscriptService::queryOrder($token, (string)$order['order_no'])
         );
         $from = (int)$order['status'];
@@ -255,7 +253,6 @@ class GeoOrderService
                 . (GeoOrder::STATUS_TEXT[(int)$order['status']] ?? $order['status']));
         }
         self::callWithToken(
-            (int)$order['tenant_id'],
             // processOrder 返回 void，包一层返回空数组以匹配调用器签名。
             static function (string $token) use ($order, $flag, $feedback): array {
                 AigcGeoManuscriptService::processOrder($token, (string)$order['order_no'], $flag, $feedback);
@@ -367,7 +364,7 @@ class GeoOrderService
      */
     private static function resolvePrice(GeoMedia $media, int $priceType): array
     {
-        $ratio = (float)$media['price_ratio'] > 0 ? (float)$media['price_ratio'] : GeoMediaSyncService::markup((int)$media['tenant_id']);
+        $ratio = GeoMediaSyncService::markup();
         foreach ((array)$media->getAttr('price_type_json') as $item) {
             if ((int)($item['type'] ?? 0) === $priceType) {
                 $cost = (float)($item['price'] ?? 0);
@@ -395,18 +392,17 @@ class GeoOrderService
      * 或者被别处刷新覆盖时，旧令牌当场作废。这里收到令牌失效就换新令牌重试一次，
      * 其余异常原样抛出交给调用方累计失败数，不会无谓重发请求。
      *
-     * @param int $tenantId 租户 ID
      * @param callable $call 实际请求，签名为 fn(string $openToken): array
      * @return array<string, mixed>
      */
-    private static function callWithToken(int $tenantId, callable $call): array
+    private static function callWithToken(callable $call): array
     {
-        $token = AigcGeoManuscriptService::accessToken($tenantId);
+        $token = AigcGeoManuscriptService::accessToken();
         try {
             return $call($token);
         } catch (GeoTokenExpiredException $e) {
             try {
-                $token = AigcGeoManuscriptService::renewAccessToken($tenantId);
+                $token = AigcGeoManuscriptService::renewAccessToken();
             } catch (Exception $renewError) {
                 throw new Exception('访问令牌已失效且无法重新获取：' . $renewError->getMessage());
             }

@@ -24,7 +24,7 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
 
     public function setSortFields(): array
     {
-        return ['id' => 'id', 'costprice' => 'costprice', 'price_ratio' => 'price_ratio', 'update_time' => 'update_time'];
+        return ['id' => 'id', 'costprice' => 'costprice', 'update_time' => 'update_time'];
     }
 
     public function setDefaultOrder(): array
@@ -42,10 +42,9 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
             ->order($this->sortOrder)
             ->select()
             ->toArray();
-        // 售价不落库：按行级倍率（0 用租户默认）在这里补成成交后的值，供前端直接展示与排序。
-        $markup = GeoMediaSyncService::markup();
+        // 售价不落库：按平台统一倍率换算展示价格。
+        $ratio = GeoMediaSyncService::markup();
         foreach ($rows as &$row) {
-            $ratio = (float)($row['price_ratio'] ?? 0) > 0 ? (float)$row['price_ratio'] : $markup;
             $row['effective_ratio'] = $ratio;
             $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
         }
@@ -74,15 +73,15 @@ class GeoMediaLists extends BaseAdminDataLists implements ListsSearchInterface, 
      */
     private function applyExtra($query): void
     {
-        // 售价不落库，价格区间直接按 成本×行倍率（0 用租户默认） 计算。
-        $markup = GeoMediaSyncService::markup();
+        // 售价不落库，价格区间直接按 成本 × 平台倍率 计算。
+        $price = GeoMediaSyncService::priceExpression();
         $minPrice = $this->params['min_price'] ?? '';
         $maxPrice = $this->params['max_price'] ?? '';
         if (is_numeric($minPrice) && (float)$minPrice > 0) {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) >= ?', [$markup, (float)$minPrice]);
+            $query->whereRaw("$price >= ?", [(float)$minPrice]);
         }
         if (is_numeric($maxPrice) && (float)$maxPrice > 0) {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) <= ?', [$markup, (float)$maxPrice]);
+            $query->whereRaw("$price <= ?", [(float)$maxPrice]);
         }
         // 默认只显示海讯在架、未删除且未被本地隐藏的资源。
         if (($this->params['show_all'] ?? '0') !== '1') {

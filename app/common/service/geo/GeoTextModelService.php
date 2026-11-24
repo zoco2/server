@@ -15,15 +15,15 @@ class GeoTextModelService
 
     public static function candidates(int $tenantId, bool $requiresTools): array
     {
-        $selection = WenanConfigService::get($tenantId)['text_model_id'];
+        $selection = WenanConfigService::getPlatform()['text_model_id'];
         if ($selection !== '') {
             try {
                 $model = MarketTextModelRuntimeService::resolveModel($tenantId, $selection);
             } catch (Exception $e) {
-                throw new InvalidArgumentException('文案模型不可用，请到租户后台「文案模型」重新选择', 0, $e);
+                throw new InvalidArgumentException('文案模型不可用，请平台管理员在「基础配置」重新选择', 0, $e);
             }
             if ($requiresTools && (!MarketTextModelRuntimeService::supportsToolProtocol($model) || self::toolSupport($model) === false)) {
-                throw new InvalidArgumentException('当前文案模型不支持知识库工具调用，请到租户后台重新选择文案模型');
+                throw new InvalidArgumentException('当前文案模型不支持知识库工具调用，请平台管理员重新选择文案模型');
             }
             return [$model];
         }
@@ -49,8 +49,8 @@ class GeoTextModelService
         $candidates = array_slice([...$supported, ...$undeclared], 0, self::MAX_DEFAULT_CANDIDATES);
         if ($candidates === []) {
             throw new InvalidArgumentException($requiresTools
-                ? '暂无可用于知识库工具调用的文本模型，请在租户后台配置文案模型'
-                : '暂无可用的文本模型，请在租户后台配置文案模型');
+                ? '暂无可用于知识库工具调用的文本模型，请平台管理员配置文案模型'
+                : '暂无可用的文本模型，请平台管理员配置文案模型');
         }
         return $candidates;
     }
@@ -80,7 +80,7 @@ class GeoTextModelService
                     throw $e;
                 }
                 if (!$e->allowsModelFallback || $e->partialResult !== null || !isset($candidates[$index + 1])) {
-                    throw new InvalidArgumentException('上游拒绝了当前文本模型，请检查租户文案模型及渠道配置', 0, $e);
+                    throw new InvalidArgumentException('上游拒绝了当前文本模型，请检查平台文案模型及渠道配置', 0, $e);
                 }
             }
         }

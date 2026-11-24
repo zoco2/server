@@ -4,7 +4,7 @@ namespace app\common\service\smart_edit;
 
 use Exception;
 use OSS\OssClient;
-use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的阿里云配置。
@@ -12,7 +12,7 @@ use app\common\model\TenantConfig;
  * 完全独立：AccessKey / SecretKey / 地域 / Bucket / 域名 都在这里配置，
  * 不读取、不依赖任何其他存储设置。智能剪辑的素材与成片都放在这套配置指向的 Bucket 里。
  *
- * 存在 la_tenant_config（type=smart_edit, name=aliyun），不新建表。
+ * 配置保存在 la_config（type=smart_edit, name=aliyun），不新建表。
  */
 class SmartEditImsConfigService
 {
@@ -27,21 +27,10 @@ class SmartEditImsConfigService
      *
      * @return array{region:string,access_key:string,secret_key:string,bucket:string,domain:string,private_access:bool,output_prefix:string}
      */
-    public static function get(int $tenantId): array
+    public static function getPlatform(): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
-
-        $data = [];
-        if (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $data = $decoded;
-            }
-        }
+        $data = ConfigService::getPlatform(self::TYPE, self::NAME, []);
+        $data = is_array($data) ? $data : [];
 
         return [
             'region' => trim((string)($data['region'] ?? '')),
@@ -59,9 +48,9 @@ class SmartEditImsConfigService
      *
      * @throws Exception
      */
-    public static function require(int $tenantId): array
+    public static function requirePlatform(): array
     {
-        $config = self::get($tenantId);
+        $config = self::getPlatform();
 
         $missing = [];
         if ($config['region'] === '') {
@@ -77,15 +66,20 @@ class SmartEditImsConfigService
             $missing[] = '访问域名';
         }
         if ($missing !== []) {
-            throw new Exception('请先在「智能剪辑 → 阿里云配置」中填写：' . implode('、', $missing));
+            throw new Exception('请平台管理员在「基础配置 → 智能剪辑」填写：' . implode('、', $missing));
         }
 
         return $config;
     }
 
-    public static function save(int $tenantId, array $params): void
+    public static function savePlatform(array $params): void
     {
-        $payload = json_encode([
+        ConfigService::set(self::TYPE, self::NAME, self::normalizeInput($params));
+    }
+
+    private static function normalizeInput(array $params): array
+    {
+        return [
             'region' => trim((string)($params['region'] ?? '')),
             'access_key' => trim((string)($params['access_key'] ?? '')),
             'secret_key' => trim((string)($params['secret_key'] ?? '')),
@@ -93,34 +87,7 @@ class SmartEditImsConfigService
             'domain' => trim((string)($params['domain'] ?? '')),
             'private_access' => !empty($params['private_access']),
             'output_prefix' => trim((string)($params['output_prefix'] ?? '')) ?: 'smart-edit-output',
-        ], JSON_UNESCAPED_UNICODE);
-
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
-    }
-
-    /**
-     * 租户后台配置表单回显。
-     */
-    public static function forDisplay(int $tenantId): array
-    {
-        $config = self::get($tenantId);
-        $config['secret_key_set'] = $config['secret_key'] !== '';
-        return $config;
+        ];
     }
 
     /**
@@ -129,7 +96,7 @@ class SmartEditImsConfigService
      * IMS 只能拉 OSS 上的在线资源，所以 TTS 产物、字幕附件这类后端生成的文件
      * 必须写进这套 Bucket，落到租户通用存储里 IMS 是读不到的。
      *
-     * @param array  $config SmartEditImsConfigService::require() 的结果
+     * @param array  $config SmartEditImsConfigService::requirePlatform() 的结果
      * @param string $key    对象 key
      * @param string $content 文件二进制内容
      * @param string $mime   Content-Type，如 audio/mpeg
@@ -162,7 +129,7 @@ class SmartEditImsConfigService
     /**
      * 生成后端产物的对象 key，按年月分目录，避免单目录文件过多。
      *
-     * @param array  $config   SmartEditImsConfigService::require() 的结果
+     * @param array  $config   SmartEditImsConfigService::requirePlatform() 的结果
      * @param string $prefix   业务前缀，如 dubbing
      * @param string $filename 文件名
      */

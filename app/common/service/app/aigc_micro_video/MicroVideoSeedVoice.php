@@ -26,7 +26,7 @@ final class MicroVideoSeedVoice
     public static function requireTrial(int $tenant,int $user): void
     {
         if(!self::enabled($tenant,$user))throw new InvalidArgumentException('当前账号未开放 Seed-Audio 测试');
-        SmartEditVoiceConfigService::require($tenant);
+        SmartEditVoiceConfigService::requirePlatform();
     }
     public static function config(int $tenant,int $user): array
     {
@@ -88,7 +88,7 @@ final class MicroVideoSeedVoice
                 if(preg_match('#^data:image/[^;]+;base64,(.+)$#s',$input,$m))$bytes=base64_decode($m[1],true);
                 else{$download=OpenSafeHttp::get($input,10*1024*1024,30);if((int)$download['status']!==200)throw new RuntimeException('原始形象读取失败');$bytes=$download['body'];}
                 if(!is_string($bytes)||strlen($bytes)>10*1024*1024||!in_array((new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes),['image/jpeg','image/png','image/webp'],true))throw new RuntimeException('参考图片格式或大小不支持');
-                $config=SmartEditVoiceConfigService::require($tenant);
+                $config=SmartEditVoiceConfigService::requirePlatform();
                 $requestId='role-seed-'.$tenant.'-'.$user.'-'.$id;
                 $payload=['model'=>self::MODEL,'text_prompt'=>$voice['request']['prompt'],'references'=>[['image_data'=>base64_encode($bytes)]],
                     'audio_config'=>['format'=>'wav','sample_rate'=>48000,'speech_rate'=>0,'pitch_rate'=>0,'loudness_rate'=>0,'enable_subtitle'=>true]];

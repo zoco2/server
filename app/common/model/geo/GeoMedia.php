@@ -8,7 +8,7 @@ use app\common\service\geo\GeoMediaSyncService;
 /**
  * GEO 媒体资源（海讯社镜像）。
  *
- * 售价不落库：sale_price 由 costprice × 倍率（行级 price_ratio，0 取租户默认）实时计算，
+ * 售价不落库：sale_price 由 costprice × 倍率（平台统一倍率）实时计算，
  * 否则调倍率要全表回写。多价格类别同理，读出时补上实时价格。
  *
  * 注意 JSON 字段：
@@ -20,7 +20,6 @@ use app\common\service\geo\GeoMediaSyncService;
  * - detail_json 是原始行，不声明为 json 字段，由 setDetailJsonAttr 自行编码。
  *
  * @property float $costprice
- * @property float $price_ratio
  * @property float $sale_price
  * @property array $price_type_json
  */
@@ -34,12 +33,11 @@ class GeoMedia extends BaseModel
     protected $jsonAssoc = true;
     protected $type = [
         'costprice' => 'float',
-        'price_ratio' => 'float',
     ];
 
     /** 返回给前端的字段，sale_price / price_type_json 为运行时计算。 */
     public const OUTPUT_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,searchcoll,'
-        . 'entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
+        . 'entrancelink,caseurl,remark,costprice,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,flag,deleted,local_hidden,sync_status,last_sync_time,update_time';
 
@@ -51,7 +49,7 @@ class GeoMedia extends BaseModel
      */
     public function getSalePriceAttr($value, array $data): float
     {
-        return GeoMediaSyncService::suggestSalePrice((float)($data['costprice'] ?? 0), self::ratio($data));
+        return GeoMediaSyncService::suggestSalePrice((float)($data['costprice'] ?? 0), GeoMediaSyncService::markup());
     }
 
     /**
@@ -83,7 +81,7 @@ class GeoMedia extends BaseModel
             && is_finite($cost) && $cost > 0) {
             $items = [['type' => 1, 'price' => $cost]];
         }
-        $ratio = self::ratio($data);
+        $ratio = GeoMediaSyncService::markup();
         $result = [];
         foreach ($items as $item) {
             if (!is_array($item)) {
@@ -117,16 +115,5 @@ class GeoMedia extends BaseModel
             return $value;
         }
         return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?: '';
-    }
-
-    /**
-     * 生效倍率：行级大于 0 用行级，否则用租户默认。
-     *
-     * @param array<string, mixed> $data 当前行
-     */
-    public static function ratio(array $data): float
-    {
-        $ratio = (float)($data['price_ratio'] ?? 0);
-        return $ratio > 0 ? $ratio : GeoMediaSyncService::markup();
     }
 }

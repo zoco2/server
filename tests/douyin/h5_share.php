@@ -83,16 +83,6 @@ $video = ['video_path' => 'https://cdn.example.com/video.mp4?key=a+b%2Fc&v=1'];
 $image = ['image_path' => 'https://cdn.example.com/a.jpg'];
 
 try {
-    // 验证不传配置/缓存时的生产入口，不初始化应用、数据库或读取真实凭据。
-    new App(dirname(__DIR__, 2));
-    \think\facade\Env::set(['DOUYIN' => ['CLIENT_KEY' => 'configured-key', 'CLIENT_SECRET' => 'configured-secret', 'CACHE_STORE' => 'douyin_test']]);
-    \think\facade\Config::set(require dirname(__DIR__, 2) . '/config/douyin.php', 'douyin');
-    \think\facade\Config::set(['default' => 'douyin_test', 'stores' => [
-        'douyin_test' => ['type' => 'File', 'path' => $root . '/configured'],
-    ]], 'cache');
-    $configured = new DouyinH5ShareService(null, new Client(['handler' => HandlerStack::create(new MockHandler([token(), ticket()]))]));
-    same('configured-key', $configured->createShare($image)['params']['client_key'], 'framework config and cache wiring');
-
     same('3f7b739a91a52cb7d85c4f89c5f611fe', DouyinH5ShareService::signature('Wm3WZYTPz0wzccnW',
         '@ml6sqYBGgTKmQNajnKNkaj8yksCAY++adIhlGIqfTiKyvBqOIkzdJ6WRgP+nO+wtVItqKbX4iZ+mFIYkyPJjpQ==',
         '1650941858'), 'official signature vector');

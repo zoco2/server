@@ -87,7 +87,7 @@ class SmartEditFontService
      * 文件已在 OSS，不再下载或上传；拼好地址即可。
      * 返回空串表示该字体不可用。
      *
-     * @param array  $config  SmartEditImsConfigService::require() 的结果（保留入参以兼容调用方）
+     * @param array  $config  SmartEditImsConfigService::requirePlatform() 的结果（保留入参以兼容调用方）
      * @param string $key     字体 key
      * @param int    $timeout 兼容旧签名，已无下载逻辑
      */

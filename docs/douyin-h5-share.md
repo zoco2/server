@@ -1,21 +1,12 @@
 # 抖音 H5 分享服务
 
-员工可从服务号的任务通知页打开抖音投稿。任务接口使用 `DouyinH5ShareService::forTenant($tenantId)->createShare($content)` 生成唤起链接。接口及素材要求见[任务发布接口](publish-task.md)。
+员工可从服务号的任务通知页打开抖音投稿。任务接口使用 `(new DouyinH5ShareService())->createShare($content)` 生成唤起链接。接口及素材要求见[任务发布接口](publish-task.md)。
 
 ## 配置
 
-租户应用请在后台 **系统设置 → 基础配置 → 分享配置** 中设置 Client Key、Client Secret，详见 [租户分享配置](tenant-share-config.md)。已有租户上下文时服务自动读取该租户配置，缺少分享凭据时提示在租户后台配置。下面的环境凭据仅用于无租户上下文的旧调用。
+在抖音开放平台创建网站应用并开通所需的分享权限。应用的 Client Key 和 Client Secret 由平台管理员在 **系统设置 → 基础配置 → 分享配置** 中保存。详见 [平台分享配置](tenant-share-config.md)。
 
-在抖音开放平台创建网站应用，开通 `h5.share`、`open.get.ticket` 和投稿权限 `aweme.share`；转发到日常还需要 `aweme.forward`。在 server 的 `.env` 添加：
-
-```ini
-[DOUYIN]
-CLIENT_KEY = 你的应用key
-CLIENT_SECRET = 你的应用secret
-CACHE_STORE = redis
-```
-
-配置入口为 `config/douyin.php`，也可按 ThinkPHP 约定使用进程环境变量 `PHP_DOUYIN_CLIENT_KEY`、`PHP_DOUYIN_CLIENT_SECRET`、`PHP_DOUYIN_CACHE_STORE`。`CACHE_STORE` 留空使用系统默认缓存；支持 file 和 redis。单机 file 使用文件锁，多实例必须共用同一 Redis 缓存及前缀，避免重复刷新使旧 token 失效。测试与生产请使用不同的抖音应用凭据。
+缓存通过 `PHP_DOUYIN_CACHE_STORE` 配置，留空时使用系统默认缓存。多实例使用同一个 Redis 缓存及前缀。
 
 凭据按应用及密钥指纹隔离，按接口 `expires_in` 提前刷新；token 失效（2190002 / 2190008）时最多刷新重试一次。HTTP 超时为 10 秒，TLS 校验开启，禁止跟随重定向。返回值不包含 secret、token、ticket；上游异常只保留错误码，不透传原始响应或请求。
 
@@ -24,7 +15,7 @@ CACHE_STORE = redis
 ```php
 use app\common\service\douyin\DouyinH5ShareService;
 
-$share = DouyinH5ShareService::forTenant($tenantId)->createShare([
+$share = (new DouyinH5ShareService())->createShare([
     'video_path' => 'https://cdn.example.com/store/video.mp4',
     'title' => '周末来我们店里坐坐',
     'hashtag_list' => ['同城美食', '周末探店'],

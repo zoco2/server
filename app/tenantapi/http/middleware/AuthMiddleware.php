@@ -56,21 +56,6 @@ class AuthMiddleware
 
         // 当前访问路径
         $accessUri = strtolower($request->controller() . '/' . $request->action());
-        // 配置接口按区块授权，即使菜单升级尚未执行，也须先取得权限才能访问凭据。
-        $configPermissions = [
-            'setting.businessprice/detail' => 'setting.businessprice/detail',
-            'setting.businessprice/save' => 'setting.businessprice/save',
-            'smartedit.config/detail' => 'smartedit.config/detail',
-            'smartedit.config/voicedetail' => 'smartedit.config/detail',
-            'geo.diagnosisconfig/detail' => 'geo.manuscript/detail',
-            'geo.diagnosisconfig/save' => 'geo.diagnosisconfig/save',
-            'channel.sharesetting/getconfig' => 'channel.sharesetting/getconfig',
-            'channel.sharesetting/setconfig' => 'channel.sharesetting/setconfig',
-        ];
-        $configPermission = $configPermissions[str_replace('_', '', $accessUri)] ?? null;
-        if ($configPermission !== null) {
-            $accessUri = $configPermission;
-        }
         $requiresUserEditPermission = in_array($accessUri, ['user.user/add', 'merchant.brand/add', 'merchant.brand/delete'], true);
         if ($requiresUserEditPermission) {
             $accessUri = 'user.user/edit';
@@ -83,7 +68,7 @@ class AuthMiddleware
         $allUri = $this->formatUrl($adminAuthCache->getAllUri());
 
         // 判断该当前访问的uri是否存在，不存在无需验证
-        if ($configPermission === null && !$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
+        if (!$requiresUserEditPermission && !$marketPricingAction && !str_starts_with($accessUri, 'distribution.poster/') && !in_array($accessUri, $allUri)) {
             return $next($request);
         }
 

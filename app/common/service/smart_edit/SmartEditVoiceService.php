@@ -3,16 +3,16 @@
 namespace app\common\service\smart_edit;
 
 use Exception;
-use app\common\model\TenantConfig;
+use app\common\service\ConfigService;
 
 /**
  * 智能剪辑的配音音色目录。
  *
- * 与字体库同理：不读第三方应用表，清单写在代码里，租户可在后台追加。
+ * 与字体库同理：不读第三方应用表，清单写在代码里，平台可在后台追加。
  * key 是提交时用的 voice_key；provider_asset_id 是火山大模型的 speaker ID。
  *
  * 火山 2.0 音色必须配 seed-tts-2.0 资源 ID，否则会报音色不存在。
- * 内置清单覆盖豆包语音合成 2.0 已授权的中文 uranus 音色；租户仍可在后台追加。
+ * 内置清单覆盖豆包语音合成 2.0 已授权的中文 uranus 音色；平台可在后台追加。
  */
 class SmartEditVoiceService
 {
@@ -60,7 +60,7 @@ class SmartEditVoiceService
      * 豆包语音合成 2.0 的音色 ID 统一形如 zh_xxx_xxx_uranus_bigtts，
      * 必须配 X-Api-Resource-Id: seed-tts-2.0，配 1.0 的 *_moon_bigtts 会报资源不匹配。
      * 这里放入官方文档中的中文 uranus 全量清单；已有 key（如 vv / cancan）保持不变，避免旧任务失效。
-     * 若个别音色在当前账号未开通，合成时会由火山返回错误，可在租户后台删掉或改掉。
+     * 若个别音色在当前账号未开通，合成时会由火山返回错误，可在平台后台更新。
      * scene 即分类（视频配音 / 角色扮演 / 通用场景等）。
      *
      * @return array<string, array{label:string,provider_asset_id:string,gender:string,scene:string}>
@@ -613,65 +613,31 @@ class SmartEditVoiceService
     }
 
     /**
-     * 租户自定义音色（后台追加），与内置清单合并。
+     * 平台自定义音色（后台追加），与内置清单合并。
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string,custom:bool}>
      */
-    public static function catalog(int $tenantId = 0): array
+    public static function platformCatalog(): array
     {
         $rows = [];
         foreach (self::builtin() as $key => $item) {
             $rows[$key] = $item + ['key' => $key, 'custom' => false];
         }
-        if ($tenantId > 0) {
-            foreach (self::custom($tenantId) as $item) {
-                $key = (string)$item['key'];
-                if ($key === '') {
-                    continue;
-                }
-                // 自定义覆盖内置：同一个 key 以租户配置为准
-                $rows[$key] = $item + ['custom' => true];
+        foreach (self::platformCustom() as $item) {
+            $key = (string)$item['key'];
+            if ($key === '') {
+                continue;
             }
+            // 自定义覆盖内置：同一个 key 以平台配置为准
+            $rows[$key] = $item + ['custom' => true];
         }
         return array_values($rows);
     }
 
     /** 产品级 Tab：豆包 2.0 内置 */
     public const TAB_DB = 'db';
-    /** 产品级 Tab：租户追加/克隆人声 */
+    /** 产品级 Tab：平台追加的自定义音色 */
     public const TAB_CLONE = 'clone';
-
-    /**
-     * 前端下拉用的音色列表（租户后台编辑仍走此结构）。
-     *
-     * scene 即分类；avatar 为官方门户头像 URL。
-     *
-     * @param int  $tenantId      租户 ID；0 表示只看内置清单
-     * @param bool $withAssetId   是否返回 provider_asset_id。租户后台的音色管理要编辑它，
-     *                            用户端下拉只需要显示名，不必暴露底层 ID。
-     * @return array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool}>
-     */
-    public static function options(int $tenantId = 0, bool $withAssetId = false): array
-    {
-        $result = [];
-        foreach (self::catalog($tenantId) as $item) {
-            $label = (string)$item['label'];
-            $row = [
-                'key' => (string)$item['key'],
-                'label' => $label,
-                'gender' => (string)$item['gender'],
-                // scene 就是分类（视频配音 / 角色扮演 / 通用场景 …）
-                'scene' => (string)$item['scene'],
-                'avatar' => self::avatarUrl($label),
-                'custom' => (bool)$item['custom'],
-            ];
-            if ($withAssetId) {
-                $row['provider_asset_id'] = (string)$item['provider_asset_id'];
-            }
-            $result[] = $row;
-        }
-        return $result;
-    }
 
     /**
      * 用户端选配音弹窗用的结构化目录：tabs + voices。
@@ -681,12 +647,12 @@ class SmartEditVoiceService
      *
      * @return array{tabs: array<int, array{key:string,label:string,badge?:string,badge_color?:string}>, voices: array<int, array{key:string,label:string,gender:string,scene:string,avatar:string,custom:bool,tabs:array<int,string>}>}
      */
-    public static function pickerCatalog(int $tenantId = 0): array
+    public static function pickerCatalog(): array
     {
         $voices = [];
         $sceneKeys = [];
-        foreach (self::catalog($tenantId) as $item) {
-            // 暂时只展示内置，跳过租户自定义 / 克隆
+        foreach (self::platformCatalog() as $item) {
+            // 暂时只展示内置，跳过平台自定义 / 克隆
             if (!empty($item['custom'])) {
                 continue;
             }
@@ -736,9 +702,9 @@ class SmartEditVoiceService
      *
      * @throws Exception
      */
-    public static function get(int $tenantId, string $key): array
+    public static function getPlatform(string $key): array
     {
-        foreach (self::catalog($tenantId) as $item) {
+        foreach (self::platformCatalog() as $item) {
             if ((string)$item['key'] === $key) {
                 return $item;
             }
@@ -753,7 +719,7 @@ class SmartEditVoiceService
      * @return array<int, string>
      * @throws Exception
      */
-    public static function normalizeKeys(int $tenantId, $raw): array
+    public static function normalizeKeys($raw): array
     {
         if (!is_array($raw) || $raw === []) {
             return [];
@@ -765,7 +731,7 @@ class SmartEditVoiceService
                 continue;
             }
             // 逐项校验：非法 key 直接报错，不要静默丢掉导致口播少了音色
-            self::get($tenantId, $key);
+            self::getPlatform($key);
             if (!in_array($key, $keys, true)) {
                 $keys[] = $key;
             }
@@ -783,22 +749,13 @@ class SmartEditVoiceService
     }
 
     /**
-     * 租户自定义音色清单。
+     * 平台自定义音色清单。
      *
      * @return array<int, array{key:string,label:string,provider_asset_id:string,gender:string,scene:string}>
      */
-    public static function custom(int $tenantId): array
+    public static function platformCustom(): array
     {
-        $raw = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->value('value');
-
-        if (!is_string($raw) || $raw === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
+        $decoded = ConfigService::getPlatform(self::TYPE, self::NAME, []);
         if (!is_array($decoded)) {
             return [];
         }
@@ -825,11 +782,16 @@ class SmartEditVoiceService
     }
 
     /**
-     * 保存租户自定义音色清单。
+     * 保存平台自定义音色清单。
      *
      * @param array $rows [{key,label,provider_asset_id,gender,scene}, ...]
      */
-    public static function saveCustom(int $tenantId, array $rows): void
+    public static function savePlatform(array $rows): void
+    {
+        ConfigService::set(self::TYPE, self::NAME, self::cleanCustom($rows));
+    }
+
+    private static function cleanCustom(array $rows): array
     {
         $clean = [];
         foreach ($rows as $item) {
@@ -849,23 +811,6 @@ class SmartEditVoiceService
                 'scene' => trim((string)($item['scene'] ?? '自定义')),
             ];
         }
-
-        $payload = json_encode($clean, JSON_UNESCAPED_UNICODE);
-        $row = TenantConfig::where([
-            'tenant_id' => $tenantId,
-            'type' => self::TYPE,
-            'name' => self::NAME,
-        ])->findOrEmpty();
-
-        if ($row->isEmpty()) {
-            TenantConfig::create([
-                'tenant_id' => $tenantId,
-                'type' => self::TYPE,
-                'name' => self::NAME,
-                'value' => $payload,
-            ]);
-            return;
-        }
-        $row->save(['value' => $payload]);
+        return $clean;
     }
 }

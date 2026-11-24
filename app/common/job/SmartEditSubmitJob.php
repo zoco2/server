@@ -109,7 +109,7 @@ class SmartEditSubmitJob extends Job
     {
         $timeline = (array)$task['timeline_json'];
         try {
-            $config = SmartEditImsConfigService::require((int)$task['tenant_id']);
+            $config = SmartEditImsConfigService::requirePlatform();
             $params = (array)$task['params_json'];
             [$outputWidth, $outputHeight] = SmartEditService::resolveOutputSize((string)($params['aspect_ratio'] ?? ''));
             $output = SmartEditMaterialService::outputTarget($config, (string)$task['task_no']);

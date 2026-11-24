@@ -16,7 +16,7 @@ class SmartEditMaterialService
     /**
      * 素材 uri -> IMS 能拉取的公网地址。
      *
-     * @param array $config SmartEditImsConfigService::require() 的结果
+     * @param array $config SmartEditImsConfigService::requirePlatform() 的结果
      */
     public static function mediaUrl(array $config, int $tenantId, string $uri): string
     {
@@ -29,7 +29,7 @@ class SmartEditMaterialService
         if (preg_match('#^https?://#i', $uri)) {
             $host = (string)parse_url($uri, PHP_URL_HOST);
             if ($host === '' || stripos((string)$config['domain'], $host) === false) {
-                throw new Exception('只支持使用本租户阿里云配置中的素材');
+                throw new Exception('只支持使用平台智能剪辑存储中的素材');
             }
             $uri = ltrim((string)parse_url($uri, PHP_URL_PATH), '/');
         }

@@ -14,7 +14,7 @@ class GeoMediaCatalogService
 {
     /** 前台可见字段：不含 price_ratio / sourceid / detail_json 等内部列；costprice 只用于算售价，输出前剔除 */
     public const PUBLIC_FIELDS = 'id,resource_type,name,classify,region,portalmedia,industrystr,'
-        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_ratio,price_type_json,'
+        . 'searchcoll,entrancelink,caseurl,remark,costprice,price_type_json,'
         . 'linktype,publishtime,newsresource,weekendpublish,searchcollint,pcweight,wapweight,'
         . 'entrlevel,recommend,update_time';
 
@@ -38,10 +38,9 @@ class GeoMediaCatalogService
             ->column('count(*)', 'resource_type');
 
         // 价格区间在 SQL 里按 成本 × 行倍率 取极值，再统一换算成售价。
-        $markup = GeoMediaSyncService::markup();
+        $price = GeoMediaSyncService::priceExpression();
         $rows = (clone $base)
-            ->field('resource_type,MIN(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS min_price,'
-                . 'MAX(costprice * IF(price_ratio > 0, price_ratio, ' . (float)$markup . ')) AS max_price')
+            ->field("resource_type,MIN($price) AS min_price,MAX($price) AS max_price")
             ->group('resource_type')
             ->select()
             ->toArray();
@@ -118,11 +117,11 @@ class GeoMediaCatalogService
      */
     public static function publicRow(array $row): array
     {
-        $ratio = GeoMedia::ratio($row);
+        $ratio = GeoMediaSyncService::markup();
         $row['sale_price'] = GeoMediaSyncService::suggestSalePrice((float)($row['costprice'] ?? 0), $ratio);
 
         // 多价格类别：库里叫 price_type_json，对外仍叫 price_types。
-        // getter 已按倍率补好 sale_price，这里再去掉成本价 price，避免前端推算倍率。
+        // 统一按平台倍率计算，仅返回售价。
         $priceTypes = [];
         foreach ((array)($row['price_type_json'] ?? []) as $item) {
             if (!is_array($item)) {
@@ -134,8 +133,7 @@ class GeoMediaCatalogService
             }
             $priceTypes[] = [
                 'type' => $type,
-                'sale_price' => $item['sale_price']
-                    ?? GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
+                'sale_price' => GeoMediaSyncService::suggestSalePrice((float)($item['price'] ?? 0), $ratio),
             ];
         }
 
@@ -179,12 +177,12 @@ class GeoMediaCatalogService
             });
         }
         // 价格区间按最终售价比较：成本 × 行倍率（0 用租户默认），与列表展示口径一致。
-        $markup = (float)GeoMediaSyncService::markup();
+        $price = GeoMediaSyncService::priceExpression();
         if (isset($params['min_price']) && $params['min_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) >= ?', [$markup, (float)$params['min_price']]);
+            $query->whereRaw("$price >= ?", [(float)$params['min_price']]);
         }
         if (isset($params['max_price']) && $params['max_price'] !== '') {
-            $query->whereRaw('costprice * IF(price_ratio > 0, price_ratio, ?) <= ?', [$markup, (float)$params['max_price']]);
+            $query->whereRaw("$price <= ?", [(float)$params['max_price']]);
         }
     }
 

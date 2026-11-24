@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace app\common\service\xiaohongshu;
 
-use app\common\service\share\TenantShareConfigService;
+use app\common\service\share\PlatformShareConfigService;
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
 use InvalidArgumentException;
@@ -26,12 +26,7 @@ final class XiaohongshuH5ShareService
 
     public function __construct(?array $config = null, ?ClientInterface $http = null, ?Driver $cache = null)
     {
-        if ($config === null) {
-            $tenantId = (int)(request()->tenantId ?? 0);
-            $config = $tenantId > 0
-                ? (new TenantShareConfigService($tenantId))->runtime('xiaohongshu')
-                : config('xiaohongshu', []);
-        }
+        $config ??= PlatformShareConfigService::runtime('xiaohongshu');
         $this->appKey = trim((string)($config['app_key'] ?? ''));
         $this->appSecret = trim((string)($config['app_secret'] ?? ''));
         if ($this->appKey === '' || $this->appSecret === '') {
@@ -42,11 +37,6 @@ final class XiaohongshuH5ShareService
         $this->tokens = new XiaohongshuTokenCache(
             $cache ?? Cache::store($store === '' ? null : $store), $this->appKey, $this->appSecret
         );
-    }
-
-    public static function forTenant(int $tenantId, ?ClientInterface $http = null, ?Driver $cache = null): self
-    {
-        return new self((new TenantShareConfigService($tenantId))->runtime('xiaohongshu'), $http, $cache);
     }
 
     /**

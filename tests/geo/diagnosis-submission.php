@@ -28,10 +28,9 @@ namespace app\common\service\geo {
     class GeoDiagProvider {
         public static string $mode = 'rejected';
         public static int $calls = 0;
-        public function __construct(private int $tenantId) {}
         public function platforms(): array { return [['id' => 'doubao', 'pricing' => ['baseCents' => 0]]]; }
         public function createRun(array $request, string $key): array {
-            if ($this->tenantId !== 7) throw new \LogicException('Expected the brand owner tenant for GEO submission');
+            if (!preg_match('/^gdiag-(?:task-)?7-23-/', $key)) throw new \LogicException('GEO submission must retain brand ownership in the idempotency key');
             self::$calls++;
             if (self::$mode === 'rejected') throw new GeoDiagProviderException('余额不足', 402);
             if (self::$mode === 'exception') throw new \RuntimeException('unexpected transport failure');
@@ -81,8 +80,9 @@ namespace {
     Db::name('merchant_brand')->insert(['id' => 14, 'tenant_id' => 7, 'user_id' => 23, 'name' => '测试品牌']);
     Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, delete_time INTEGER)');
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
+    Db::execute('CREATE TABLE la_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT)');
     Db::name('tenant')->insert(['id' => 7, 'tactics' => 0]);
-    Db::name('tenant_config')->insert(['tenant_id' => 7, 'type' => 'business_price', 'name' => 'settings', 'value' => '{}']);
+    Db::name('config')->insert(['type' => 'business_price', 'name' => 'settings', 'value' => '{}']);
     request()->tenantId = 7;
     request()->source = \app\common\enum\AdminTerminalEnum::USER;
     $params = ['brand_id' => 14, 'questions' => ['品牌怎么样？'], 'platforms' => ['doubao'], 'repeat_count' => 1];

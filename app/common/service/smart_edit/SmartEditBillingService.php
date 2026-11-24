@@ -11,10 +11,10 @@ use think\facade\Db;
 
 class SmartEditBillingService
 {
-    /** 读取当前租户设置的成片单价，未配置时默认 0 点。 */
+    /** 读取平台设置的成片单价，未配置时默认 0 点。 */
     public static function unitPoints(): int
     {
-        $settings = ConfigService::get('business_price', 'settings', []);
+        $settings = ConfigService::getPlatform('business_price', 'settings', []);
         return (int)($settings['smart_edit_points'] ?? 0);
     }
 
