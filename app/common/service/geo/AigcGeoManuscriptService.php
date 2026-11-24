@@ -62,24 +62,24 @@ class AigcGeoManuscriptService
     ];
 
     /**
-     * 后台查看代发配置。回传已保存的 token、key 原文，不返回访问令牌。
+     * 读取平台媒体代发账号。由平台后台控制凭据回显。
      *
      * @return array<string, mixed>
      */
     public static function platformConfigDetail(): array
     {
-        return self::present(self::account());
+        return self::present(self::platformAccount());
     }
 
     /**
-     * 保存海讯社 token、key。空值表示沿用已保存的值。保存前会先换取访问令牌。
+     * 保存平台媒体代发账号。凭据留空时沿用平台已有值。
      *
      * @param array<string, mixed> $params token、key
      * @return array<string, mixed>
      */
     public static function savePlatformConfig(array $params): array
     {
-        $current = self::account();
+        $current = self::platformAccount();
         $token = self::incomingSecret($params, 'token', (string)($current['token'] ?? ''));
         $key = self::incomingSecret($params, 'key', (string)($current['key'] ?? ''));
         if ($token === '' || $key === '') {
@@ -98,7 +98,7 @@ class AigcGeoManuscriptService
      */
     public static function accessToken(): string
     {
-        $account = self::account();
+        $account = self::platformAccount();
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
@@ -135,7 +135,7 @@ class AigcGeoManuscriptService
      */
     public static function renewAccessToken(): string
     {
-        $account = self::account();
+        $account = self::platformAccount();
         $accountToken = trim((string)($account['token'] ?? ''));
         $accountKey = trim((string)($account['key'] ?? ''));
         if ($accountToken === '' || $accountKey === '') {
@@ -325,14 +325,11 @@ class AigcGeoManuscriptService
         self::request('POST', '/api/media/order/processON', $body, $openToken, true);
     }
 
-    /**
-     * 租户文稿代发账号，存在 la_tenant_config。
-     *
-     * @return array<string, mixed>
-     */
-    private static function account(): array
+    /** 读取租户共用的平台媒体代发账号。 */
+    private static function platformAccount(): array
     {
-        return ConfigService::getPlatform('geo_manuscript', 'account', []);
+        $data = ConfigService::getPlatform('geo_manuscript', 'account', []);
+        return is_array($data) ? $data : [];
     }
 
     private static function incomingSecret(array $params, string $field, string $current): string
