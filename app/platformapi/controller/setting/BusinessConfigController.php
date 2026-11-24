@@ -37,9 +37,13 @@ class BusinessConfigController extends BaseAdminController
             $ims['secret_key_set'] = $ims['secret_key'] !== '';
             $voice = SmartEditVoiceConfigService::getPlatform();
             $voice['api_key_set'] = $voice['api_key'] !== '';
+            $geo = GeoDiagConfigService::getPlatform();
+            $geo['api_key_set'] = $geo['api_key'] !== '';
             $media = AigcGeoManuscriptService::platformConfigDetail();
-            // 剪辑与发稿凭据留空时沿用现有值。
-            unset($ims['secret_key'], $voice['api_key'], $media['token'], $media['key']);
+            $includeSecrets = $this->canEditBusinessConfig();
+            if (!$includeSecrets) {
+                unset($ims['secret_key'], $voice['api_key'], $geo['api_key'], $media['token'], $media['key']);
+            }
 
             return $this->data([
                 'prices' => ConfigService::getPlatform('business_price', 'settings', []) + self::PRICES,
@@ -51,16 +55,16 @@ class BusinessConfigController extends BaseAdminController
                     SmartEditVoiceService::platformCatalog()
                 ),
                 'wenan' => WenanConfigService::forPlatformDisplay(),
-                'geo' => ['api_key_set' => GeoDiagConfigService::getPlatform()['api_key'] !== ''],
+                'geo' => $geo,
                 'media' => $media,
-                'share' => PlatformShareConfigService::display($this->canEditBusinessConfig()),
+                'share' => PlatformShareConfigService::display($includeSecrets),
             ])->header(['Cache-Control' => 'private, no-store']);
         } catch (Throwable) {
             return $this->fail('读取平台基础配置失败');
         }
     }
 
-    /** 分享密钥沿用基础配置的保存权限。 */
+    /** 基础配置的保存权限同时用于回显已保存凭据。 */
     private function canEditBusinessConfig(): bool
     {
         if ((int)($this->adminInfo['root'] ?? 0) === 1) {
@@ -82,6 +86,7 @@ class BusinessConfigController extends BaseAdminController
         }
 
         $params = $this->request->post();
+        $saved = [];
         try {
             switch ($params['section'] ?? '') {
                 case 'prices':
@@ -101,6 +106,7 @@ class BusinessConfigController extends BaseAdminController
                         }
                     }
                     SmartEditImsConfigService::savePlatform($params);
+                    $saved = ['secret_key' => $params['secret_key']];
                     break;
                 case 'voice':
                     $params['api_key'] = trim((string)($params['api_key'] ?? ''))
@@ -109,6 +115,7 @@ class BusinessConfigController extends BaseAdminController
                         throw new InvalidArgumentException('请填写火山语音 API Key');
                     }
                     SmartEditVoiceConfigService::savePlatform($params);
+                    $saved = ['api_key' => $params['api_key']];
                     break;
                 case 'voices':
                     if (!is_array($params['voices'] ?? null)) {
@@ -123,14 +130,14 @@ class BusinessConfigController extends BaseAdminController
                     $params['api_key'] = trim((string)($params['api_key'] ?? ''))
                         ?: GeoDiagConfigService::getPlatform()['api_key'];
                     GeoDiagConfigService::savePlatform($params);
+                    $saved = ['api_key' => $params['api_key']];
                     break;
                 case 'media':
-                    AigcGeoManuscriptService::savePlatformConfig($params);
+                    $saved = AigcGeoManuscriptService::savePlatformConfig($params);
                     break;
                 case 'share':
-                    $share = PlatformShareConfigService::save($params, true);
-                    return $this->success('配置已保存', $share, 1, 1)
-                        ->header(['Cache-Control' => 'private, no-store']);
+                    $saved = PlatformShareConfigService::save($params, true);
+                    break;
                 default:
                     throw new InvalidArgumentException('请选择有效的配置区块');
             }
@@ -142,7 +149,7 @@ class BusinessConfigController extends BaseAdminController
             return $this->fail('保存配置失败，请核对配置或稍后重试');
         }
 
-        return $this->success('配置已保存', [], 1, 1);
+        return $this->success('配置已保存', $saved, 1, 1)->header(['Cache-Control' => 'private, no-store']);
     }
 
     /** @notes 试听平台剪辑音色 */
