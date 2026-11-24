@@ -3,6 +3,7 @@
 namespace app\common\service\wenan;
 
 use app\common\service\WorkspaceSmartEditAssetService;
+use app\common\service\brand\BrandCatalogService;
 use InvalidArgumentException;
 use think\facade\Db;
 
@@ -61,7 +62,7 @@ final class SeedCardJobService
         return [
             'id' => (int)$row['id'], 'group_id' => (int)$row['group_id'],
             'quantity' => (int)$row['quantity'], 'status' => $row['status'],
-            'items' => json_decode($row['items'], true), 'error' => $row['error'],
+            'items' => self::libraryItems($row), 'error' => $row['error'],
         ];
     }
 
@@ -80,7 +81,7 @@ final class SeedCardJobService
         }
 
         try {
-            $items = json_decode($job['items'], true);
+            $items = self::libraryItems($job);
             $amount = min(5, $job['quantity'] - $job['processed']);
             $topic = $job['mode'] === 'topic';
             $hint = $topic
@@ -97,16 +98,64 @@ final class SeedCardJobService
             $items = array_merge($items, $next);
             $done = $processed >= $job['quantity'];
             $update = [
-                'processed' => $processed, 'items' => json_encode($items, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                'processed' => $processed,
                 'status' => $done ? 'success' : 'pending',
                 'error' => $done && count($items) < $job['quantity'] ? '模型返回的不同内容少于目标数量，已保留结果' : '',
             ];
+            Db::transaction(static function () use ($query, $job, $lease, $topic, $next, $update) {
+                $owned = $query()->where('status', 'running')->where('lease_until', $lease);
+                if (!$owned->lock(true)->find()) return;
+
+                $library = self::libraryQuery($job);
+                $owner = ['tenant_id' => $job['tenant_id'], 'user_id' => $job['user_id']];
+                $now = time();
+                $ids = json_decode($job['items'], true, 512, JSON_THROW_ON_ERROR);
+                foreach ($next as $item) {
+                    $entry = $owner + [
+                        'name' => mb_substr($topic ? ltrim($item, '#') : $item, 0, 100),
+                        'create_time' => $now,
+                        'update_time' => $now,
+                    ];
+                    if (!$topic) $entry['content'] = $item;
+                    $ids[] = (string)(clone $library)->insertGetId($entry);
+                }
+                $query()->update($update + [
+                    'items' => json_encode($ids, JSON_THROW_ON_ERROR), 'lease_until' => 0,
+                ]);
+            });
         } catch (\Throwable $e) {
             $update = ['status' => 'failed', 'error' => $e instanceof InvalidArgumentException
                 ? $e->getMessage() : '生成失败，已保留生成结果，请稍后重试'];
+            $query()->where('status', 'running')->where('lease_until', $lease)->update($update + ['lease_until' => 0]);
         }
-        $query()->where('status', 'running')->where('lease_until', $lease)->update($update + ['lease_until' => 0]);
         return true;
+    }
+
+    private static function libraryQuery(array $job)
+    {
+        $base = $job['mode'] === 'topic' ? 'merchant_topic' : 'merchant_copy';
+        $name = BrandCatalogService::tenantTable($base, (int)$job['tenant_id']);
+        $query = Db::name($name);
+        if ($name !== $base && !$query->getConnection()->getTableInfo($query->getTable())) {
+            return Db::name($base);
+        }
+        return $query;
+    }
+
+    private static function libraryItems(array $job): array
+    {
+        $ids = json_decode($job['items'], true, 512, JSON_THROW_ON_ERROR);
+        $ids = array_filter($ids, static fn ($id) => is_string($id) && ctype_digit($id));
+        if (!$ids) return [];
+        $topic = $job['mode'] === 'topic';
+        $rows = self::libraryQuery($job)->where([
+            'tenant_id' => $job['tenant_id'], 'user_id' => $job['user_id'],
+        ])->whereIn('id', $ids)->column($topic ? 'name' : 'content', 'id');
+        $items = [];
+        foreach ($ids as $id) {
+            if (isset($rows[$id])) $items[] = ($topic ? '#' : '') . $rows[$id];
+        }
+        return $items;
     }
 
     private static function parse(string $text, bool $topic): array
@@ -117,7 +166,7 @@ final class SeedCardJobService
         foreach (is_array($decoded) && array_is_list($decoded) ? $decoded : preg_split('/\R/u', $clean) as $line) {
             if (!is_string($line)) continue;
             $line = trim(preg_replace('/^(?:[-*•]\s+|\d+[.、)）]\s*)/u', '', trim($line)), " \t\r\n\"");
-            if ($line === '' || preg_match('/^(?:以下|生成结果|标题文案|话题列表)[：:]/u', $line)) continue;
+            if ($line === '' || $line === '#' || $line === '＃' || preg_match('/^(?:以下|生成结果|标题文案|话题列表)[：:]/u', $line)) continue;
             if ($topic) {
                 preg_match_all('/#[^#\s，,。；;！!？?、：:]+/u', str_replace('＃', '#', $line), $matches);
                 array_push($items, ...($matches[0] ?: ['#' . preg_replace('/\s+/u', '', $line)]));
