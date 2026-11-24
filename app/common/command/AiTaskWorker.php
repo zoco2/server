@@ -4,6 +4,7 @@ namespace app\common\command;
 
 use app\common\service\ai\AiTaskJobService;
 use app\common\service\app\aigc_short_drama\ShortDramaCanvasPosterJobService;
+use app\common\service\wenan\SeedCardJobService;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Option;
@@ -49,6 +50,14 @@ class AiTaskWorker extends Command
                     break;
                 }
                 if ($appCode === '') ShortDramaCanvasPosterJobService::recoverExpired();
+                $seedCardWorked = false;
+                if ($appCode === '') {
+                    try {
+                        $seedCardWorked = SeedCardJobService::work();
+                    } catch (\Throwable $e) {
+                        $output->writeln('[seed-cards] ' . $e->getMessage());
+                    }
+                }
                 $jobs = AiTaskJobService::claim($worker, $lease, $batch, $appCode);
                 if ($jobs === []) {
                     if ($appCode !== '') { sleep($sleep); continue; }
@@ -62,7 +71,7 @@ class AiTaskWorker extends Command
                             $output->writeln(sprintf('[poster:%d] %s', (int)$posterJob['id'], $e->getMessage()));
                         }
                     }
-                    if ($posterJobs !== []) {
+                    if ($posterJobs !== [] || $seedCardWorked) {
                         continue;
                     }
                     sleep($sleep);

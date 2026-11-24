@@ -1,0 +1,130 @@
+<?php
+
+namespace app\common\service\wenan;
+
+use app\common\service\WorkspaceSmartEditAssetService;
+use InvalidArgumentException;
+use think\facade\Db;
+
+final class SeedCardJobService
+{
+    private const TABLE = 'wenan_seed_card_job';
+
+    private static function scope(int $tenant, int $user, int $store, string $mode): array
+    {
+        return ['tenant_id' => $tenant, 'user_id' => $user, 'store_id' => $store, 'mode' => $mode];
+    }
+
+    public static function submit(int $tenant, int $user, array $input): array
+    {
+        $storeId = (int)($input['store_id'] ?? 0);
+        $mode = (string)($input['mode'] ?? '');
+        $groupId = filter_var($input['group_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+        $count = filter_var($input['count'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+        $prompt = trim((string)($input['prompt'] ?? ''));
+        if (!in_array($mode, ['copy', 'topic'], true) || $groupId === false || $count === false || $prompt === '' || mb_strlen($prompt) > 300) {
+            throw new InvalidArgumentException('请选择视频成片组，输入 1–300 字提示词和 1–100 的整数数量');
+        }
+
+        return Db::transaction(static function () use ($tenant, $user, $storeId, $mode, $groupId, $count, $prompt) {
+            $store = Db::name('merchant_store')->where([
+                'tenant_id' => $tenant, 'user_id' => $user, 'id' => $storeId,
+            ])->whereNull('delete_time')->lock(true)->find();
+            if (!$store) throw new InvalidArgumentException('门店不存在或无权限');
+
+            $latest = self::latest($tenant, $user, $storeId, $mode);
+            if ($latest && in_array($latest['status'], ['pending', 'running'], true)) return $latest;
+
+            $films = WorkspaceSmartEditAssetService::lists($tenant, $user, 1, 20, '', $groupId);
+            if (!$films['count']) throw new InvalidArgumentException('所选成片组暂无可用成片');
+            $titles = array_map(static fn ($film) => mb_substr($film['raw']['title'], 0, 80), $films['lists']);
+            $address = implode('', array_map(static fn ($key) => $store[$key] ?? '', ['province', 'city', 'district', 'address']));
+            $context = "门店：{$store['name']}\n门店简介：" . mb_substr((string)$store['intro'], 0, 500)
+                . "\n门店地址：" . mb_substr($address, 0, 300) . "\n成片标题：" . implode('、', $titles) . "\n用户提示词：{$prompt}";
+            $row = self::scope($tenant, $user, $storeId, $mode) + [
+                'group_id' => $groupId, 'quantity' => $count, 'context' => $context,
+                'items' => '[]', 'error' => '', 'status' => 'pending',
+            ];
+            $row['id'] = Db::name(self::TABLE)->insertGetId($row);
+            return self::present($row);
+        });
+    }
+
+    public static function latest(int $tenant, int $user, int $store, string $mode): ?array
+    {
+        $row = Db::name(self::TABLE)->where(self::scope($tenant, $user, $store, $mode))->order('id', 'desc')->find();
+        return $row ? self::present($row) : null;
+    }
+
+    private static function present(array $row): array
+    {
+        return [
+            'id' => (int)$row['id'], 'group_id' => (int)$row['group_id'],
+            'quantity' => (int)$row['quantity'], 'status' => $row['status'],
+            'items' => json_decode($row['items'], true), 'error' => $row['error'],
+        ];
+    }
+
+    public static function work(): bool
+    {
+        $now = time();
+        Db::name(self::TABLE)->where('status', 'running')->where('lease_until', '<=', $now)
+            ->update(['status' => 'failed', 'error' => '任务执行中断，已保留生成结果']);
+        $job = Db::name(self::TABLE)->where('status', 'pending')->order('id')->find();
+        if (!$job) return false;
+
+        $lease = $now + 300;
+        $query = static fn () => Db::name(self::TABLE)->where('id', $job['id']);
+        if (!$query()->where('status', 'pending')->where('processed', $job['processed'])->update(['status' => 'running', 'lease_until' => $lease])) {
+            return false;
+        }
+
+        try {
+            $items = json_decode($job['items'], true);
+            $amount = min(5, $job['quantity'] - $job['processed']);
+            $topic = $job['mode'] === 'topic';
+            $hint = $topic
+                ? "生成 {$amount} 条适用于视频发布的不同 #话题，每条 2–15 字。"
+                : "生成 {$amount} 条可直接用于视频发布的不同标题，每条 15–50 字，不含话题标签。";
+            $response = WenanEnhanceService::write((int)$job['tenant_id'], (int)$job['user_id'], [
+                'scene' => 'general', 'max_length' => $amount * ($topic ? 24 : 80),
+                'text' => $job['context'] . "\n避免重复：" . implode('、', array_slice($items, -20)),
+                'hint' => $hint . '每行一条，不加编号、引号或解释。只使用提供的事实。',
+            ]);
+            $next = array_slice(array_values(array_diff(self::parse($response['text'], $topic), $items)), 0, $amount);
+            if (!$next) throw new InvalidArgumentException('本批未返回有效的新内容，请调整提示词后重试');
+            $processed = $job['processed'] + $amount;
+            $items = array_merge($items, $next);
+            $done = $processed >= $job['quantity'];
+            $update = [
+                'processed' => $processed, 'items' => json_encode($items, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                'status' => $done ? 'success' : 'pending',
+                'error' => $done && count($items) < $job['quantity'] ? '模型返回的不同内容少于目标数量，已保留结果' : '',
+            ];
+        } catch (\Throwable $e) {
+            $update = ['status' => 'failed', 'error' => $e instanceof InvalidArgumentException
+                ? $e->getMessage() : '生成失败，已保留生成结果，请稍后重试'];
+        }
+        $query()->where('status', 'running')->where('lease_until', $lease)->update($update + ['lease_until' => 0]);
+        return true;
+    }
+
+    private static function parse(string $text, bool $topic): array
+    {
+        $clean = trim(preg_replace('/^\x60\x60\x60[^\n]*\n?|\x60\x60\x60$/m', '', $text));
+        $decoded = json_decode($clean, true);
+        $items = [];
+        foreach (is_array($decoded) && array_is_list($decoded) ? $decoded : preg_split('/\R/u', $clean) as $line) {
+            if (!is_string($line)) continue;
+            $line = trim(preg_replace('/^(?:[-*•]\s+|\d+[.、)）]\s*)/u', '', trim($line)), " \t\r\n\"");
+            if ($line === '' || preg_match('/^(?:以下|生成结果|标题文案|话题列表)[：:]/u', $line)) continue;
+            if ($topic) {
+                preg_match_all('/#[^#\s，,。；;！!？?、：:]+/u', str_replace('＃', '#', $line), $matches);
+                array_push($items, ...($matches[0] ?: ['#' . preg_replace('/\s+/u', '', $line)]));
+            } else {
+                $items[] = $line;
+            }
+        }
+        return array_unique($items);
+    }
+}
