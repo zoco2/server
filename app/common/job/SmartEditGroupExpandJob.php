@@ -140,6 +140,7 @@ class SmartEditGroupExpandJob extends Job
         $batchNo = (string)$group['batch_no'];
         $userId = (int)$group['user_id'];
 
+        $workGroupId = SmartEditService::lockOutputGroup($tenantId, $userId, $shared);
         $combos = SmartEditGroupService::expandShots($shots);
         $taskIds = [];
         foreach ($combos as $index => $clips) {
@@ -153,7 +154,8 @@ class SmartEditGroupExpandJob extends Job
                     $taskShared,
                     $clips,
                     $batchNo,
-                    $comboIndex
+                    $comboIndex,
+                    $workGroupId
                 );
             } catch (\Throwable $e) {
                 // 带上组合序号和素材，排查时直接知道是哪条视频出的问题

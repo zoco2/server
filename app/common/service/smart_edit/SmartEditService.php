@@ -10,6 +10,7 @@ use app\common\model\smart_edit\SmartEditTask;
 use app\common\model\smart_edit\SmartEditTaskItem;
 use app\common\service\sticker\StickerService;
 use Exception;
+use InvalidArgumentException;
 use think\facade\Db;
 use think\facade\Log;
 
@@ -119,8 +120,9 @@ class SmartEditService
         ];
         // 单条任务只产出一条成片，素材数量不参与计费。
         $shared['unit_points'] = SmartEditBillingService::quote($params);
-        $task = Db::transaction(static function () use ($tenantId, $userId, $shared, $clips) {
-            $task = self::createTask($tenantId, $userId, $shared, $clips);
+        $task = Db::transaction(static function () use ($tenantId, $userId, $shared, $clips, $params) {
+            $workGroupId = self::lockOutputGroup($tenantId, $userId, $params);
+            $task = self::createTask($tenantId, $userId, $shared, $clips, workGroupId: $workGroupId);
             SmartEditBillingService::reserve($tenantId, $userId, $shared['unit_points'], 1, (string)$task['task_no']);
             return $task;
         });
@@ -128,6 +130,27 @@ class SmartEditService
         self::dispatch($task);
 
         return self::formatTask($task->refresh()->toArray());
+    }
+
+    /** 在提交或展开的事务内锁定目标分组，旧请求与默认分组不需要成员记录。 */
+    public static function lockOutputGroup(int $tenantId, int $userId, array $params): int
+    {
+        $value = array_key_exists('work_group_id', $params) ? $params['work_group_id'] : 0;
+        if ((!is_int($value) && !is_string($value)) || !ctype_digit((string)$value)
+            || (string)(int)$value !== (string)$value) {
+            throw new InvalidArgumentException('成片分组编号无效');
+        }
+        $id = (int)$value;
+        if ($id === 0) {
+            return 0;
+        }
+        $group = Db::name('work_group')->where([
+            'id' => $id, 'tenant_id' => $tenantId, 'user_id' => $userId, 'type' => 'video',
+        ])->whereNull('delete_time')->field('id')->lock(true)->find();
+        if (!$group) {
+            throw new InvalidArgumentException('所选视频成片分组不存在或已删除，请重新选择');
+        }
+        return $id;
     }
 
     /**
@@ -141,6 +164,7 @@ class SmartEditService
      * @param array  $clips      片段列表（uri/in/out/mute）
      * @param string $batchNo    所属组号，空串表示单任务
      * @param int    $comboIndex 组内组合序号，从 1 起
+     * @param int    $workGroupId 当前事务已校验的视频作品分组
      * @return SmartEditTask
      */
     public static function createTask(
@@ -149,7 +173,8 @@ class SmartEditService
         array $shared,
         array $clips,
         string $batchNo = '',
-        int $comboIndex = 0
+        int $comboIndex = 0,
+        int $workGroupId = 0
     ): SmartEditTask {
         $editType = (string)($shared['edit_type'] ?? SmartEditTask::TYPE_MERGE);
         $title = (string)($shared['title'] ?? '多视频合并');
@@ -417,6 +442,14 @@ class SmartEditService
         if ($rows !== []) {
             // 走查询构造器的批量插入：不触发模型事件，tenant_id/user_id/create_time 已在行内显式写入。
             SmartEditTaskItem::insertAll($rows);
+        }
+        if ($workGroupId > 0) {
+            $now = time();
+            Db::name('work_item')->insert([
+                'tenant_id' => $tenantId, 'user_id' => $userId, 'type' => 'video', 'group_id' => $workGroupId,
+                'source_ref' => 'smart_edit:task:' . $task['id'], 'title' => $title,
+                'create_time' => $now, 'update_time' => $now,
+            ]);
         }
 
         return $task;

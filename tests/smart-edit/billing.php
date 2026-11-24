@@ -14,6 +14,7 @@ namespace app\common\service\mq {
 namespace app\common\service\smart_edit {
     class SmartEditImsConfigService
     {
+        public static function joinUrl(string $domain, string $uri): string { return $domain . '/' . $uri; }
         public static function requirePlatform(): array { return ['region' => 'fixture', 'domain' => 'example.test', 'access_key' => 'fixture', 'secret_key' => 'fixture']; }
     }
     class ImsClient
@@ -48,6 +49,7 @@ namespace {
     use app\common\service\smart_edit\SmartEditBillingService as Billing;
     use app\common\service\smart_edit\SmartEditGroupService as Groups;
     use app\common\service\smart_edit\SmartEditService as Tasks;
+    use app\common\service\WorkspaceSmartEditAssetService as Library;
     use think\App;
     use think\facade\Config;
     use think\facade\Db;
@@ -76,7 +78,7 @@ namespace {
     Model::setDb($app->make('db'));
     Model::maker(static fn(Model $model) => $model->setDateFormat('Y-m-d H:i:s'));
     $schema = file_get_contents($root . '/public/install/db/like.sql');
-    foreach (['smart_edit_task', 'smart_edit_task_item', 'smart_edit_group', 'tenant_file', 'user', 'user_account_log'] as $table) {
+    foreach (['smart_edit_task', 'smart_edit_task_item', 'smart_edit_group', 'tenant_file', 'user', 'user_account_log', 'work_group', 'work_item', 'user_asset_state'] as $table) {
         $pattern = '/CREATE TABLE (?:IF NOT EXISTS )?`la_' . $table . '`\s*\((.*?)\)\s*ENGINE/is';
         check((bool)preg_match($pattern, $schema, $match), "Missing installation table $table");
         preg_match_all('/^\s*`(\w+)`\s+(\w+)/m', $match[1], $columns, PREG_SET_ORDER);
@@ -87,6 +89,11 @@ namespace {
         }
         Db::execute("CREATE TABLE la_$table (" . implode(',', $fields) . ')');
     }
+    Db::execute('CREATE UNIQUE INDEX uk_owner_source ON la_work_item(tenant_id,user_id,source_ref)');
+    Db::connect()->getPdo()->sqliteCreateFunction('CONCAT', static fn (...$args) => implode('', $args));
+    Db::execute("INSERT INTO la_work_group (id, tenant_id, user_id, type, delete_time) VALUES
+        (10, 3, 8, 'video', NULL), (11, 3, 9, 'video', NULL), (12, 4, 8, 'video', NULL),
+        (13, 3, 8, 'copy', NULL), (14, 3, 8, 'video', 500)");
     Db::execute('CREATE TABLE la_tenant (id INTEGER PRIMARY KEY, tactics INTEGER, sn TEXT, delete_time INTEGER)');
     Db::execute('CREATE TABLE la_tenant_config (id INTEGER PRIMARY KEY, tenant_id INTEGER, type TEXT, name TEXT, value TEXT)');
     Db::execute('CREATE TABLE la_config (id INTEGER PRIMARY KEY, type TEXT, name TEXT, value TEXT)');
@@ -99,7 +106,28 @@ namespace {
     // A delayed notification from the original attempt must never refund an admin retry.
     $clips = [['uri' => 'a.mp4', 'out' => 2], ['uri' => 'b.mp4', 'out' => 3]];
     $input = ['clips' => $clips, 'expected_unit_points' => 7];
-    $single = Tasks::generate(3, 8, $input);
+    foreach ([11, 12, 13, 14, 999, -1, '9e2', true, [], null, '999999999999999999999'] as $invalid) {
+        try {
+            Tasks::generate(3, 8, $input + ['work_group_id' => $invalid]);
+            throw new LogicException('Invalid work group accepted');
+        } catch (InvalidArgumentException $expected) {
+            check(str_contains($expected->getMessage(), '分组'), $expected->getMessage());
+        }
+    }
+    check(Task::count() === 0 && Db::name('work_item')->count() === 0, 'Invalid group created task or membership');
+    balance(100);
+    Db::name('user')->where('id', 8)->update(['user_money' => 6]);
+    try {
+        Tasks::generate(3, 8, $input + ['work_group_id' => 10]);
+        throw new LogicException('Underfunded task created');
+    } catch (RuntimeException $expected) {
+        check(str_contains($expected->getMessage(), '不足'), $expected->getMessage());
+    }
+    check(Task::count() === 0 && Db::name('work_item')->count() === 0, 'Reservation failure left a task or membership');
+    Db::name('user')->where('id', 8)->update(['user_money' => 100]);
+    $single = Tasks::generate(3, 8, $input + ['work_group_id' => '10']);
+    $singleRef = 'smart_edit:task:' . $single['id'];
+    check((int)Db::name('work_item')->where('source_ref', $singleRef)->value('group_id') === 10, 'Missing single membership');
     balance(93);
     $old = Task::findOrFail($single['id']);
     Billing::fail($old, ['status' => Task::STATUS_FAILED]);
@@ -119,10 +147,19 @@ namespace {
     Tasks::delete(3, 8, $single['id']);
     balance(100);
 
+    check(Db::name('work_item')->where('source_ref', $singleRef)->count() === 1, 'Retry duplicated membership');
+
     // A 2 x 3 group takes its original five-point quote into the expansion worker.
-    $groupInput = ['expected_unit_points' => 5, 'shots' => [
+    $groupInput = ['expected_unit_points' => 5, 'work_group_id' => 10, 'shots' => [
         ['videos' => $clips], ['videos' => [...$clips, ['uri' => 'c.mp4', 'out' => 4]]],
     ]];
+    try {
+        Groups::create(3, 8, array_replace($groupInput, ['work_group_id' => 11]));
+        throw new LogicException('Accepted another user\'s group for batch');
+    } catch (InvalidArgumentException $expected) {
+        check(Group::count() === 0, 'Unauthorized creation reserved a batch');
+        balance(100);
+    }
     Db::name('user')->where('id', 8)->update(['user_money' => 29]);
     try {
         Groups::create(3, 8, $groupInput);
@@ -143,6 +180,12 @@ namespace {
     $ids = Task::where('batch_no', $group['batch_no'])->order('id')->column('id');
     check(count($ids) === 6, 'Duplicate expansion or missing combinations');
 
+    $refs = array_map(static fn ($id) => 'smart_edit:task:' . $id, $ids);
+    $members = Db::name('work_item')->where(['tenant_id' => 3, 'user_id' => 8, 'type' => 'video', 'group_id' => 10])
+        ->whereIn('source_ref', $refs)->count();
+    check($members === 6, 'Replayed expansion did not create exactly one membership per combination');
+    check(Library::lists(3, 8, 1, 20, '', 10)['count'] === 0, 'Unfinished outputs appeared in group');
+
     // The standard worker may refresh a task without an HTTP tenant session.
     Task::where('id', $ids[0])->update([
         'provider_job_id' => 'fixture-job', 'status' => Task::STATUS_PROCESSING,
@@ -161,6 +204,9 @@ namespace {
     balance(70);
     Task::where('id', $ids[1])->update(['status' => Task::STATUS_PROCESSING, 'provider_job_id' => 'success-job']);
     Tasks::refresh((int)$ids[1]);
+    $published = Library::lists(3, 8, 1, 20, '', 10);
+    check($published['count'] === 1 && array_column($published['lists'], 'ref') === [$refs[1]], 'Completed output missing from selected group');
+    check(Library::lists(3, 8, 1, 20, '', 0)['count'] === 0, 'Grouped output also appeared in default group');
     check((int)Task::find($ids[1])['user_charge_points'] === 0, 'Settled before the group completed');
     balance(70);
     request()->tenantId = 3;
@@ -182,5 +228,21 @@ namespace {
     Groups::failPending($pendingGroup, 'DUBBING_FAILED', 'fixture');
     Groups::failPending($pendingGroup, 'DUBBING_FAILED', 'duplicate');
     balance(95);
-    echo "PASS smart-edit reservations, terminal group settlement, retry, timeout and early failure\n";
+    foreach ([[], ['work_group_id' => 0]] as $selection) {
+        $defaultTask = Tasks::generate(3, 8, ['clips' => $clips, 'expected_unit_points' => 9] + $selection);
+        $ref = 'smart_edit:task:' . $defaultTask['id'];
+        check(!Db::name('work_item')->where('source_ref', $ref)->count(), 'Default selection wrote custom membership');
+        Tasks::cancel(3, 8, (int)$defaultTask['id']);
+    }
+    balance(95);
+    $queued = Groups::create(3, 8, array_replace($groupInput, ['expected_unit_points' => 9]));
+    Db::name('work_group')->where('id', 10)->update(['delete_time' => time()]);
+    $deletedGroupJob = new SmartEditGroupExpandJob([
+        'batch_no' => $queued['batch_no'], 'attempt' => SmartEditGroupExpandJob::MAX_ATTEMPTS - 1,
+    ]);
+    $deletedGroupJob->handle();
+    check(Group::where('batch_no', $queued['batch_no'])->value('status') === Group::STATUS_FAILED, 'Deleted output group accepted at expansion');
+    check(Task::where('batch_no', $queued['batch_no'])->count() === 0 && Db::name('work_item')->count() === 7, 'Failed expansion left partial results');
+    balance(95);
+    echo "PASS smart-edit billing, owned output groups, retries, batch expansion and completed group listing\n";
 }

@@ -95,7 +95,8 @@ class SmartEditGroupService
             'create_time' => time(),
             'update_time' => time(),
         ];
-        $group = Db::transaction(static function () use ($data, $tenantId, $userId, $shared, $comboCount, $batchNo) {
+        $group = Db::transaction(static function () use ($data, $tenantId, $userId, $shared, $comboCount, $batchNo, $params) {
+            $data['config_json']['work_group_id'] = SmartEditService::lockOutputGroup($tenantId, $userId, $params);
             SmartEditBillingService::reserve($tenantId, $userId, $shared['unit_points'], $comboCount, $batchNo);
             return SmartEditGroup::create($data);
         });

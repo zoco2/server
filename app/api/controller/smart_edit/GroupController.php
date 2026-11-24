@@ -23,6 +23,9 @@ class GroupController extends BaseApiController
     {
         try {
             $params = $this->request->post();
+            if (array_key_exists('work_group_id', $params)) {
+                $params['work_group_id'] = $this->request->post('work_group_id', null, null);
+            }
             if (array_key_exists('transition_policy', $params)) {
                 // 全局 trim 会把 JSON 布尔值转成字符串，转场策略需要保留原始类型。
                 $params['transition_policy'] = $this->request->post('transition_policy', null, null);
