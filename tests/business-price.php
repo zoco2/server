@@ -159,7 +159,11 @@ $req->controllerObject = new BusinessConfigController($app);
 $auth = new AuthMiddleware();
 $allowed = static fn () => 'allowed';
 verify($auth->handle($req, $allowed) === 'allowed', 'platform role with read permission can open the settings');
-$readOnlyShare = $req->controllerObject->detail()->getData()['data']['share'];
+$readOnly = $req->controllerObject->detail()->getData()['data'];
+$readOnlyShare = $readOnly['share'];
+verify(!isset($readOnly['ims']['secret_key']) && !isset($readOnly['voice']['api_key']) && !isset($readOnly['geo']['api_key'])
+    && !isset($readOnly['media']['token']) && !isset($readOnly['media']['key']) && $readOnly['geo']['api_key_set'],
+    'read-only role receives provider status without provider credentials');
 verify(!isset($readOnlyShare['douyin']['client_secret']) && !isset($readOnlyShare['xiaohongshu']['app_secret'])
     && $readOnlyShare['douyin']['configured'] && $readOnlyShare['xiaohongshu']['configured'], 'read-only role sees shared credential status');
 foreach (['save', 'voicePreview'] as $action) {
@@ -176,10 +180,24 @@ $req->setController('setting.BusinessConfig')->setAction('detail')->withServer([
 $req->adminInfo = ['admin_id' => 78, 'root' => 0, 'login_ip' => '127.0.0.1'];
 $req->controllerObject = new BusinessConfigController($app);
 $editing = $auth->handle($req, static fn ($request) => $request->controllerObject->detail());
-$share = $editing->getData()['data']['share'];
+$providerDetail = $editing->getData()['data'];
+verify($providerDetail['ims']['secret_key'] === 'shared-sk' && $providerDetail['voice']['api_key'] === 'shared-voice'
+    && $providerDetail['geo']['api_key'] === 'shared-geo' && $providerDetail['media']['token'] === 'shared-token'
+    && $providerDetail['media']['key'] === 'shared-key', 'platform editor receives all saved provider credentials');
+$share = $providerDetail['share'];
 verify($share['douyin']['client_secret'] === 'shared-secret' && $share['xiaohongshu']['app_secret'] === 'shared-xhs-secret',
     'platform editor receives saved share secrets');
 
 $req->setAction('save')->setMethod('POST')->withPost(['section' => 'share', 'platform' => 'douyin', 'client_key' => 'shared-id', 'client_secret' => '']);
 $saved = $auth->handle($req, static fn ($request) => $request->controllerObject->save())->getData();
 verify($saved['code'] === 1 && $saved['data']['client_secret'] === 'shared-secret', 'share save returns the retained secret');
+
+foreach ([
+    [['section' => 'ims', 'region' => 'cn-shared', 'access_key' => 'shared-ak', 'bucket' => 'shared', 'domain' => 'https://shared-oss.example'], 'secret_key', 'shared-sk'],
+    [['section' => 'voice', 'api_key' => ''], 'api_key', 'shared-voice'],
+    [['section' => 'geo', 'api_key' => ''], 'api_key', 'shared-geo'],
+] as [$params, $field, $original]) {
+    $req->withPost($params);
+    $saved = $auth->handle($req, static fn ($request) => $request->controllerObject->save())->getData();
+    verify($saved['code'] === 1 && $saved['data'][$field] === $original, $params['section'] . ' save returns the retained credential');
+}
