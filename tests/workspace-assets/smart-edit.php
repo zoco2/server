@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use app\api\controller\WorkspaceAssetController;
 use app\common\service\WorkspaceAssetService;
+use app\common\service\smart_edit\SmartEditOutputGroupService;
 use think\db\BaseQuery;
 use think\facade\Db;
 
@@ -35,9 +36,11 @@ Db::execute('CREATE TABLE la_user_asset_state(id INTEGER PRIMARY KEY,tenant_id I
     create_time INTEGER,update_time INTEGER,UNIQUE(tenant_id,user_id,asset_ref))');
 Db::execute('CREATE TABLE la_user_asset_labels(tenant_id INTEGER,user_id INTEGER,labels TEXT,update_time INTEGER)');
 $columns = '(id INTEGER PRIMARY KEY, tenant_id INTEGER,user_id INTEGER,status TEXT,output_uri TEXT,storage_domain TEXT,
-    cover_uri TEXT,duration REAL,title TEXT,create_time INTEGER,delete_time INTEGER)';
+    cover_uri TEXT,duration REAL,title TEXT,batch_no TEXT DEFAULT \'\',params_json TEXT DEFAULT \'{}\',create_time INTEGER,delete_time INTEGER)';
 Db::execute('CREATE TABLE la_smart_edit_task ' . $columns);
 Db::execute('CREATE TABLE la_smart_edit_task_separate ' . $columns);
+Db::execute('CREATE TABLE la_smart_edit_group(id INTEGER PRIMARY KEY,tenant_id INTEGER,user_id INTEGER,batch_no TEXT,config_json TEXT,delete_time INTEGER)');
+Db::execute('CREATE TABLE la_smart_edit_group_separate(id INTEGER PRIMARY KEY,tenant_id INTEGER,user_id INTEGER,batch_no TEXT,config_json TEXT,delete_time INTEGER)');
 Db::connect()->getPdo()->sqliteCreateFunction('CONCAT', static fn (...$args) => implode('', $args));
 
 function verify(bool $condition, string $message): void
@@ -79,6 +82,7 @@ foreach ([
         'id'=>$id,'tenant_id'=>2,'user_id'=>$user,'status'=>$status,'output_uri'=>$uri,
         'title'=>$title,'create_time'=>100+$id,'storage_domain'=>'https://assets.example','duration'=>2.5,
         'cover_uri'=>'covers/first.jpg','delete_time'=>$deleteTime,
+        'batch_no'=>$id === 2 ? 'repair-batch' : '',
     ]);
 }
 Db::name('smart_edit_task')->insert([
@@ -90,9 +94,15 @@ foreach ([6=>'hidden_at',7=>'trashed_at'] as $id=>$flag) {
 }
 
 Db::execute('CREATE TABLE la_work_group(id INTEGER PRIMARY KEY,tenant_id INTEGER,user_id INTEGER,type TEXT,delete_time INTEGER)');
-Db::execute('CREATE TABLE la_work_item(tenant_id INTEGER,user_id INTEGER,type TEXT,group_id INTEGER,source_ref TEXT,delete_time INTEGER)');
+Db::execute('CREATE TABLE la_work_item(id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id INTEGER,user_id INTEGER,type TEXT,
+    group_id INTEGER,source_ref TEXT,title TEXT DEFAULT \'\',create_time INTEGER,update_time INTEGER,delete_time INTEGER,
+    UNIQUE(tenant_id,user_id,source_ref))');
 Db::execute("INSERT INTO la_work_group VALUES (10,2,7,'video',NULL),(11,1,7,'video',NULL),(12,2,7,'video',77),(13,2,7,'copy',NULL)");
-foreach ([1,2,6,7,8] as $taskId) {
+Db::name('smart_edit_group_separate')->insert([
+    'id'=>1,'tenant_id'=>2,'user_id'=>7,'batch_no'=>'repair-batch',
+    'config_json'=>json_encode(['work_group_id'=>10]),'delete_time'=>null,
+]);
+foreach ([1,6,7,8] as $taskId) {
     Db::name('work_item')->insert([
         'tenant_id'=>2,'user_id'=>7,'type'=>'video','group_id'=>10,
         'source_ref'=>'smart_edit:task:'.$taskId,'delete_time'=>$taskId === 8 ? 100 : null,
@@ -100,6 +110,12 @@ foreach ([1,2,6,7,8] as $taskId) {
 }
 $groupPage = listPage(['work_group_id'=>'10','page_size'=>1]);
 verify($groupPage['count'] === 1 && !$groupPage['has_more'] && $groupPage['lists'][0]['ref'] === 'smart_edit:task:1', 'only visible finished group members');
+verify(Db::name('work_item')->where('source_ref','smart_edit:task:2')->count() === 1, 'repair missing membership from batch snapshot');
+listPage(['work_group_id'=>'10','page_size'=>1]);
+verify(Db::name('work_item')->where('source_ref','smart_edit:task:2')->count() === 1, 'membership repair is idempotent');
+Db::name('work_item')->where('source_ref','smart_edit:task:2')->delete();
+verify(SmartEditOutputGroupService::repairRefs(2,7,['invalid','smart_edit:task:2']) === 1, 'repair only requested smart edit refs');
+verify(SmartEditOutputGroupService::repairRefs(2,7,['smart_edit:task:2']) === 0, 'ref repair preserves existing membership');
 verify(listPage(['work_group_id'=>0])['count'] === 0 && listPage(['work_group_id'=>0],1)['count'] === 1, 'default includes unregistered history in its own tenant');
 foreach ([11,12,13,'invalid',-1] as $invalidGroup) {
     verify(libraryCall('smartEdit',['work_group_id'=>$invalidGroup])['code'] !== 1, 'reject unavailable group');

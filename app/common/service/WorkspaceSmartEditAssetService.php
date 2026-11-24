@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\common\service;
 
 use app\common\model\smart_edit\SmartEditTask;
+use app\common\service\smart_edit\SmartEditOutputGroupService;
 use app\common\service\smart_edit\SmartEditService;
 use InvalidArgumentException;
 use think\db\Query;
@@ -24,12 +25,14 @@ final class WorkspaceSmartEditAssetService
         $scope = ['tenant_id' => $tenant, 'user_id' => $user, 'type' => 'video'];
         $membership = '';
         if ($groupId === 0) {
+            SmartEditOutputGroupService::repairMissingMemberships($tenant, $user);
             $excluded = DefaultWorkGroup::excludedItems($scope)->field('source_ref')->buildSql();
             $membership = "CONCAT('smart_edit:task:', id) NOT IN " . $excluded;
         } elseif ($groupId !== null) {
             if (!Db::name('work_group')->where($scope)->where('id', $groupId)->whereNull('delete_time')->count()) {
                 throw new InvalidArgumentException('成片组不存在或已删除');
             }
+            SmartEditOutputGroupService::repairMissingMemberships($tenant, $user, $groupId);
             $members = Db::name('work_item')->where($scope)->where('group_id', $groupId)
                 ->whereNull('delete_time')->field('source_ref')->buildSql();
             $membership = "CONCAT('smart_edit:task:', id) IN " . $members;
