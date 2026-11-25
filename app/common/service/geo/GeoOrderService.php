@@ -2,13 +2,18 @@
 
 namespace app\common\service\geo;
 
+use app\common\enum\user\AccountLogEnum;
 use app\common\exception\GeoTokenExpiredException;
 use app\common\model\geo\GeoArticle;
 use app\common\model\geo\GeoMedia;
 use app\common\model\geo\GeoOrder;
 use app\common\model\geo\GeoOrderLog;
+use app\common\model\user\UserAccountLog;
+use app\common\service\point\PointService;
 use Exception;
 use InvalidArgumentException;
+use think\facade\Db;
+use UnexpectedValueException;
 
 /**
  * GEO 投稿：推送海讯社 / 回查状态 / 确认发布 / 提交修改意见。
@@ -29,7 +34,7 @@ class GeoOrderService
      * 创建投稿单并立即推送。失败时保留一条本地订单，方便后台重试。
      *
      * @param int $userId 前台用户 ID
-     * @param array<string, mixed> $params article_id / media_id / price_type / remark / origin
+     * @param array<string, mixed> $params article_id / media_id / price_type / expected_points / remark / origin
      * @return array<string, mixed>
      */
     public static function create(int $userId, array $params): array
@@ -58,8 +63,13 @@ class GeoOrderService
 
         // 多价格类别：短视频/微信/微博必须选对类别，否则海讯按错误价格拒稿。
         [$costPrice, $salePrice] = self::resolvePrice($media, $priceType);
+        if (array_key_exists('expected_points', $params)
+            && filter_var($params['expected_points'], FILTER_VALIDATE_INT) !== self::salePoints($salePrice)) {
+            throw new InvalidArgumentException('媒体报价已变动，请重新核对发稿算力');
+        }
 
-        $order = GeoOrder::create([
+        $orderData = [
+            'tenant_id' => (int)$article['tenant_id'],
             'user_id' => $userId,
             'order_no' => self::newOrderNo(),
             'article_id' => $articleId,
@@ -78,8 +88,14 @@ class GeoOrderService
             'remote_flag' => -1,
             'create_time' => time(),
             'update_time' => time(),
-        ]);
-        GeoOrderLog::record($order, GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_LOCAL, 'create', '创建投稿单');
+        ];
+        // 建单和预占一起提交，余额不足时不会推送订单。
+        $order = Db::transaction(static function () use ($orderData): GeoOrder {
+            $order = GeoOrder::create($orderData);
+            self::reserve($order);
+            GeoOrderLog::record($order, GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_LOCAL, 'create', '创建投稿单');
+            return $order;
+        });
 
         // 推送失败不抛给用户：订单已落库，后台可重试。
         $order = self::push($order);
@@ -94,32 +110,62 @@ class GeoOrderService
      */
     public static function push(GeoOrder $order): GeoOrder
     {
-        $from = (int)$order['status'];
-        if (!in_array($from, [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)) {
+        $status = (int)$order['status'];
+        if (!in_array($status, [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)) {
             throw new Exception('只有待推送或被拒稿的订单可以重新推送');
         }
-        if (!(bool)$order['retryable'] && $from === GeoOrder::STATUS_REJECTED) {
-            throw new Exception('该订单为资源类拒稿，不可自动重推，请更换媒体后重新下单');
+        if ($status === GeoOrder::STATUS_REJECTED) {
+            // 重推先提交本次预占。即使推送进程中断，定时任务也能继续推同一个订单。
+            Db::transaction(static function () use ($order): void {
+                $locked = self::lockOrder($order);
+                if ((int)$locked['status'] !== GeoOrder::STATUS_REJECTED
+                    || (int)$locked['push_attempts'] !== (int)$order['push_attempts']
+                    || !(bool)$locked['retryable']) {
+                    throw new Exception('订单状态已变化或不可重推，请刷新');
+                }
+                if ((int)$locked['power_log_id'] > 0) {
+                    self::reserve($locked);
+                }
+                $locked->save(['status' => GeoOrder::STATUS_LOCAL, 'remote_flag' => -1, 'retryable' => 0]);
+            });
         }
+        return Db::transaction(static function () use ($order): GeoOrder {
+            $locked = self::lockOrder($order);
+            return (int)$locked['status'] === GeoOrder::STATUS_LOCAL ? self::pushLocked($locked) : $locked;
+        });
+    }
+
+    private static function pushLocked(GeoOrder $order): GeoOrder
+    {
+        $from = (int)$order['status'];
         if (trim((string)$order['content_url']) === '') {
-            throw new Exception('稿件缺少预览地址，无法投稿');
+            self::fail($order, '稿件缺少预览地址，无法投稿', false);
+            return $order;
         }
 
         // 推送前刷新资源价与状态，避免海讯调价后 priceError。
         $media = GeoMedia::where('id', (int)$order['media_id'])->findOrEmpty();
         if ($media->isEmpty()) {
-            throw new Exception('媒体资源不存在');
+            self::fail($order, '媒体资源不存在', false);
+            return $order;
         }
         if ((int)$media['flag'] !== 1 || (int)$media['deleted'] !== 1) {
             self::fail($order, '媒体已下架', false);
             return $order;
         }
-        $costPrice = self::costOf($media, (int)$order['price_type']);
+        try {
+            $costPrice = self::costOf($media, (int)$order['price_type']);
+        } catch (InvalidArgumentException $e) {
+            self::fail($order, $e->getMessage(), false);
+            return $order;
+        }
         if (abs($costPrice - (float)$order['cost_price']) > 0.005) {
             $order->save(['cost_price' => $costPrice, 'update_time' => time()]);
             GeoOrderLog::record($order, $from, $from, 'push', sprintf('媒体价格变动 %.2f -> %.2f', (float)$order['cost_price'], $costPrice));
         }
 
+        $pushMessage = '投稿已提交';
+        $lastQueryTime = 0;
         try {
             self::callWithToken(
                 // createOrder 返回 void，包一层返回空数组以匹配调用器签名。
@@ -138,14 +184,15 @@ class GeoOrderService
                 }
             );
         } catch (Exception $e) {
-            // orderExist 说明已经推送过，按待安排处理继续轮询。
-            if (str_contains($e->getMessage(), '订单已存在')) {
-                $order->save(['status' => GeoOrder::STATUS_PENDING, 'remote_flag' => GeoOrder::STATUS_PENDING, 'update_time' => time()]);
-                GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '订单已存在，转为待安排继续查询');
+            $message = $e->getMessage();
+            // 可能已受理时保留预占，等待按原订单号回查。
+            if (!($e instanceof UnexpectedValueException)
+                && !str_contains($message, '订单已存在') && !str_contains($message, 'orderExist')) {
+                self::fail($order, $message, self::isRetryableMessage($message));
                 return $order;
             }
-            self::fail($order, $e->getMessage(), self::isRetryableMessage($e->getMessage()));
-            return $order;
+            $pushMessage = '提交结果待确认，将按原订单号查询';
+            $lastQueryTime = time();
         }
 
         $order->save([
@@ -153,11 +200,12 @@ class GeoOrderService
             'remote_flag' => GeoOrder::STATUS_PENDING,
             'push_attempts' => (int)$order['push_attempts'] + 1,
             'last_push_time' => time(),
+            'last_query_time' => $lastQueryTime,
             'fail_reason' => '',
             'retryable' => 0,
             'update_time' => time(),
         ]);
-        GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', '投稿已提交');
+        GeoOrderLog::record($order, $from, GeoOrder::STATUS_PENDING, 'push', $pushMessage);
         return $order;
     }
 
@@ -169,8 +217,17 @@ class GeoOrderService
      */
     public static function sync(GeoOrder $order): GeoOrder
     {
+        return Db::transaction(static fn (): GeoOrder => self::syncLocked(self::lockOrder($order)));
+    }
+
+    private static function syncLocked(GeoOrder $order): GeoOrder
+    {
         if ((int)$order['status'] === GeoOrder::STATUS_LOCAL) {
             throw new Exception('订单尚未推送，无法查询');
+        }
+        // 已结算的终态以当前订单为准，避免重复回查改写账务状态。
+        if ((int)$order['power_log_id'] > 0 && !in_array((int)$order['status'], GeoOrder::POLL_STATUS, true)) {
+            return $order;
         }
         $result = self::callWithToken(
             static fn (string $token): array => AigcGeoManuscriptService::queryOrder($token, (string)$order['order_no'])
@@ -187,6 +244,9 @@ class GeoOrderService
         ];
         if ($to === GeoOrder::STATUS_DONE) {
             $data['finish_time'] = time();
+        }
+        if (in_array($to, [GeoOrder::STATUS_REJECTED, GeoOrder::STATUS_MISSING], true)) {
+            self::refund($order);
         }
         $order->save($data);
         if ($to !== $from) {
@@ -248,6 +308,11 @@ class GeoOrderService
      */
     public static function process(GeoOrder $order, int $flag, string $feedback = ''): GeoOrder
     {
+        return Db::transaction(static fn (): GeoOrder => self::processLocked(self::lockOrder($order), $flag, $feedback));
+    }
+
+    private static function processLocked(GeoOrder $order, int $flag, string $feedback): GeoOrder
+    {
         if ((int)$order['remote_flag'] !== GeoOrder::STATUS_PUBLISHED) {
             throw new Exception('只有"发布成功待确认"的订单可以确认或反馈，当前状态：'
                 . (GeoOrder::STATUS_TEXT[(int)$order['status']] ?? $order['status']));
@@ -285,6 +350,7 @@ class GeoOrderService
             throw new Exception('投稿单不存在');
         }
         $data = $order->toArray();
+        $data['charged_points'] = self::chargedPoints($data);
         $data['status_text'] = GeoOrder::STATUS_TEXT[$data['status']] ?? (string)$data['status'];
         $data['can_retry'] = in_array((int)$data['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
             && ((int)$data['status'] === GeoOrder::STATUS_LOCAL || (bool)$data['retryable']);
@@ -343,6 +409,7 @@ class GeoOrderService
         $count = (int)(clone $query)->count();
         $rows = $query->order('id', 'desc')->limit(($pageNo - 1) * $pageSize, $pageSize)->select()->toArray();
         foreach ($rows as &$row) {
+            $row['charged_points'] = self::chargedPoints($row);
             $row['status_text'] = GeoOrder::STATUS_TEXT[$row['status']] ?? (string)$row['status'];
             $row['fail_reason'] = AigcGeoManuscriptService::publicMessage((string)$row['fail_reason']);
             $row['can_retry'] = in_array((int)$row['status'], [GeoOrder::STATUS_LOCAL, GeoOrder::STATUS_REJECTED], true)
@@ -385,6 +452,67 @@ class GeoOrderService
         return self::resolvePrice($media, $priceType)[0];
     }
 
+    private static function lockOrder(GeoOrder $order): GeoOrder
+    {
+        return GeoOrder::where(['id' => $order['id'], 'tenant_id' => $order['tenant_id']])->lock(true)->findOrFail();
+    }
+
+    private static function salePoints(float $salePrice): int
+    {
+        // 售价已包含平台溢价，1 元对应 100 算力点。
+        return (int)round($salePrice * 100);
+    }
+
+    private static function chargedPoints(array $order): int
+    {
+        if (!(int)$order['power_log_id'] || in_array((int)$order['status'], [GeoOrder::STATUS_REJECTED, GeoOrder::STATUS_MISSING], true)) {
+            return 0;
+        }
+        return self::salePoints((float)$order['sale_price']);
+    }
+
+    private static function reserve(GeoOrder $order): void
+    {
+        $points = self::salePoints((float)$order['sale_price']);
+        if ($points <= 0) {
+            return;
+        }
+        $tenantId = (int)$order['tenant_id'];
+        $userId = (int)$order['user_id'];
+        // 每次推送使用自己的来源号，重推不会复用上次已退回的预占流水。
+        $source = $order['order_no'] . '-' . (int)($order['push_attempts'] ?? 0);
+        PointService::reserveBusinessAmountsInCurrentTransaction(
+            $tenantId, $userId, 0, $points, $source, '媒体发稿预占', ['order_no' => $order['order_no']]
+        );
+        $logId = UserAccountLog::where([
+            'tenant_id' => $tenantId,
+            'user_id' => $userId,
+            'change_type' => AccountLogEnum::UM_DEC_APP_CONSUME,
+            'source_sn' => $source,
+        ])->value('id');
+        if (!$logId) {
+            throw new Exception('媒体发稿预占流水保存失败');
+        }
+        $order->save(['power_log_id' => $logId]);
+    }
+
+    private static function refund(GeoOrder $order): void
+    {
+        if (!(int)$order['power_log_id']) {
+            return;
+        }
+        $charge = UserAccountLog::where([
+            'id' => $order['power_log_id'],
+            'tenant_id' => $order['tenant_id'],
+            'user_id' => $order['user_id'],
+            'change_type' => AccountLogEnum::UM_DEC_APP_CONSUME,
+        ])->findOrFail();
+        PointService::releaseReservedBusinessAmountsInCurrentTransaction(
+            (int)$order['tenant_id'], (int)$order['user_id'], 0, (float)$charge['change_amount'],
+            $charge['source_sn'] . '-refund', '媒体发稿退款', ['order_no' => $order['order_no']]
+        );
+    }
+
     /**
      * 带令牌自愈的调用。
      *
@@ -424,6 +552,7 @@ class GeoOrderService
     private static function fail(GeoOrder $order, string $message, bool $retryable): void
     {
         $from = (int)$order['status'];
+        self::refund($order);
         $order->save([
             'status' => GeoOrder::STATUS_REJECTED,
             'remote_flag' => GeoOrder::STATUS_REJECTED,
