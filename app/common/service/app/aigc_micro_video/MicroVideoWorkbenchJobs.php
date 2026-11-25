@@ -29,6 +29,7 @@ final class MicroVideoWorkbenchJobs
     public static function lists(int $tenant,int $user,array $p,bool $admin=false): array
     {
         $q=self::table()->where('tenant_id',$tenant);if(!$admin)$q->where('user_id',$user);elseif(!empty($p['user_id']))$q->where('user_id',(int)$p['user_id']);foreach(['project_id','status','idempotency_key'] as $f)if(isset($p[$f])&&$p[$f]!=='')$q->where($f,$p[$f]);
+        if(!$admin)$q->whereRaw("JSON_EXTRACT(request_json, '$.replacement_product') IS NULL");
         $page=max(1,(int)($p['page_no']??1));$size=max(1,min(100,(int)($p['page_size']??20)));$count=(clone $q)->count();return ['lists'=>array_map(fn($r)=>self::dto($r,$admin),$q->order('id','desc')->page($page,$size)->select()->toArray()),'count'=>(int)$count,'page_no'=>$page,'page_size'=>$size];
     }
     public static function input(int $tenant,int $user,array $p,?array $previewBody=null): array

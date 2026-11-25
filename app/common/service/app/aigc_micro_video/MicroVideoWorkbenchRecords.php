@@ -101,10 +101,11 @@ final class MicroVideoWorkbenchRecords
             $old=$id?self::owned($tenant,$user,$kind,$id,$admin,true,true):null;if($old)MicroVideoWorkbenchPolicy::revision($old,(int)($p['revision']??0));
             $owner=$old?(int)$old['user_id']:$user;if($kind==='project'&&$owner<=0)throw new InvalidArgumentException('项目必须属于用户，请使用用户创作入口');
             $body=$preparedBody;
-            $oldBody=$old?MicroVideoWorkbenchPolicy::normalizeValues(MicroVideoStore::json($old['body_json'])):[];
+            $oldBody=$kind==='project'&&$old?MicroVideoStore::json($old['body_json']):[];
             $replacingProduct=!empty($p['product_replacement_job_id']);
             if($replacingProduct){
                 if($kind!=='project'||!$old)throw new InvalidArgumentException('换品必须基于已保存项目');
+                $oldBody=MicroVideoWorkbenchPolicy::normalizeValues($oldBody);
                 $job=MicroVideoWorkbenchJobs::owned($tenant,$user,(int)$p['product_replacement_job_id']);
                 $input=MicroVideoStore::json($job['request_json']);
                 $result=MicroVideoStore::json($job['result_json']);
