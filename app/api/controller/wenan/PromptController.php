@@ -7,6 +7,7 @@ use app\api\logic\merchant\KnowledgeLogic;
 use app\api\logic\merchant\MerchantScope;
 use app\common\model\merchant\MerchantBrand;
 use app\common\service\wenan\WenanEnhanceService;
+use app\common\service\wenan\SeedCardJobService;
 use Exception;
 use Throwable;
 
@@ -58,6 +59,26 @@ class PromptController extends BaseApiController
     /**
      * 可选模式与场景说明，供前端下拉使用。
      */
+    public function submitSeedCards()
+    {
+        if (!$this->request->isPost()) return $this->fail('请使用 POST 请求');
+        try {
+            return $this->data(SeedCardJobService::submit(
+                (int)$this->request->tenantId, $this->userId, $this->request->post()
+            ));
+        } catch (\InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function seedCardStatus()
+    {
+        return $this->data(SeedCardJobService::latest(
+            (int)$this->request->tenantId, $this->userId,
+            (int)$this->request->get('store_id'), (string)$this->request->get('mode')
+        ) ?? []);
+    }
+
     public function options()
     {
         return $this->success('获取成功', [

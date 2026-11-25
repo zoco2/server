@@ -11,6 +11,7 @@ use app\common\service\publish_task\PublishTaskDispatcher;
 use app\common\service\smart_edit\SmartEditService;
 use app\common\service\user_task\UserTaskPlanService;
 use app\common\service\user_task\UserTaskRunService;
+use app\common\service\wenan\SeedCardJobService;
 use think\console\Command;
 use think\console\Input;
 use think\console\input\Argument;
@@ -96,6 +97,7 @@ class Workerman extends Command
         self::registerTaskWorker('user-task-scheduler', [UserTaskPlanService::class, 'scheduleDue']);
         self::registerTaskWorker('user-task-runner', [UserTaskRunService::class, 'drain']);
         self::registerTaskWorker('publish-task-dispatcher', [PublishTaskDispatcher::class, 'scan']);
+        self::registerTaskWorker('wenan-seed-card-runner', [SeedCardJobService::class, 'work']);
 
         if (env('workerman.ai_task_group', false)) {
             WorkermanAiTaskGroup::register(app()->getRootPath(), $action, (bool)$input->getOption('daemon'));
