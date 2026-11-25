@@ -21,13 +21,17 @@ final class SeedCardJobService
         $storeId = (int)($input['store_id'] ?? 0);
         $mode = (string)($input['mode'] ?? '');
         $groupId = filter_var($input['group_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+        $copyGroupId = $mode === 'copy' && array_key_exists('copy_group_id', $input)
+            ? filter_var($input['copy_group_id'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]])
+            : null;
+        if ($copyGroupId === false) throw new InvalidArgumentException('请选择有效的文案组');
         $count = filter_var($input['count'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
         $prompt = trim((string)($input['prompt'] ?? ''));
         if (!in_array($mode, ['copy', 'topic'], true) || $groupId === false || $count === false || $prompt === '' || mb_strlen($prompt) > 300) {
             throw new InvalidArgumentException('请选择视频成片组，输入 1–300 字提示词和 1–100 的整数数量');
         }
 
-        return Db::transaction(static function () use ($tenant, $user, $storeId, $mode, $groupId, $count, $prompt) {
+        return Db::transaction(static function () use ($tenant, $user, $storeId, $mode, $groupId, $copyGroupId, $count, $prompt) {
             $store = Db::name('merchant_store')->where([
                 'tenant_id' => $tenant, 'user_id' => $user, 'id' => $storeId,
             ])->whereNull('delete_time')->lock(true)->find();
@@ -36,14 +40,20 @@ final class SeedCardJobService
             $latest = self::latest($tenant, $user, $storeId, $mode);
             if ($latest && in_array($latest['status'], ['pending', 'running'], true)) return $latest;
 
-            $films = WorkspaceSmartEditAssetService::lists($tenant, $user, 1, 20, '', $groupId);
-            if (!$films['count']) throw new InvalidArgumentException('所选成片组暂无可用成片');
-            $titles = array_map(static fn ($film) => mb_substr($film['raw']['title'], 0, 80), $films['lists']);
+            $filmContext = '';
+            if ($copyGroupId !== null) {
+                self::assertCopyGroup($tenant, $user, $copyGroupId);
+            } else {
+                $films = WorkspaceSmartEditAssetService::lists($tenant, $user, 1, 20, '', $groupId);
+                if (!$films['count']) throw new InvalidArgumentException('所选成片组暂无可用成片');
+                $titles = array_map(static fn ($film) => mb_substr($film['raw']['title'], 0, 80), $films['lists']);
+                $filmContext = "\n成片标题：" . implode('、', $titles);
+            }
             $address = implode('', array_map(static fn ($key) => $store[$key] ?? '', ['province', 'city', 'district', 'address']));
             $context = "门店：{$store['name']}\n门店简介：" . mb_substr((string)$store['intro'], 0, 500)
-                . "\n门店地址：" . mb_substr($address, 0, 300) . "\n成片标题：" . implode('、', $titles) . "\n用户提示词：{$prompt}";
+                . "\n门店地址：" . mb_substr($address, 0, 300) . $filmContext . "\n用户提示词：{$prompt}";
             $row = self::scope($tenant, $user, $storeId, $mode) + [
-                'group_id' => $groupId, 'quantity' => $count, 'context' => $context,
+                'group_id' => $groupId, 'copy_group_id' => $copyGroupId, 'quantity' => $count, 'context' => $context,
                 'items' => '[]', 'error' => '', 'status' => 'pending',
             ];
             $row['id'] = Db::name(self::TABLE)->insertGetId($row);
@@ -61,6 +71,7 @@ final class SeedCardJobService
     {
         return [
             'id' => (int)$row['id'], 'group_id' => (int)$row['group_id'],
+            'copy_group_id' => isset($row['copy_group_id']) ? (int)$row['copy_group_id'] : null,
             'quantity' => (int)$row['quantity'], 'status' => $row['status'],
             'items' => self::libraryItems($row), 'error' => $row['error'],
         ];
@@ -108,6 +119,8 @@ final class SeedCardJobService
 
                 $library = self::libraryQuery($job);
                 $owner = ['tenant_id' => $job['tenant_id'], 'user_id' => $job['user_id']];
+                $copyGroupId = (int)($job['copy_group_id'] ?? 0);
+                if (!$topic) self::assertCopyGroup((int)$job['tenant_id'], (int)$job['user_id'], $copyGroupId, true);
                 $now = time();
                 $ids = json_decode($job['items'], true, 512, JSON_THROW_ON_ERROR);
                 foreach ($next as $item) {
@@ -117,7 +130,15 @@ final class SeedCardJobService
                         'update_time' => $now,
                     ];
                     if (!$topic) $entry['content'] = $item;
-                    $ids[] = (string)(clone $library)->insertGetId($entry);
+                    $id = (string)(clone $library)->insertGetId($entry);
+                    $ids[] = $id;
+                    if (!$topic && $copyGroupId > 0) {
+                        Db::name('work_item')->insert($owner + [
+                            'type' => 'copy', 'group_id' => $copyGroupId,
+                            'source_ref' => 'merchant_copy:' . $id, 'title' => $entry['name'],
+                            'create_time' => $now, 'update_time' => $now,
+                        ]);
+                    }
                 }
                 $query()->update($update + [
                     'items' => json_encode($ids, JSON_THROW_ON_ERROR), 'lease_until' => 0,
@@ -129,6 +150,15 @@ final class SeedCardJobService
             $query()->where('status', 'running')->where('lease_until', $lease)->update($update + ['lease_until' => 0]);
         }
         return true;
+    }
+
+    private static function assertCopyGroup(int $tenant, int $user, int $groupId, bool $lock = false): void
+    {
+        if ($groupId === 0) return;
+        $group = Db::name('work_group')->where([
+            'id' => $groupId, 'tenant_id' => $tenant, 'user_id' => $user, 'type' => 'copy',
+        ])->whereNull('delete_time')->lock($lock)->find();
+        if (!$group) throw new InvalidArgumentException('所选文案组不存在或不可用');
     }
 
     private static function libraryQuery(array $job)
