@@ -126,7 +126,7 @@ final class PublishTaskMaterialService
         }
 
         $create = static function () use ($scope, $owner, $platform, $groupIds): ?array {
-            $run = PublishTaskRun::where($owner + ['id' => $scope['run_id']])->lock(true)->field('id')->findOrEmpty();
+            $run = PublishTaskRun::where(['user_id' => $owner['user_id'], 'id' => $scope['run_id']])->lock(true)->field('id')->findOrEmpty();
             if ($run->isEmpty()) {
                 throw new InvalidArgumentException('任务执行记录不存在');
             }
@@ -237,7 +237,9 @@ final class PublishTaskMaterialService
         } elseif ($isMedia) {
             $refs = $media->refs($type);
         } else {
-            $query = $type === 'copy' ? MerchantCopy::where($owner) : MerchantTopic::where($owner);
+            $query = $type === 'copy'
+                ? MerchantCopy::where('user_id', $owner['user_id'])
+                : MerchantTopic::where('user_id', $owner['user_id']);
             DefaultWorkGroup::filterTextList($query, $owner['tenant_id'], $owner['user_id'], $type);
             $refs = array_map(static fn($id) => 'merchant_' . $type . ':' . $id, $query->column('id'));
         }
@@ -277,7 +279,7 @@ final class PublishTaskMaterialService
         if (!preg_match('/^merchant_' . $type . ':([1-9][0-9]*)$/D', $ref, $match)) {
             return null;
         }
-        $scope = $owner + ['id' => (int)$match[1]];
+        $scope = ['user_id' => $owner['user_id'], 'id' => (int)$match[1]];
         if ($type === 'copy') {
             $item = MerchantCopy::where($scope)->field('name,content')->findOrEmpty();
             $text = trim((string)$item->content);

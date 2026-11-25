@@ -32,7 +32,7 @@ final class PublishTaskMediaPool
         $refs = [];
 
         if ($type === 'video' && isset($tables[$prefix . 'smart_edit_task'])) {
-            $films = SmartEditTask::where($scope)->where('status', SmartEditTask::STATUS_SUCCESS)
+            $films = SmartEditTask::where('user_id', $this->userId)->where('status', SmartEditTask::STATUS_SUCCESS)
                 ->where('output_uri', '<>', '')->column('id');
             foreach ($films as $id) {
                 $refs[] = 'smart_edit:task:' . $id;
