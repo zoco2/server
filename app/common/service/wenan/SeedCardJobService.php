@@ -48,6 +48,8 @@ final class SeedCardJobService
             $context = "门店：{$store['name']}\n门店简介：" . mb_substr((string)$store['intro'], 0, 500)
                 . "\n门店地址：" . mb_substr($address, 0, 300) . "\n用户提示词：{$prompt}";
             $row = self::scope($tenant, $user, $storeId, $mode) + [
+                // The job table still requires this column on databases without its default.
+                'group_id' => 0,
                 'output_group_id' => $outputGroupId, 'quantity' => $count, 'context' => $context,
                 'items' => '[]', 'error' => '', 'status' => 'pending',
             ];
