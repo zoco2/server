@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\api\controller;
 
+use app\common\service\publish_task\PublishTaskMaterialService;
+use app\common\service\publish_task\PublishTaskMaterialShortage;
 use app\common\service\publish_task\PublishTaskService;
 use app\common\service\share\ShareServiceException;
 use InvalidArgumentException;
@@ -13,7 +15,7 @@ use Throwable;
 /** 提供当前登录用户的任务发布和查询接口，由框架默认路由分发。 */
 final class PublishTaskController extends BaseApiController
 {
-    public array $notNeedLogin = ['detail', 'douyinShare'];
+    public array $notNeedLogin = ['detail', 'douyinShare', 'assignMaterial'];
 
     /** GET /api/publish_task/detail：打开员工收到的任务。 */
     public function detail()
@@ -26,6 +28,55 @@ final class PublishTaskController extends BaseApiController
             ? PublishTaskService::publicDetail($token) : null;
         $response = $detail === null ? $this->fail('任务链接无效或已不可用') : $this->data($detail);
         return $response->header(['Cache-Control' => 'private, no-store']);
+    }
+
+    /** 员工首次点击某一发布平台时领取素材。 */
+    public function assignMaterial()
+    {
+        if (!$this->request->isPost()) {
+            return $this->fail('请使用 POST 请求');
+        }
+        $token = $this->request->post('token');
+        $platform = $this->request->post('platform');
+        try {
+            $materials = PublishTaskService::assignMaterial(
+                is_string($token) ? $token : '',
+                is_string($platform) ? $platform : ''
+            );
+            $response = $this->data(['materials' => $materials]);
+        } catch (PublishTaskMaterialShortage $e) {
+            $response = $this->data(['missing_groups' => $e->missingGroups]);
+        } catch (InvalidArgumentException $e) {
+            $response = $this->fail($e->getMessage());
+        } catch (Throwable $e) {
+            Log::channel('mns')->error(sprintf('[publish_task] assignMaterial tenant=%d exception=%s at %s:%d',
+                (int)$this->request->tenantId, get_class($e), basename($e->getFile()), $e->getLine()));
+            $response = $this->fail('暂时无法领取发布素材，请重试');
+        }
+
+        return $response->header(['Cache-Control' => 'private, no-store']);
+    }
+
+    /** 批量查询当前用户的成片使用次数与上限。 */
+    public function materialUsage()
+    {
+        if (!$this->request->isPost()) {
+            return $this->fail('请使用 POST 请求');
+        }
+        try {
+            $tenantId = (int)($this->userInfo['tenant_id'] ?? 0);
+            if ($tenantId <= 0 || $tenantId !== (int)$this->request->tenantId) {
+                throw new InvalidArgumentException('账号与租户不匹配，请重新登录');
+            }
+            return $this->data(PublishTaskMaterialService::usage(
+                $tenantId,
+                $this->userId,
+                $this->request->post('type', null, null),
+                $this->request->post('refs', null, null)
+            ));
+        } catch (InvalidArgumentException $e) {
+            return $this->fail($e->getMessage());
+        }
     }
 
     /** 为员工通知中指定的素材签名。 */
@@ -65,6 +116,9 @@ final class PublishTaskController extends BaseApiController
                 $input['staff_ids'] = $this->request->post('staff_ids', null, null);
             }
             // 任务归属取自登录上下文，请求体只提供任务配置。
+            if (array_key_exists('work_group_ids', $input)) {
+                $input['work_group_ids'] = $this->request->post('work_group_ids', null, null);
+            }
             return $this->success('', PublishTaskService::create(
                 (int)$this->request->tenantId, $this->userId, $input
             ));

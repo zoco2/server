@@ -34,6 +34,12 @@ Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结
 
 任务通知复用员工列表「测试发送」的服务号模板。员工点击通知进入 `/page/publish-task/{token}`，链接使用租户二级域名。页面用 `GET /api/publish_task/detail?token=…` 读取任务内容、平台和可查询到的品牌名称。链接根据本轮执行编号和员工当前绑定校验。仅通知创建人时，消息不带员工任务链接。
 
-勾选抖音时，商家可从素材库指定一张图片或一段视频。创建接口通过可选字段 `douyin_file_id` 接收本人的上传文件 ID。已有环境需运行升级脚本 `upgrade/20261119_publish_task_douyin_file.sql`。
+## 员工领取成片
 
-员工在通知页点「发抖音」时，页面将通知的 `token` 提交至 `POST /api/publish_task/douyinShare`。服务端校验员工链接和素材归属，使用当前租户的抖音应用凭据签名，返回 `data.schema`。手机可用该链接打开抖音，电脑端提供抖音扫码入口。员工在抖音内确认发布。纯文字任务仍可查看和复制，点击分享时会提示缺少素材。
+新员工任务通过 `work_group_ids` 保存成片组，可用键为 `video`（视频）、`finished_image`（图片）、`copy`（文案）、`topic`（发布话题）。组 ID 0 表示默认分组。视频和图片至少配置一组，小红书优先取图，抖音和快手优先取视频。首选组没有可用作品时尝试另一种已配置媒体；文案和话题可选。
+
+员工页面打开后只读取详情。点击发布平台时，页面发送 `POST /api/publish_task/assignMaterial`，请求包含员工通知的 `token` 和 `platform`。成功返回 `data.materials`。没有必需媒体时返回 `data.missing_groups`，列出类型和组名，供页面提示「可用素材不足」。
+
+升级脚本为 `upgrade/20261125_publish_task_material_assignment.sql`。执行记录表继续管理通知。新增的 `publish_task_material_assignment` 表按租户、执行轮次、员工和平台唯一保存分配结果，四类作品以稳定标识记录。分配记录提交后计为使用一次，同平台重试读取已有记录。抖音签名接口 `POST /api/publish_task/douyinShare` 读取该平台已分配的作品，使用平台配置的抖音应用凭据签名并返回 `data.schema`。
+
+`POST /api/publish_task/materialUsage` 需要登录，接收 `type` 和当页作品的 `refs`，返回以作品标识为键的 `counts` 和 `limits`。使用次数来自分配明细，上限取作品当前分组的 `max_uses`，0 表示不限。达到上限的作品退出后续随机池。
