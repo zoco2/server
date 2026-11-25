@@ -100,7 +100,38 @@ final class MicroVideoWorkbenchRecords
         return Db::transaction(function()use($tenant,$user,$p,$admin,$kind,$id,$title,$preparedBody,$restoreBody){
             $old=$id?self::owned($tenant,$user,$kind,$id,$admin,true,true):null;if($old)MicroVideoWorkbenchPolicy::revision($old,(int)($p['revision']??0));
             $owner=$old?(int)$old['user_id']:$user;if($kind==='project'&&$owner<=0)throw new InvalidArgumentException('项目必须属于用户，请使用用户创作入口');
-            $body=$preparedBody;if($kind==='project')$body=MicroVideoWorkbenchPolicy::dependencies($body,$old?MicroVideoStore::json($old['body_json']):[]);
+            $body=$preparedBody;
+            $oldBody=$kind==='project'&&$old?MicroVideoStore::json($old['body_json']):[];
+            $replacingProduct=!empty($p['product_replacement_job_id']);
+            if($replacingProduct){
+                if($kind!=='project'||!$old)throw new InvalidArgumentException('换品必须基于已保存项目');
+                $oldBody=MicroVideoWorkbenchPolicy::normalizeValues($oldBody);
+                $job=MicroVideoWorkbenchJobs::owned($tenant,$user,(int)$p['product_replacement_job_id']);
+                $input=MicroVideoStore::json($job['request_json']);
+                $result=MicroVideoStore::json($job['result_json']);
+                if($job['status']!=='success'||(int)$job['project_id']!==$id||(int)$job['project_revision']!==(int)$old['revision']
+                    ||!empty($result['script']['replacement_warning'])||!isset($result['script']['product_edits'])
+                    ||empty($input['replacement_product'])||$input['replacement_product']!==($body['product']??[])
+                    ||($oldBody['template']??null)!==($body['template']??null))throw new InvalidArgumentException('换品预览已失效，请重新生成');
+                $previous=(array)($oldBody['script']['segments']??[]);
+                $segments=(array)($body['script']['segments']??[]);
+                if(!$previous||array_column($previous,'duration')!==array_column($segments,'duration')
+                    ||array_column($previous,'sort')!==array_column($segments,'sort')
+                    ||count($previous)!==count($segments)||trim((string)($body['script']['text']??''))==='')throw new InvalidArgumentException('换品必须保留原剧本的段数和时长');
+                $priorScenes=array_column((array)($oldBody['scenes']??[]),null,'scene_id');
+                foreach($body['scenes']??[] as $i=>$scene){
+                    $index=(int)$scene['sort']-1;
+                    $prior=$priorScenes[$scene['scene_id']]??[];
+                    if(!empty($scene['product_visible'])||!empty($prior['product_visible'])||($previous[$index]??null)!==($segments[$index]??null)){
+                        $body['scenes'][$i]['images']=[];
+                        $body['scenes'][$i]['confirmed']=false;
+                        $body['scenes'][$i]['status']='stale';
+                    }
+                }
+                unset($body['task_id']);
+            }
+            if($kind==='project')$body=MicroVideoWorkbenchPolicy::dependencies($body,$oldBody);
+            if($replacingProduct){$body['script_stale']=false;$body['stage']='script_ready';}
             if($kind==='project'&&$restoreBody!==null){
                 // A whole historical body is internally coherent; keep its script/product agreement while requiring asset review.
                 $body['script_stale']=(bool)($restoreBody['script_stale']??false);

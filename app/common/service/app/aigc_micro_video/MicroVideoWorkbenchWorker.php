@@ -148,8 +148,16 @@ final class MicroVideoWorkbenchWorker
     private static function parseScript(array $row,array $result): array
     {
         $script=$result['script']??null;
+        $input=MicroVideoStore::json($row['request_json']);
+        if(!empty($input['replacement_product'])){
+            $edits=$script['product_edits']??null;
+            if(!is_array($edits)||!array_is_list($edits)||count($edits)>240)throw new InvalidArgumentException('换品结果缺少有效的修改列表');
+            $warning=$script['replacement_warning']??'';
+            if(!is_string($warning)||mb_strlen($warning)>500)throw new InvalidArgumentException('换品提示格式无效');
+            return ['product_edits'=>$edits,'replacement_warning'=>trim($warning)];
+        }
         if(!is_array($script)||!is_string($script['text']??null)||trim($script['text'])===''||empty($script['segments'])||!is_array($script['segments'])||count($script['segments'])>60)throw new InvalidArgumentException('改写结果缺少完整剧本或分镜');
-        $input=MicroVideoStore::json($row['request_json']);$snapshot=(array)($input['snapshot']??[]);
+        $snapshot=(array)($input['snapshot']??[]);
         $continuity='';
         foreach([$script['continuity']??'', $result['continuity']??'', $input['continuity']??'', $snapshot['script']['continuity']??'', $snapshot['template_snapshot']['body']['reference_rules']??'', MicroVideoSettings::defaults()['continuity_template']] as $candidate){if(is_string($candidate)&&trim($candidate)!==''){$continuity=trim($candidate);break;}}
         if(mb_strlen($continuity)>10000)throw new InvalidArgumentException('整片一致性设定过长');$script['continuity']=$continuity;
