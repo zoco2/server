@@ -42,13 +42,10 @@ class StoreAdminLogic extends BaseLogic
         try {
             Db::transaction(static function () use ($params): void {
                 $brand = self::lockBrand((int)$params['brand_id']);
-                $now = time();
                 MerchantStore::create(self::fields($params) + [
                     'brand_id' => $brand->id,
                     'user_id' => $brand->user_id,
                     'status' => 1,
-                    'create_time' => $now,
-                    'update_time' => $now,
                 ]);
             });
             return true;
@@ -71,18 +68,15 @@ class StoreAdminLogic extends BaseLogic
                 }
 
                 $fields = self::fields($params);
-                $now = time();
                 if ($brand !== null) {
                     $fields['brand_id'] = $brand->id;
                     $fields['user_id'] = $brand->user_id;
                     if ((int)$store->user_id !== (int)$brand->user_id) {
                         // 员工的所属用户随门店变更，保持品牌、门店、员工的归属一致。
-                        MerchantStaff::query()
-                            ->where('store_id', $store->id)
-                            ->update(['user_id' => $brand->user_id, 'update_time' => $now]);
+                        MerchantStaff::update(['user_id' => $brand->user_id], ['store_id' => $store->id]);
                     }
                 }
-                self::storeQuery((int)$store->id)->update($fields + ['update_time' => $now]);
+                $store->save($fields);
             });
             return true;
         } catch (Throwable $e) {

@@ -79,10 +79,7 @@ class BrandAdminLogic extends BaseLogic
         }
 
         try {
-            MerchantBrand::query()
-                ->where('id', $brand->id)
-                ->update($fields + ['update_time' => time()]);
-            return true;
+            return $brand->save($fields);
         } catch (Throwable $e) {
             self::setError(str_contains($e->getMessage(), 'uk_owner_name') ? '品牌名称已存在' : '品牌保存失败');
             return false;

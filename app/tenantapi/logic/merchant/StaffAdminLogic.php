@@ -45,7 +45,8 @@ class StaffAdminLogic extends BaseLogic
                 if ($store->isEmpty()) {
                     throw new DomainException('所属门店不存在或无权限');
                 }
-                if ($id !== null && self::staffQuery($id)->lock(true)->findOrEmpty()->isEmpty()) {
+                $staff = $id === null ? new MerchantStaff() : self::staffQuery($id)->lock(true)->findOrEmpty();
+                if ($id !== null && $staff->isEmpty()) {
                     throw new DomainException('员工不存在或无权限');
                 }
 
@@ -63,13 +64,11 @@ class StaffAdminLogic extends BaseLogic
                     throw new DomainException(self::DUPLICATE_MOBILE);
                 }
 
-                $now = time();
                 $fields = [
                     'store_id' => $storeId,
                     'user_id' => $store->user_id,
                     'name' => $name,
                     'mobile' => $mobile,
-                    'update_time' => $now,
                 ];
                 foreach (['appid', 'openid'] as $field) {
                     if (array_key_exists($field, $params)) {
@@ -77,11 +76,7 @@ class StaffAdminLogic extends BaseLogic
                         $fields[$field] = $value === '' ? null : $value;
                     }
                 }
-                if ($id === null) {
-                    MerchantStaff::create($fields + ['create_time' => $now]);
-                } else {
-                    self::staffQuery($id)->update($fields);
-                }
+                $staff->save($fields);
             });
             return true;
         } catch (Throwable $e) {

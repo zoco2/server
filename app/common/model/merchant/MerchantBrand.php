@@ -2,7 +2,6 @@
 
 namespace app\common\model\merchant;
 
-use app\common\model\BaseModel;
 use DomainException;
 use think\facade\Db;
 use think\model\concern\SoftDelete;
@@ -10,7 +9,7 @@ use think\model\concern\SoftDelete;
 /**
  * 商家品牌。
  */
-class MerchantBrand extends BaseModel
+class MerchantBrand extends MerchantProfileModel
 {
     use SoftDelete;
 
