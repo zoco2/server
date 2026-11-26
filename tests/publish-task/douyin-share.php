@@ -144,9 +144,38 @@ try {
     check(!isset($params['title']), 'Employee instructions are not the post caption');
     check($assignments->count() === 2, 'Signing an assignment does not consume another use');
 
+    Db::name('work_group')->where('id', 5)->update(['max_uses' => 2]);
+    $pictureInput = array_replace($input, [
+        'platforms' => ['douyin'],
+        'platform_materials' => ['douyin' => ['finished_image', 'copy', 'topic']],
+    ]);
+    $pictureTaskId = PublishTaskService::create(1, 2, $pictureInput)['ids'][0];
+    $pictureRunSn = Db::name('publish_task')->where('id', $pictureTaskId)->value('tasksn');
+    Db::name('publish_task_run')->insert([
+        'id' => 8, 'tenant_id' => 1, 'user_id' => 2, 'task_id' => $pictureTaskId, 'tasksn' => $pictureRunSn,
+    ]);
+    $pictureToken = (new ReflectionMethod(PublishTaskService::class, 'noticeToken'))
+        ->invoke(null, 1, 8, 3, $pictureRunSn, 'wx', 'employee');
+    $pictureMaterials = PublishTaskService::assignMaterial($pictureToken, 'douyin');
+    check(array_keys($pictureMaterials) === ['finished_image', 'copy', 'topic'], 'Picture task assigns only its configured materials');
+
+    $request->withPost(['token' => $pictureToken, 'title' => '客户端任意文案', 'hashtag_list' => ['客户端任意标签']]);
+    $pictureResponse = $call();
+    check($pictureResponse['code'] === 1, 'Douyin picture schema generated');
+    parse_str(parse_url($pictureResponse['data']['schema'], PHP_URL_QUERY), $pictureParams);
+    check($pictureParams['image_path'] === 'https://tenant.example/uploads/photo.jpg'
+        && !isset($pictureParams['video_path']) && $pictureParams['share_to_publish'] === '0',
+        'Picture schema keeps image editing flow');
+    check($pictureParams['title'] === '可选文案', 'Schema carries assigned caption');
+    check(json_decode($pictureParams['hashtag_list'], true, flags: JSON_THROW_ON_ERROR) === ['可选素材'],
+        'Schema carries assigned topic without the display prefix');
+    $call();
+    check($assignments->count() === 3, 'Repeat picture signature does not allocate or charge again');
+
+    $request->withPost(['token' => $token]);
     Db::name('user_asset_state')->insert(['tenant_id' => 1, 'user_id' => 2, 'asset_ref' => 'upload:result:4', 'hidden_at' => 100]);
     $expectError('素材已移除或不可访问');
-    check($assignments->count() === 2, 'Removing media does not redraw an assignment');
+    check($assignments->count() === 3, 'Removing media does not redraw an assignment');
     $request->tenantId = 2;
     $expectError('任务链接无效');
     $request->tenantId = 1;

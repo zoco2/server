@@ -40,6 +40,6 @@ Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结
 
 员工页面打开后只读取详情。点击发布平台时，页面发送 `POST /api/publish_task/assignMaterial`，请求包含员工通知的 `token` 和 `platform`。成功返回 `data.materials`。没有必需媒体时返回 `data.missing_groups`，列出类型和组名，供页面提示「可用素材不足」。
 
-升级脚本为 `upgrade/20261125_publish_task_material_assignment.sql`。执行记录表继续管理通知。新增的 `publish_task_material_assignment` 表按租户、执行轮次、员工和平台唯一保存分配结果，四类作品以稳定标识记录。分配记录提交后计为使用一次，同平台重试读取已有记录。抖音签名接口 `POST /api/publish_task/douyinShare` 读取该平台已分配的作品，使用平台配置的抖音应用凭据签名并返回 `data.schema`。
+升级脚本为 `upgrade/20261125_publish_task_material_assignment.sql`。执行记录表继续管理通知。新增的 `publish_task_material_assignment` 表按租户、执行轮次、员工和平台唯一保存分配结果，四类作品以稳定标识记录。分配记录提交后计为使用一次，同平台重试读取已有记录。抖音签名接口 `POST /api/publish_task/douyinShare` 读取该平台已分配的作品，使用平台配置的抖音应用凭据签名并返回 `data.schema`。已分配的文案与标签分别填入 `title` 和 `hashtag_list`，图文投稿中的文字是否带入以抖音客户端的表现为准。
 
 `POST /api/publish_task/materialUsage` 需要登录，接收 `type` 和当页作品的 `refs`，返回以作品标识为键的 `counts` 和 `limits`。使用次数来自分配明细，上限取作品当前分组的 `max_uses`，0 表示不限。达到上限的作品退出后续随机池。

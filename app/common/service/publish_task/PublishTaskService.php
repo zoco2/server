@@ -249,6 +249,14 @@ final class PublishTaskService
         } else {
             throw new InvalidArgumentException('请先点击发布领取抖音素材');
         }
+        $caption = trim($materials['copy']['text'] ?? '');
+        if ($caption !== '') {
+            $content['title'] = $caption;
+        }
+        $topic = trim($materials['topic']['text'] ?? '', "# \t\n\r\0\x0B");
+        if ($topic !== '') {
+            $content['hashtag_list'] = [$topic];
+        }
         $share = (new DouyinH5ShareService())->createShare($content);
         return ['schema' => $share['schema']];
     }
