@@ -28,7 +28,7 @@ class StaffController extends BaseAdminController
     public function detail()
     {
         $params = (new StaffValidate())->get()->goCheck('detail');
-        $result = StaffAdminLogic::detail((int)$params['id'], $this->adminInfo['tenant_id']);
+        $result = StaffAdminLogic::detail((int)$params['id']);
         if ($result === [] && StaffAdminLogic::hasError()) {
             return $this->fail(StaffAdminLogic::getError());
         }
@@ -42,7 +42,7 @@ class StaffController extends BaseAdminController
     public function add()
     {
         $params = (new StaffValidate())->post()->goCheck('add');
-        if (!StaffAdminLogic::add($params, $this->adminInfo['tenant_id'])) {
+        if (!StaffAdminLogic::add($params)) {
             return $this->fail(StaffAdminLogic::getError());
         }
         return $this->success('创建成功', [], 1, 1);
@@ -55,7 +55,7 @@ class StaffController extends BaseAdminController
     public function edit()
     {
         $params = (new StaffValidate())->post()->goCheck('edit');
-        if (!StaffAdminLogic::edit($params, $this->adminInfo['tenant_id'])) {
+        if (!StaffAdminLogic::edit($params)) {
             return $this->fail(StaffAdminLogic::getError());
         }
         return $this->success('保存成功', [], 1, 1);
@@ -68,7 +68,7 @@ class StaffController extends BaseAdminController
     public function delete()
     {
         $params = (new StaffValidate())->post()->goCheck('delete');
-        if (!StaffAdminLogic::delete((int)$params['id'], $this->adminInfo['tenant_id'])) {
+        if (!StaffAdminLogic::delete((int)$params['id'])) {
             return $this->fail(StaffAdminLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);

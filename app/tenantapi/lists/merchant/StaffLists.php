@@ -18,12 +18,12 @@ class StaffLists extends BaseAdminDataLists
             return [];
         }
 
-        $stores = MerchantStore::where('tenant_id', $this->adminInfo['tenant_id'])
+        $stores = MerchantStore::query()
             ->whereNull('delete_time')
             ->whereIn('id', array_unique(array_column($staff, 'store_id')))
             ->column('name,brand_id', 'id');
         $brandIds = array_unique(array_column($stores, 'brand_id'));
-        $brands = $brandIds ? MerchantBrand::where('tenant_id', $this->adminInfo['tenant_id'])
+        $brands = $brandIds ? MerchantBrand::query()
             ->whereNull('delete_time')->whereIn('id', $brandIds)->column('name', 'id') : [];
         foreach ($staff as &$row) {
             $store = $stores[$row['store_id']] ?? null;
@@ -40,7 +40,7 @@ class StaffLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantStaff::where('tenant_id', $this->adminInfo['tenant_id'])->whereNull('delete_time');
+        $query = MerchantStaff::query()->whereNull('delete_time');
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {
             $escaped = strtr($keyword, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);
@@ -50,7 +50,7 @@ class StaffLists extends BaseAdminDataLists
             $query->where('store_id', (int)$this->params['store_id']);
         }
         if ((int)($this->params['brand_id'] ?? 0) > 0) {
-            $storeIds = MerchantStore::where('tenant_id', $this->adminInfo['tenant_id'])
+            $storeIds = MerchantStore::query()
                 ->where('brand_id', (int)$this->params['brand_id'])
                 ->whereNull('delete_time')->column('id');
             $query->whereIn('store_id', $storeIds ?: [0]);

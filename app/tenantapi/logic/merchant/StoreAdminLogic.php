@@ -17,16 +17,16 @@ class StoreAdminLogic extends BaseLogic
         'address', 'poi_id', 'intro', 'logo_url',
     ];
 
-    public static function detail(int $id, int $tenantId): array
+    public static function detail(int $id): array
     {
-        $store = self::storeQuery($id, $tenantId)->findOrEmpty();
+        $store = self::storeQuery($id)->findOrEmpty();
         if ($store->isEmpty()) {
             self::setError('门店不存在或无权限');
             return [];
         }
 
         $data = $store->toArray();
-        $data['brand_name'] = MerchantBrand::where('tenant_id', $tenantId)
+        $data['brand_name'] = MerchantBrand::query()
             ->where('id', $store->brand_id)
             ->whereNull('delete_time')
             ->value('name') ?? '';
@@ -38,14 +38,13 @@ class StoreAdminLogic extends BaseLogic
         return $data;
     }
 
-    public static function add(array $params, int $tenantId): bool
+    public static function add(array $params): bool
     {
         try {
-            Db::transaction(static function () use ($params, $tenantId): void {
-                $brand = self::lockBrand((int)$params['brand_id'], $tenantId);
+            Db::transaction(static function () use ($params): void {
+                $brand = self::lockBrand((int)$params['brand_id']);
                 $now = time();
                 MerchantStore::create(self::fields($params) + [
-                    'tenant_id' => $tenantId,
                     'brand_id' => $brand->id,
                     'user_id' => $brand->user_id,
                     'status' => 1,
@@ -60,14 +59,14 @@ class StoreAdminLogic extends BaseLogic
         }
     }
 
-    public static function edit(array $params, int $tenantId): bool
+    public static function edit(array $params): bool
     {
         try {
-            Db::transaction(static function () use ($params, $tenantId): void {
+            Db::transaction(static function () use ($params): void {
                 $brand = array_key_exists('brand_id', $params)
-                    ? self::lockBrand((int)$params['brand_id'], $tenantId)
+                    ? self::lockBrand((int)$params['brand_id'])
                     : null;
-                $store = self::storeQuery((int)$params['id'], $tenantId)->lock(true)->findOrEmpty();
+                $store = self::storeQuery((int)$params['id'])->lock(true)->findOrEmpty();
                 if ($store->isEmpty()) {
                     throw new DomainException('门店不存在或无权限');
                 }
@@ -79,13 +78,13 @@ class StoreAdminLogic extends BaseLogic
                     $fields['user_id'] = $brand->user_id;
                     if ((int)$store->user_id !== (int)$brand->user_id) {
                         // 员工的所属用户随门店变更，保持品牌、门店、员工的归属一致。
-                        MerchantStaff::where('tenant_id', $tenantId)
+                        MerchantStaff::query()
                             ->where('store_id', $store->id)
                             ->whereNull('delete_time')
                             ->update(['user_id' => $brand->user_id, 'update_time' => $now]);
                     }
                 }
-                self::storeQuery((int)$store->id, $tenantId)->update($fields + ['update_time' => $now]);
+                self::storeQuery((int)$store->id)->update($fields + ['update_time' => $now]);
             });
             return true;
         } catch (Throwable $e) {
@@ -94,15 +93,15 @@ class StoreAdminLogic extends BaseLogic
         }
     }
 
-    public static function delete(int $id, int $tenantId): bool
+    public static function delete(int $id): bool
     {
         try {
-            return Db::transaction(static function () use ($id, $tenantId): bool {
-                $store = self::storeQuery($id, $tenantId)->lock(true)->findOrEmpty();
+            return Db::transaction(static function () use ($id): bool {
+                $store = self::storeQuery($id)->lock(true)->findOrEmpty();
                 if ($store->isEmpty()) {
                     throw new DomainException('门店不存在或无权限');
                 }
-                $staff = MerchantStaff::where('tenant_id', $tenantId)
+                $staff = MerchantStaff::query()
                     ->where('store_id', $id)
                     ->whereNull('delete_time')
                     ->field('id')
@@ -122,14 +121,14 @@ class StoreAdminLogic extends BaseLogic
         }
     }
 
-    private static function storeQuery(int $id, int $tenantId)
+    private static function storeQuery(int $id)
     {
-        return MerchantStore::where('tenant_id', $tenantId)->where('id', $id)->whereNull('delete_time');
+        return MerchantStore::query()->where('id', $id)->whereNull('delete_time');
     }
 
-    private static function lockBrand(int $id, int $tenantId): MerchantBrand
+    private static function lockBrand(int $id): MerchantBrand
     {
-        $brand = MerchantBrand::where('tenant_id', $tenantId)
+        $brand = MerchantBrand::query()
             ->where('id', $id)
             ->whereNull('delete_time')
             ->field('id,user_id')

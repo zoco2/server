@@ -21,7 +21,7 @@ class StoreLists extends BaseAdminDataLists
             return [];
         }
 
-        $names = MerchantBrand::where('tenant_id', $this->adminInfo['tenant_id'])
+        $names = MerchantBrand::query()
             ->whereNull('delete_time')
             ->whereIn('id', array_unique(array_column($stores, 'brand_id')))
             ->column('name', 'id');
@@ -38,7 +38,7 @@ class StoreLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantStore::where('tenant_id', $this->adminInfo['tenant_id'])
+        $query = MerchantStore::query()
             ->whereNull('delete_time');
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {

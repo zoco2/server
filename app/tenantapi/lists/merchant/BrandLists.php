@@ -3,9 +3,9 @@
 namespace app\tenantapi\lists\merchant;
 
 use app\common\model\merchant\MerchantBrand;
+use app\common\model\merchant\MerchantStaff;
 use app\common\model\merchant\MerchantStore;
 use app\tenantapi\lists\BaseAdminDataLists;
-use think\facade\Db;
 
 class BrandLists extends BaseAdminDataLists
 {
@@ -21,27 +21,30 @@ class BrandLists extends BaseAdminDataLists
         }
 
         $ids = array_column($brands, 'id');
-        $storeCounts = MerchantStore::where('tenant_id', $this->adminInfo['tenant_id'])
-            ->whereIn('brand_id', $ids)
+        $stores = MerchantStore::whereIn('brand_id', $ids)
             ->whereNull('delete_time')
-            ->fieldRaw('brand_id, COUNT(*) AS total')
-            ->group('brand_id')
+            ->field('id,brand_id,user_id')
             ->select()
             ->toArray();
-        $staffCounts = Db::name('merchant_store')->alias('store')
-            ->join('merchant_staff staff', 'staff.store_id = store.id AND staff.user_id = store.user_id')
-            ->where('store.tenant_id', $this->adminInfo['tenant_id'])
-            ->where('staff.tenant_id', $this->adminInfo['tenant_id'])
-            ->whereIn('store.brand_id', $ids)
-            ->whereNull('store.delete_time')
-            ->whereNull('staff.delete_time')
-            ->fieldRaw('store.brand_id, COUNT(*) AS total')
-            ->group('store.brand_id')
-            ->select()
-            ->toArray();
+        $storesByBrand = array_count_values(array_column($stores, 'brand_id'));
+        $storesById = array_column($stores, null, 'id');
+        $staffByBrand = [];
+        if ($storesById) {
+            $staffCounts = MerchantStaff::whereIn('store_id', array_keys($storesById))
+                ->whereNull('delete_time')
+                ->fieldRaw('store_id,user_id,COUNT(*) AS total')
+                ->group('store_id,user_id')
+                ->select()
+                ->toArray();
+            foreach ($staffCounts as $count) {
+                $store = $storesById[$count['store_id']];
+                if ((int)$store['user_id'] === (int)$count['user_id']) {
+                    $brandId = $store['brand_id'];
+                    $staffByBrand[$brandId] = ($staffByBrand[$brandId] ?? 0) + (int)$count['total'];
+                }
+            }
+        }
 
-        $storesByBrand = array_column($storeCounts, 'total', 'brand_id');
-        $staffByBrand = array_column($staffCounts, 'total', 'brand_id');
         foreach ($brands as &$brand) {
             $brand['store_count'] = (int)($storesByBrand[$brand['id']] ?? 0);
             $brand['staff_count'] = (int)($staffByBrand[$brand['id']] ?? 0);
@@ -56,8 +59,7 @@ class BrandLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantBrand::where('tenant_id', $this->adminInfo['tenant_id'])
-            ->whereNull('delete_time');
+        $query = MerchantBrand::whereNull('delete_time');
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {
             $escaped = strtr($keyword, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);

@@ -10,9 +10,9 @@ use Throwable;
 
 class BrandAdminLogic extends BaseLogic
 {
-    public static function detail(int $id, int $tenantId): array
+    public static function detail(int $id): array
     {
-        $brand = MerchantBrand::where('tenant_id', $tenantId)
+        $brand = MerchantBrand::query()
             ->where('id', $id)
             ->whereNull('delete_time')
             ->findOrEmpty();
@@ -25,7 +25,7 @@ class BrandAdminLogic extends BaseLogic
         foreach (array_keys(MerchantBrand::SECTION_LABELS) as $field) {
             $data[$field] = (string)($data[$field] ?? '');
         }
-        $stores = MerchantStore::where('tenant_id', $tenantId)
+        $stores = MerchantStore::query()
             ->where('brand_id', $id)
             ->where('user_id', $brand->user_id)
             ->whereNull('delete_time')
@@ -35,7 +35,7 @@ class BrandAdminLogic extends BaseLogic
             ->toArray();
         $staffByStore = [];
         if ($stores) {
-            $counts = MerchantStaff::where('tenant_id', $tenantId)
+            $counts = MerchantStaff::query()
                 ->where('user_id', $brand->user_id)
                 ->whereIn('store_id', array_column($stores, 'id'))
                 ->whereNull('delete_time')
@@ -53,9 +53,9 @@ class BrandAdminLogic extends BaseLogic
         return $data;
     }
 
-    public static function edit(array $params, int $tenantId): bool
+    public static function edit(array $params): bool
     {
-        $brand = MerchantBrand::where('tenant_id', $tenantId)
+        $brand = MerchantBrand::query()
             ->where('id', (int)$params['id'])
             ->whereNull('delete_time')
             ->findOrEmpty();
@@ -73,7 +73,7 @@ class BrandAdminLogic extends BaseLogic
             self::setError('请填写品牌名称');
             return false;
         }
-        if (MerchantBrand::where('tenant_id', $tenantId)
+        if (MerchantBrand::query()
             ->where('user_id', $brand->user_id)
             ->where('name', $fields['name'])
             ->where('id', '<>', $brand->id)
@@ -84,7 +84,7 @@ class BrandAdminLogic extends BaseLogic
         }
 
         try {
-            MerchantBrand::where('tenant_id', $tenantId)
+            MerchantBrand::query()
                 ->where('id', $brand->id)
                 ->whereNull('delete_time')
                 ->update($fields + ['update_time' => time()]);

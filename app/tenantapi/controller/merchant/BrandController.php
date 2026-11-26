@@ -19,14 +19,14 @@ class BrandController extends BaseAdminController
     public function detail()
     {
         $params = (new BrandAdminValidate())->goCheck('detail');
-        $brand = BrandAdminLogic::detail((int)$params['id'], $this->adminInfo['tenant_id']);
+        $brand = BrandAdminLogic::detail((int)$params['id']);
         return $brand === [] ? $this->fail(BrandAdminLogic::getError()) : $this->data($brand);
     }
 
     public function edit()
     {
         $params = (new BrandAdminValidate())->post()->goCheck('edit');
-        if (!BrandAdminLogic::edit($params, $this->adminInfo['tenant_id'])) {
+        if (!BrandAdminLogic::edit($params)) {
             return $this->fail(BrandAdminLogic::getError());
         }
         return $this->success('编辑成功', [], 1, 1);

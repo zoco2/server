@@ -28,7 +28,7 @@ class StoreController extends BaseAdminController
     public function detail()
     {
         $params = (new StoreValidate())->get()->goCheck('detail');
-        $result = StoreAdminLogic::detail((int)$params['id'], $this->adminInfo['tenant_id']);
+        $result = StoreAdminLogic::detail((int)$params['id']);
         if ($result === [] && StoreAdminLogic::hasError()) {
             return $this->fail(StoreAdminLogic::getError());
         }
@@ -42,7 +42,7 @@ class StoreController extends BaseAdminController
     public function add()
     {
         $params = (new StoreValidate())->post()->goCheck('add');
-        if (!StoreAdminLogic::add($params, $this->adminInfo['tenant_id'])) {
+        if (!StoreAdminLogic::add($params)) {
             return $this->fail(StoreAdminLogic::getError());
         }
         return $this->success('创建成功', [], 1, 1);
@@ -55,7 +55,7 @@ class StoreController extends BaseAdminController
     public function edit()
     {
         $params = (new StoreValidate())->post()->goCheck('edit');
-        if (!StoreAdminLogic::edit($params, $this->adminInfo['tenant_id'])) {
+        if (!StoreAdminLogic::edit($params)) {
             return $this->fail(StoreAdminLogic::getError());
         }
         return $this->success('保存成功', [], 1, 1);
@@ -68,7 +68,7 @@ class StoreController extends BaseAdminController
     public function delete()
     {
         $params = (new StoreValidate())->post()->goCheck('delete');
-        if (!StoreAdminLogic::delete((int)$params['id'], $this->adminInfo['tenant_id'])) {
+        if (!StoreAdminLogic::delete((int)$params['id'])) {
             return $this->fail(StoreAdminLogic::getError());
         }
         return $this->success('删除成功', [], 1, 1);

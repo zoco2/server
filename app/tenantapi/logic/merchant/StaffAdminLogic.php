@@ -13,9 +13,9 @@ class StaffAdminLogic extends BaseLogic
 {
     private const DUPLICATE_MOBILE = '该门店已存在相同手机号的员工';
 
-    public static function detail(int $id, int $tenantId): array
+    public static function detail(int $id): array
     {
-        $staff = self::staffQuery($id, $tenantId)->findOrEmpty();
+        $staff = self::staffQuery($id)->findOrEmpty();
         if ($staff->isEmpty()) {
             self::setError('员工不存在或无权限');
             return [];
@@ -23,29 +23,29 @@ class StaffAdminLogic extends BaseLogic
         return $staff->toArray();
     }
 
-    public static function add(array $params, int $tenantId): bool
+    public static function add(array $params): bool
     {
-        return self::persist($params, $tenantId, null);
+        return self::persist($params, null);
     }
 
-    public static function edit(array $params, int $tenantId): bool
+    public static function edit(array $params): bool
     {
-        return self::persist($params, $tenantId, (int)$params['id']);
+        return self::persist($params, (int)$params['id']);
     }
 
-    private static function persist(array $params, int $tenantId, ?int $id): bool
+    private static function persist(array $params, ?int $id): bool
     {
         try {
-            Db::transaction(static function () use ($params, $tenantId, $id): void {
+            Db::transaction(static function () use ($params, $id): void {
                 $storeId = (int)$params['store_id'];
                 // 锁住目标门店，串行处理同一门店的员工变更，并与门店删除互斥。
-                $store = MerchantStore::where('tenant_id', $tenantId)
+                $store = MerchantStore::query()
                     ->where('id', $storeId)->whereNull('delete_time')
                     ->field('id,user_id')->lock(true)->findOrEmpty();
                 if ($store->isEmpty()) {
                     throw new DomainException('所属门店不存在或无权限');
                 }
-                if ($id !== null && self::staffQuery($id, $tenantId)->lock(true)->findOrEmpty()->isEmpty()) {
+                if ($id !== null && self::staffQuery($id)->lock(true)->findOrEmpty()->isEmpty()) {
                     throw new DomainException('员工不存在或无权限');
                 }
 
@@ -54,7 +54,7 @@ class StaffAdminLogic extends BaseLogic
                     throw new DomainException('请填写员工姓名');
                 }
                 $mobile = trim((string)$params['mobile']);
-                $duplicate = MerchantStaff::where('tenant_id', $tenantId)
+                $duplicate = MerchantStaff::query()
                     ->where('store_id', $storeId)->where('mobile', $mobile)->whereNull('delete_time');
                 if ($id !== null) {
                     $duplicate->where('id', '<>', $id);
@@ -78,9 +78,9 @@ class StaffAdminLogic extends BaseLogic
                     }
                 }
                 if ($id === null) {
-                    MerchantStaff::create($fields + ['tenant_id' => $tenantId, 'create_time' => $now]);
+                    MerchantStaff::create($fields + ['create_time' => $now]);
                 } else {
-                    self::staffQuery($id, $tenantId)->update($fields);
+                    self::staffQuery($id)->update($fields);
                 }
             });
             return true;
@@ -91,11 +91,11 @@ class StaffAdminLogic extends BaseLogic
         }
     }
 
-    public static function delete(int $id, int $tenantId): bool
+    public static function delete(int $id): bool
     {
         try {
-            return Db::transaction(static function () use ($id, $tenantId): bool {
-                $staff = self::staffQuery($id, $tenantId)->lock(true)->findOrEmpty();
+            return Db::transaction(static function () use ($id): bool {
+                $staff = self::staffQuery($id)->lock(true)->findOrEmpty();
                 if ($staff->isEmpty()) {
                     self::setError('员工不存在或无权限');
                     return false;
@@ -112,8 +112,8 @@ class StaffAdminLogic extends BaseLogic
         }
     }
 
-    private static function staffQuery(int $id, int $tenantId)
+    private static function staffQuery(int $id)
     {
-        return MerchantStaff::where('tenant_id', $tenantId)->where('id', $id)->whereNull('delete_time');
+        return MerchantStaff::query()->where('id', $id)->whereNull('delete_time');
     }
 }
