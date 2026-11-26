@@ -48,6 +48,10 @@ class MenuLogic extends BaseLogic
     public static function getMenuByAdminId($adminId)
     {
         $admin = TenantAdmin::findOrEmpty($adminId);
+        if ($admin->isEmpty()) {
+            return [];
+        }
+        $templateId = (int)env('tenant.menu_template_id', 0);
         $tenantId = 0;
         if (!$admin->isEmpty()) {
             $tenantId = (int)$admin['tenant_id'];
@@ -73,7 +77,46 @@ class MenuLogic extends BaseLogic
             $where[] = ['id', 'in', $roleMenu];
         }
 
-        $menu = TenantSystemMenu::where($where)
+        $query = TenantSystemMenu::where($where);
+        if ($templateId > 0 && $templateId !== $tenantId) {
+            $template = Tenant::withoutGlobalScope(['tenantId'])->findOrEmpty($templateId);
+            if ($template->isEmpty()) {
+                return [];
+            }
+            $shared = TenantSystemMenu::withoutGlobalScope(['tenantId'])
+                ->where('tenant_id', $templateId)->whereIn('type', ['M', 'C'])->where('is_disable', 0);
+            if ((int)$template['tactics'] === 1) {
+                $shared->suffix('_' . $template['sn']);
+            }
+            $rows = $shared->order(['sort' => 'desc', 'id' => 'asc'])->select()->toArray();
+            if ((int)$admin['root'] !== 1) {
+                // Role bindings use local menu IDs. Match the authorized routes by their menu fields.
+                $menuKey = static fn ($row) => serialize([
+                    $row['type'], $row['perms'], $row['paths'], $row['component'],
+                ]);
+                $grants = [];
+                foreach ($query->select() as $row) {
+                    if ($row['perms'] !== '' || $row['paths'] !== '' || $row['component'] !== '') {
+                        $grants[$menuKey($row)] = true;
+                    }
+                }
+                $rowsById = array_column($rows, null, 'id');
+                $allowed = [];
+                foreach ($rows as $row) {
+                    if (!isset($grants[$menuKey($row)])) {
+                        continue;
+                    }
+                    $allowed[$row['id']] = true;
+                    while (($row = $rowsById[$row['pid']] ?? null) && $row['type'] === 'M' && !isset($allowed[$row['id']])) {
+                        $allowed[$row['id']] = true;
+                    }
+                }
+                $rows = array_filter($rows, static fn (array $row) => isset($allowed[$row['id']]));
+            }
+            return self::sortTopLevelTailMenus(linear_to_tree($rows, 'children'));
+        }
+
+        $menu = $query
             ->order(['sort' => 'desc', 'id' => 'asc'])
             ->select()
             ->toArray();
