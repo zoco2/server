@@ -49,6 +49,45 @@ final class PublishTaskMaterialService
         return $normalized;
     }
 
+    /** @return array<string,list<string>> */
+    public static function normalizePlatformMaterials(array $platforms, array $groupIds, mixed $requested): array
+    {
+        if ($requested !== null && (!is_array($requested) || array_diff(array_keys($requested), $platforms))) {
+            throw new InvalidArgumentException('发布平台的素材配置无效');
+        }
+
+        $normalized = [];
+        foreach ($platforms as $platform) {
+            if (!isset(self::MEDIA_BY_PLATFORM[$platform])) {
+                throw new InvalidArgumentException('发布平台无效');
+            }
+            if ($requested === null) {
+                $mediaType = self::configuredMediaType($platform, $groupIds);
+                $normalized[$platform] = array_values(array_intersect([$mediaType, 'copy', 'topic'], array_keys($groupIds)));
+                continue;
+            }
+
+            $types = $requested[$platform] ?? null;
+            if (!is_array($types) || !array_is_list($types)) {
+                throw new InvalidArgumentException('请为每个发布平台选择素材类型');
+            }
+            $selected = [];
+            foreach ($types as $type) {
+                if (!is_string($type) || !in_array($type, self::TYPES, true)
+                    || !isset($groupIds[$type]) || isset($selected[$type])) {
+                    throw new InvalidArgumentException('平台素材类型重复、无效或未配置成片组');
+                }
+                $selected[$type] = true;
+            }
+            if (isset($selected['video']) === isset($selected['finished_image'])) {
+                throw new InvalidArgumentException('每个发布平台必须选择视频或图片其中一种');
+            }
+            $normalized[$platform] = $types;
+        }
+
+        return $normalized;
+    }
+
     /** @return array{counts:object,limits:object} */
     public static function usage(int $tenantId, int $userId, mixed $type, mixed $refs): array
     {
@@ -121,11 +160,13 @@ final class PublishTaskMaterialService
         }
         $scope = self::assignmentScope($tenantId, $userId, $runId, $staffId, $platform);
         $owner = ['tenant_id' => $tenantId, 'user_id' => $userId];
-        if (isset($groupIds['video']) && class_exists(SmartEditOutputGroupService::class) && in_array(Db::name('smart_edit_group')->getTable(), Db::connect()->getTables(), true)) {
+        $mediaType = self::configuredMediaType($platform, $groupIds);
+        $groupIds = array_intersect_key($groupIds, array_fill_keys([$mediaType, 'copy', 'topic'], true));
+        if ($mediaType === 'video' && class_exists(SmartEditOutputGroupService::class) && in_array(Db::name('smart_edit_group')->getTable(), Db::connect()->getTables(), true)) {
             SmartEditOutputGroupService::repairMissingMemberships($tenantId, $userId, $groupIds['video'] ?: null);
         }
 
-        $create = static function () use ($scope, $owner, $platform, $groupIds): ?array {
+        $create = static function () use ($scope, $owner, $mediaType, $groupIds): ?array {
             $run = PublishTaskRun::where(['user_id' => $owner['user_id'], 'id' => $scope['run_id']])->lock(true)->field('id')->findOrEmpty();
             if ($run->isEmpty()) {
                 throw new InvalidArgumentException('任务执行记录不存在');
@@ -136,22 +177,13 @@ final class PublishTaskMaterialService
 
             $groups = self::lockGroups($owner, $groupIds);
             $media = new PublishTaskMediaPool($owner['tenant_id'], $owner['user_id']);
-            $materials = [];
-            $missing = [];
-            foreach (self::MEDIA_BY_PLATFORM[$platform] as $type) {
-                if (!isset($groups[$type])) {
-                    continue;
-                }
-                $item = self::pick($owner, $type, $groups[$type], $media);
-                if ($item !== null) {
-                    $materials[$type] = $item;
-                    break;
-                }
-                $missing[] = ['type' => $type, 'name' => $groups[$type]['name']];
+            $requiredGroup = $groups[$mediaType];
+            $requiredMaterial = self::pick($owner, $mediaType, $requiredGroup, $media);
+            if ($requiredMaterial === null) {
+                throw new PublishTaskMaterialShortage([['type' => $mediaType, 'name' => $requiredGroup['name']]]);
             }
-            if (!$materials) {
-                throw new PublishTaskMaterialShortage($missing);
-            }
+
+            $materials = [$mediaType => $requiredMaterial];
             foreach (['copy', 'topic'] as $type) {
                 if (isset($groups[$type])) {
                     $item = self::pick($owner, $type, $groups[$type], $media);
@@ -188,6 +220,16 @@ final class PublishTaskMaterialService
                 }
             }
         }
+    }
+
+    private static function configuredMediaType(string $platform, array $groupIds): string
+    {
+        foreach (self::MEDIA_BY_PLATFORM[$platform] as $type) {
+            if (isset($groupIds[$type])) {
+                return $type;
+            }
+        }
+        throw new InvalidArgumentException('请选择视频或图片成片组');
     }
 
     private static function assignmentScope(int $tenantId, int $userId, int $runId, int $staffId, string $platform): array
