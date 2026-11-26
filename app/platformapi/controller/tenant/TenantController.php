@@ -78,6 +78,7 @@ class TenantController extends BaseAdminController
     {
         $params = (new TenantValidate())->post()->goCheck('add');
         try {
+            $menuTemplateId = TenantSystemMenuLogic::templateTenantId();
             // 开始事务
             DB::startTrans();
             // 验证参数
@@ -87,6 +88,9 @@ class TenantController extends BaseAdminController
             if (isset($params['tactics']) && $params['tactics'] == '1') {
                 (new TenantCreatService)->createTenantTable($tenant['sn']);
                 (new TenantCreatService)->initializationTenantData($tenant['id'],$tenant['sn'],$params);
+                if ($menuTemplateId > 0) {
+                    TenantSystemMenuLogic::initialization($tenant['id'], $menuTemplateId, $tenant['sn']);
+                }
             }else{
                 // 初始化租户文章列表
                 ArticleLogic::initialization($tenant['id']);
@@ -95,7 +99,7 @@ class TenantController extends BaseAdminController
                 // 初始化管理员部门信息
                 TenantDept::initialization($tenant['id'], $managerInfo['id']);
                 // 创建租户菜单权限
-                TenantSystemMenuLogic::initialization($tenant['id']);
+                TenantSystemMenuLogic::initialization($tenant['id'], $menuTemplateId);
                 // 初始化支付方式配置
                 PayConfigLogic::initialization($tenant['id']);
                 // 初始化支付配置是否开启

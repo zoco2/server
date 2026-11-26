@@ -462,13 +462,17 @@ class UpgradeLogic extends BaseLogic
             return true;
         }
         // 获取全部租户信息
+        $menuTemplateId = TenantSystemMenuLogic::templateTenantId();
         $tenantUser = Tenant::query()->select()->toArray();
         foreach ($tenantUser as $tenant) {
+            if ((int)$tenant['id'] === $menuTemplateId) {
+                continue;
+            }
             // 删除对应租户菜单信息
             TenantSystemMenu::query()->where(['tenant_id' => $tenant['id']])->delete();
 
             // 增加对应菜单信息 创建租户菜单权限
-            TenantSystemMenuLogic::initialization($tenant['id']);
+            TenantSystemMenuLogic::initialization($tenant['id'], 0);
         }
         return true;
     }
