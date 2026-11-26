@@ -19,6 +19,7 @@ use app\tenantapi\controller\BaseAdminController;
 use app\tenantapi\lists\auth\MenuLists;
 use app\tenantapi\logic\auth\MenuLogic;
 use app\tenantapi\validate\auth\MenuValidate;
+use think\exception\HttpResponseException;
 
 
 /**
@@ -75,6 +76,7 @@ class MenuController extends BaseAdminController
      */
     public function add()
     {
+        $this->requireMenuWriteAccess();
         $params = (new MenuValidate())->post()->goCheck('add');
         MenuLogic::add($params);
         return $this->success('操作成功', [], 1, 1);
@@ -89,6 +91,7 @@ class MenuController extends BaseAdminController
      */
     public function edit()
     {
+        $this->requireMenuWriteAccess();
         $params = (new MenuValidate())->post()->goCheck('edit');
         MenuLogic::edit($params);
         return $this->success('操作成功', [], 1, 1);
@@ -103,6 +106,7 @@ class MenuController extends BaseAdminController
      */
     public function delete()
     {
+        $this->requireMenuWriteAccess();
         $params = (new MenuValidate())->post()->goCheck('delete');
         MenuLogic::delete($params);
         return $this->success('操作成功', [], 1, 1);
@@ -117,9 +121,18 @@ class MenuController extends BaseAdminController
      */
     public function updateStatus()
     {
+        $this->requireMenuWriteAccess();
         $params = (new MenuValidate())->post()->goCheck('status');
         MenuLogic::updateStatus($params);
         return $this->success('操作成功', [], 1, 1);
+    }
+
+    private function requireMenuWriteAccess(): void
+    {
+        $templateId = (int)env('tenant.menu_template_id', 0);
+        if ($templateId > 0 && $this->tenantId !== $templateId) {
+            throw new HttpResponseException($this->fail('只有菜单模板租户可以修改菜单')->code(403));
+        }
     }
 
 
