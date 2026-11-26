@@ -84,7 +84,15 @@ final class PublishTaskService
             'update_time' => $now,
         ];
         if ($groupIds !== null) {
-            $row['work_group_ids'] = json_encode($groupIds, JSON_THROW_ON_ERROR);
+            $platformMaterials = PublishTaskMaterialService::normalizePlatformMaterials(
+                $platforms,
+                $groupIds,
+                $input['platform_materials'] ?? null
+            );
+            $row['work_group_ids'] = json_encode(
+                $groupIds + ['platform_materials' => $platformMaterials],
+                JSON_THROW_ON_ERROR
+            );
         }
         $id = Db::transaction(static function () use ($tenantId, $row): int {
             // 模型保存会忽略缺失字段，先检查旧表是否具备完整的任务字段。
@@ -205,13 +213,19 @@ final class PublishTaskService
             throw new InvalidArgumentException('此任务未选择成片组');
         }
 
+        $groupIds = json_decode($task->work_group_ids, true, flags: JSON_THROW_ON_ERROR);
+        $platformMaterials = $groupIds['platform_materials'] ?? null;
+        unset($groupIds['platform_materials']);
+        $types = $platformMaterials[$platform]
+            ?? PublishTaskMaterialService::normalizePlatformMaterials([$platform], $groupIds, null)[$platform];
+
         return PublishTaskMaterialService::assign(
             (int)request()->tenantId,
             (int)$task->user_id,
             $runId,
             $staffId,
             $platform,
-            json_decode($task->work_group_ids, true, flags: JSON_THROW_ON_ERROR)
+            array_intersect_key($groupIds, array_flip($types))
         );
     }
 
@@ -634,8 +648,13 @@ final class PublishTaskService
         $row['staff_ids'] = $row['staff_ids'] === null
             ? [] : json_decode($row['staff_ids'], true, flags: JSON_THROW_ON_ERROR);
         $row['platforms'] = json_decode($row['platforms'], true, flags: JSON_THROW_ON_ERROR);
-        $row['work_group_ids'] = isset($row['work_group_ids'])
+        $groupIds = isset($row['work_group_ids'])
             ? json_decode($row['work_group_ids'], true, flags: JSON_THROW_ON_ERROR) : null;
+        $row['platform_materials'] = $groupIds['platform_materials'] ?? null;
+        if ($groupIds !== null) {
+            unset($groupIds['platform_materials']);
+        }
+        $row['work_group_ids'] = $groupIds;
         foreach (['id', 'weekday', 'next_run_at', 'last_run_at', 'create_time', 'update_time'] as $key) {
             $row[$key] = $row[$key] === null ? null : (int)$row[$key];
         }

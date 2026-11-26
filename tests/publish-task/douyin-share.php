@@ -66,15 +66,35 @@ foreach (['video' => 'uploads/clip.mp4', 'finished_image' => 'uploads/photo.jpg'
         'type' => $kind === 'video' ? 20 : 10, 'uri' => $uri, 'storage_engine' => 'local',
     ]);
     Db::name('work_group')->insert([
-        'id' => $id, 'tenant_id' => 1, 'user_id' => 2, 'type' => $kind, 'name' => $kind, 'max_uses' => 1,
+        'id' => $id, 'tenant_id' => 1, 'user_id' => 2, 'type' => $kind, 'name' => $kind, 'max_uses' => $kind === 'video' ? 2 : 1,
     ]);
     Db::name('work_item')->insert([
         'tenant_id' => 1, 'user_id' => 2, 'type' => $kind, 'group_id' => $id, 'source_ref' => 'upload:result:' . $id,
     ]);
 }
+Db::execute('CREATE TABLE test_merchant_copy (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, name TEXT, content TEXT)');
+Db::execute('CREATE TABLE test_merchant_topic (id INTEGER PRIMARY KEY, tenant_id INTEGER, user_id INTEGER, name TEXT)');
+foreach (['copy' => 6, 'topic' => 7] as $kind => $groupId) {
+    $row = ['id' => 1, 'tenant_id' => 1, 'user_id' => 2, 'name' => '可选素材'];
+    if ($kind === 'copy') {
+        $row['content'] = '可选文案';
+    }
+    Db::name('merchant_' . $kind)->insert($row);
+    Db::name('work_group')->insert([
+        'id' => $groupId, 'tenant_id' => 1, 'user_id' => 2, 'type' => $kind, 'name' => $kind, 'max_uses' => 1,
+    ]);
+    Db::name('work_item')->insert([
+        'tenant_id' => 1, 'user_id' => 2, 'type' => $kind, 'group_id' => $groupId, 'source_ref' => 'merchant_' . $kind . ':1',
+    ]);
+}
 $input = [
     'content' => '员工操作说明', 'staff_ids' => [3], 'platforms' => ['douyin', 'xiaohongshu', 'kuaishou'],
-    'push_mode' => 'immediate', 'work_group_ids' => ['video' => 4, 'finished_image' => 5],
+    'push_mode' => 'immediate', 'work_group_ids' => ['video' => 4, 'finished_image' => 5, 'copy' => 6, 'topic' => 7],
+    'platform_materials' => [
+        'douyin' => ['video'],
+        'xiaohongshu' => ['finished_image'],
+        'kuaishou' => ['finished_image'],
+    ],
 ];
 $id = PublishTaskService::create(1, 2, $input)['ids'][0];
 $task = Db::name('publish_task')->where('id', $id);
@@ -94,15 +114,18 @@ try {
     check($assignments->count() === 0, 'Detail and signing never allocate');
 
     $douyin = PublishTaskService::assignMaterial($token, 'douyin');
-    check($douyin['video']['ref'] === 'upload:result:4', 'Douyin prefers video');
+    check(array_keys($douyin) === ['video'] && $douyin['video']['ref'] === 'upload:result:4', 'Douyin only allocates its configured video');
     check($douyin === PublishTaskService::assignMaterial($token, 'douyin'), 'Repeated platform clicks reuse the allocation');
-    check(PublishTaskService::assignMaterial($token, 'xiaohongshu')['finished_image']['ref'] === 'upload:result:5', 'Another platform allocates separately');
+    $xiaohongshu = PublishTaskService::assignMaterial($token, 'xiaohongshu');
+    check(array_keys($xiaohongshu) === ['finished_image'] && $xiaohongshu['finished_image']['ref'] === 'upload:result:5',
+        'Picture platforms allocate only the configured image group');
     $request->withPost(['token' => $token, 'platform' => 'kuaishou']);
     $shortage = $controller->assignMaterial()->getData();
-    check($shortage['code'] === 1 && count($shortage['data']['missing_groups']) === 2, 'Reports both exhausted media groups');
+    check($shortage['code'] === 1 && $shortage['data']['missing_groups'] === [['type' => 'finished_image', 'name' => 'finished_image']],
+        'An exhausted image group never falls back to an available video');
     check($assignments->count() === 2, 'Shortage and retries leave counts unchanged');
     $usage = PublishTaskMaterialService::usage(1, 2, 'video', ['upload:result:4']);
-    check($usage['counts']->{'upload:result:4'} === 1 && $usage['limits']->{'upload:result:4'} === 1, 'Scoped use count and group limit');
+    check($usage['counts']->{'upload:result:4'} === 1 && $usage['limits']->{'upload:result:4'} === 2, 'Scoped use count and group limit');
 
     $request->withPost(['token' => $token, 'tenant_id' => 99, 'video_path' => 'https://other.example/video.mp4']);
     $expectError('抖音分享凭据不可用');
@@ -119,7 +142,7 @@ try {
     check($params['video_path'] === 'https://tenant.example/uploads/clip.mp4' && $params['client_key'] === 'test-key', 'Signed assigned media for the tenant');
     check($params['signature'] === DouyinH5ShareService::signature($params['nonce_str'], 'test-ticket', $params['timestamp']), 'Valid signature');
     check(!isset($params['title']), 'Employee instructions are not the post caption');
-    check($assignments->count() === 2, 'Signing an exhausted assignment does not consume another use');
+    check($assignments->count() === 2, 'Signing an assignment does not consume another use');
 
     Db::name('user_asset_state')->insert(['tenant_id' => 1, 'user_id' => 2, 'asset_ref' => 'upload:result:4', 'hidden_at' => 100]);
     $expectError('素材已移除或不可访问');

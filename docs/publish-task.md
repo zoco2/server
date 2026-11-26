@@ -36,7 +36,7 @@ Job 开始处理时将记录改为 `running`，逐个发送并把每个人的结
 
 ## 员工领取成片
 
-新员工任务通过 `work_group_ids` 保存成片组，可用键为 `video`（视频）、`finished_image`（图片）、`copy`（文案）、`topic`（发布话题）。组 ID 0 表示默认分组。视频和图片至少配置一组，小红书优先取图，抖音和快手优先取视频。首选组没有可用作品时尝试另一种已配置媒体；文案和话题可选。
+新员工任务通过 `work_group_ids` 保存成片组，可用键为 `video`（视频）、`finished_image`（图片）、`copy`（文案）、`topic`（发布话题）。组 ID 0 表示默认分组。`platform_materials` 为平台到素材类型数组的映射，例如 `{"douyin":["video","copy","topic"],"xiaohongshu":["finished_image"]}`。每个平台选择一种媒体。勾选文案或话题时，需配置对应成片组。员工领取时仅抽取该平台指定的类型，媒体组缺料时提示不足。文案和话题组选填，缺料时可继续发布媒体。
 
 员工页面打开后只读取详情。点击发布平台时，页面发送 `POST /api/publish_task/assignMaterial`，请求包含员工通知的 `token` 和 `platform`。成功返回 `data.materials`。没有必需媒体时返回 `data.missing_groups`，列出类型和组名，供页面提示「可用素材不足」。
 

@@ -116,8 +116,10 @@ final class PublishTaskController extends BaseApiController
                 $input['staff_ids'] = $this->request->post('staff_ids', null, null);
             }
             // 任务归属取自登录上下文，请求体只提供任务配置。
-            if (array_key_exists('work_group_ids', $input)) {
-                $input['work_group_ids'] = $this->request->post('work_group_ids', null, null);
+            foreach (['work_group_ids', 'platform_materials'] as $key) {
+                if (array_key_exists($key, $input)) {
+                    $input[$key] = $this->request->post($key, null, null);
+                }
             }
             return $this->success('', PublishTaskService::create(
                 (int)$this->request->tenantId, $this->userId, $input
