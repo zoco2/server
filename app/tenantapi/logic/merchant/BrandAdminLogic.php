@@ -14,7 +14,6 @@ class BrandAdminLogic extends BaseLogic
     {
         $brand = MerchantBrand::query()
             ->where('id', $id)
-            ->whereNull('delete_time')
             ->findOrEmpty();
         if ($brand->isEmpty()) {
             self::setError('品牌不存在或无权限');
@@ -28,7 +27,6 @@ class BrandAdminLogic extends BaseLogic
         $stores = MerchantStore::query()
             ->where('brand_id', $id)
             ->where('user_id', $brand->user_id)
-            ->whereNull('delete_time')
             ->field('id,name,status,contact_name,phone,address')
             ->order('id', 'desc')
             ->select()
@@ -38,7 +36,6 @@ class BrandAdminLogic extends BaseLogic
             $counts = MerchantStaff::query()
                 ->where('user_id', $brand->user_id)
                 ->whereIn('store_id', array_column($stores, 'id'))
-                ->whereNull('delete_time')
                 ->fieldRaw('store_id, COUNT(*) AS total')
                 ->group('store_id')
                 ->select()
@@ -57,7 +54,6 @@ class BrandAdminLogic extends BaseLogic
     {
         $brand = MerchantBrand::query()
             ->where('id', (int)$params['id'])
-            ->whereNull('delete_time')
             ->findOrEmpty();
         if ($brand->isEmpty()) {
             self::setError('品牌不存在或无权限');
@@ -77,7 +73,6 @@ class BrandAdminLogic extends BaseLogic
             ->where('user_id', $brand->user_id)
             ->where('name', $fields['name'])
             ->where('id', '<>', $brand->id)
-            ->whereNull('delete_time')
             ->count() > 0) {
             self::setError('品牌名称已存在');
             return false;
@@ -86,7 +81,6 @@ class BrandAdminLogic extends BaseLogic
         try {
             MerchantBrand::query()
                 ->where('id', $brand->id)
-                ->whereNull('delete_time')
                 ->update($fields + ['update_time' => time()]);
             return true;
         } catch (Throwable $e) {

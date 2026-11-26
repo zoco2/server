@@ -40,7 +40,7 @@ class StaffAdminLogic extends BaseLogic
                 $storeId = (int)$params['store_id'];
                 // 锁住目标门店，串行处理同一门店的员工变更，并与门店删除互斥。
                 $store = MerchantStore::query()
-                    ->where('id', $storeId)->whereNull('delete_time')
+                    ->where('id', $storeId)
                     ->field('id,user_id')->lock(true)->findOrEmpty();
                 if ($store->isEmpty()) {
                     throw new DomainException('所属门店不存在或无权限');
@@ -55,7 +55,7 @@ class StaffAdminLogic extends BaseLogic
                 }
                 $mobile = trim((string)$params['mobile']);
                 $duplicate = MerchantStaff::query()
-                    ->where('store_id', $storeId)->where('mobile', $mobile)->whereNull('delete_time');
+                    ->where('store_id', $storeId)->where('mobile', $mobile);
                 if ($id !== null) {
                     $duplicate->where('id', '<>', $id);
                 }
@@ -114,6 +114,6 @@ class StaffAdminLogic extends BaseLogic
 
     private static function staffQuery(int $id)
     {
-        return MerchantStaff::query()->where('id', $id)->whereNull('delete_time');
+        return MerchantStaff::query()->where('id', $id);
     }
 }

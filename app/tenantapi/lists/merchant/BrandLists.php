@@ -22,7 +22,6 @@ class BrandLists extends BaseAdminDataLists
 
         $ids = array_column($brands, 'id');
         $stores = MerchantStore::whereIn('brand_id', $ids)
-            ->whereNull('delete_time')
             ->field('id,brand_id,user_id')
             ->select()
             ->toArray();
@@ -31,7 +30,6 @@ class BrandLists extends BaseAdminDataLists
         $staffByBrand = [];
         if ($storesById) {
             $staffCounts = MerchantStaff::whereIn('store_id', array_keys($storesById))
-                ->whereNull('delete_time')
                 ->fieldRaw('store_id,user_id,COUNT(*) AS total')
                 ->group('store_id,user_id')
                 ->select()
@@ -59,7 +57,7 @@ class BrandLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantBrand::whereNull('delete_time');
+        $query = MerchantBrand::query();
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {
             $escaped = strtr($keyword, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);

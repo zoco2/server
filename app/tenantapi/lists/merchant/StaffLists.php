@@ -19,12 +19,11 @@ class StaffLists extends BaseAdminDataLists
         }
 
         $stores = MerchantStore::query()
-            ->whereNull('delete_time')
             ->whereIn('id', array_unique(array_column($staff, 'store_id')))
             ->column('name,brand_id', 'id');
         $brandIds = array_unique(array_column($stores, 'brand_id'));
         $brands = $brandIds ? MerchantBrand::query()
-            ->whereNull('delete_time')->whereIn('id', $brandIds)->column('name', 'id') : [];
+            ->whereIn('id', $brandIds)->column('name', 'id') : [];
         foreach ($staff as &$row) {
             $store = $stores[$row['store_id']] ?? null;
             $row['store_name'] = $store['name'] ?? '';
@@ -40,7 +39,7 @@ class StaffLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantStaff::query()->whereNull('delete_time');
+        $query = MerchantStaff::query();
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {
             $escaped = strtr($keyword, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);
@@ -52,7 +51,7 @@ class StaffLists extends BaseAdminDataLists
         if ((int)($this->params['brand_id'] ?? 0) > 0) {
             $storeIds = MerchantStore::query()
                 ->where('brand_id', (int)$this->params['brand_id'])
-                ->whereNull('delete_time')->column('id');
+                ->column('id');
             $query->whereIn('store_id', $storeIds ?: [0]);
         }
         return $query;

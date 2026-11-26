@@ -28,7 +28,6 @@ class StoreAdminLogic extends BaseLogic
         $data = $store->toArray();
         $data['brand_name'] = MerchantBrand::query()
             ->where('id', $store->brand_id)
-            ->whereNull('delete_time')
             ->value('name') ?? '';
         $data['location'] = '';
         if ($store->latitude !== null && $store->longitude !== null) {
@@ -80,7 +79,6 @@ class StoreAdminLogic extends BaseLogic
                         // 员工的所属用户随门店变更，保持品牌、门店、员工的归属一致。
                         MerchantStaff::query()
                             ->where('store_id', $store->id)
-                            ->whereNull('delete_time')
                             ->update(['user_id' => $brand->user_id, 'update_time' => $now]);
                     }
                 }
@@ -103,7 +101,6 @@ class StoreAdminLogic extends BaseLogic
                 }
                 $staff = MerchantStaff::query()
                     ->where('store_id', $id)
-                    ->whereNull('delete_time')
                     ->field('id')
                     ->lock(true)
                     ->findOrEmpty();
@@ -123,14 +120,13 @@ class StoreAdminLogic extends BaseLogic
 
     private static function storeQuery(int $id)
     {
-        return MerchantStore::query()->where('id', $id)->whereNull('delete_time');
+        return MerchantStore::query()->where('id', $id);
     }
 
     private static function lockBrand(int $id): MerchantBrand
     {
         $brand = MerchantBrand::query()
             ->where('id', $id)
-            ->whereNull('delete_time')
             ->field('id,user_id')
             ->lock(true)
             ->findOrEmpty();

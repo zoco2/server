@@ -22,7 +22,6 @@ class StoreLists extends BaseAdminDataLists
         }
 
         $names = MerchantBrand::query()
-            ->whereNull('delete_time')
             ->whereIn('id', array_unique(array_column($stores, 'brand_id')))
             ->column('name', 'id');
         foreach ($stores as &$store) {
@@ -38,8 +37,7 @@ class StoreLists extends BaseAdminDataLists
 
     private function query()
     {
-        $query = MerchantStore::query()
-            ->whereNull('delete_time');
+        $query = MerchantStore::query();
         $keyword = trim((string)($this->params['keyword'] ?? ''));
         if ($keyword !== '') {
             $escaped = strtr($keyword, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);
