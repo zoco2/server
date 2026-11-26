@@ -2,13 +2,12 @@
 
 namespace app\common\model\merchant;
 
-use app\common\model\BaseModel;
 use think\model\concern\SoftDelete;
 
 /**
  * 商家门店。
  */
-class MerchantStore extends BaseModel
+class MerchantStore extends MerchantProfileModel
 {
     use SoftDelete;
 

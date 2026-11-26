@@ -4,10 +4,35 @@ namespace app\tenantapi\controller\merchant;
 
 use app\common\validate\merchant\BrandValidate;
 use app\tenantapi\controller\BaseAdminController;
+use app\tenantapi\lists\merchant\BrandLists;
+use app\tenantapi\logic\merchant\BrandAdminLogic;
 use app\tenantapi\logic\merchant\BrandLogic;
+use app\tenantapi\validate\merchant\BrandAdminValidate;
 
 class BrandController extends BaseAdminController
 {
+    public function lists()
+    {
+        return $this->dataLists(new BrandLists());
+    }
+
+    public function detail()
+    {
+        $params = (new BrandAdminValidate())->goCheck('detail');
+        $brand = BrandAdminLogic::detail((int)$params['id']);
+        return $brand === [] ? $this->fail(BrandAdminLogic::getError()) : $this->data($brand);
+    }
+
+    public function edit()
+    {
+        $params = (new BrandAdminValidate())->post()->goCheck('edit');
+        if (!BrandAdminLogic::edit($params)) {
+            return $this->fail(BrandAdminLogic::getError());
+        }
+        return $this->success('编辑成功', [], 1, 1);
+    }
+
+
     public function add()
     {
         $params = (new BrandValidate())->post()->goCheck('add');
