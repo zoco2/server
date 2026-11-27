@@ -86,7 +86,7 @@ same(['TEN501'], array_column(NfcCodeService::storeLists(10, ['store_id' => 1])[
 request()->tenantId = 4;
 same(2, NfcCodeService::storeLists(10, ['store_id' => 1])['count'], 'Original store bindings remain intact');
 
-// 门店改换归属后仍显示首次绑定人，历史数据中的当前归属不冒充绑定人。
+// 门店更换归属后，既有绑定记录展示当前所属用户。
 foreach (['la_user', 'la_user_test'] as $table) {
     $connection->execute('CREATE TABLE ' . $table . ' (
         id INTEGER PRIMARY KEY,
@@ -99,7 +99,6 @@ foreach (['la_user', 'la_user_test'] as $table) {
 $connection->execute("INSERT INTO la_user VALUES (10,5,'其他租户用户','outside',NULL)");
 $connection->execute("INSERT INTO la_user_test VALUES (10,4,'最初绑定人','original',NULL),(11,4,'','current',NULL)");
 $connection->execute('UPDATE la_merchant_store_test SET user_id=11, delete_time=1 WHERE id=1');
-NfcCode::where('code', 'TEN402')->update(['bound_user_id' => null]);
 
 request()->source = AdminTerminalEnum::TENANT;
 $bound = NfcCodeService::tenantLists([
@@ -110,13 +109,12 @@ same(['TEN401'], array_column($bound['lists'], 'code'), 'Tenant list paginates m
 $card = $bound['lists'][0];
 same(true, $card['is_bound'], 'Bound status survives soft-deleted store');
 same('分表门店', $card['store_name'], 'Store lookup uses current split tenant table');
-same(10, (int)$card['bound_user_id'], 'Activation persisted the first binder');
-same('最初绑定人', $card['bound_user_name'], 'Ownership changes do not overwrite binder');
+same(11, (int)$card['bound_user_id'], 'Tenant list resolves the current store owner ID');
+same('current', $card['bound_user_name'], 'Tenant list falls back to the new owner account');
 same(100, $card['activated_at'], 'Tenant list reports original activation time');
 
-$legacy = NfcCodeService::tenantLists(['code' => ' ten402 '])['lists'][0];
-same(null, $legacy['bound_user_name'], 'Historical bindings do not claim a recorded actor');
-same('current', $legacy['store_owner_name'], 'Current store owner is separately available');
+$second = NfcCodeService::tenantLists(['code' => ' ten402 '])['lists'][0];
+same('current', $second['bound_user_name'], 'Multiple cards on a store show the same current owner');
 $unbound = NfcCodeService::tenantLists(['batch_no' => 'binding_fixture', 'status' => 'unbound']);
 same(['TEN403'], array_column($unbound['lists'], 'code'), 'Unbound filter excludes other tenants and platform stock');
 same(false, $unbound['lists'][0]['is_bound'], 'Unbound status derived from missing store');
@@ -141,4 +139,4 @@ request()->tenantId = null;
 same(0, NfcCode::count(), 'Missing tenant context cannot read allocated codes');
 rejected(fn () => NfcCodeService::storeLists(10, ['store_id' => 1]), 'Missing tenant context accepted');
 
-echo "PASS NFC store binding, tenant lists, binder history and tenant isolation\n";
+echo "PASS NFC store binding, tenant lists, current store ownership and tenant isolation\n";

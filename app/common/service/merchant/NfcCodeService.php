@@ -262,7 +262,7 @@ final class NfcCodeService
         return $query->field('id,name')->order('id', 'desc')->limit(30)->select()->toArray();
     }
 
-    /** 查询当前租户的码牌，按页查找门店及绑定人。 */
+    /** 查询当前租户的码牌，按页查找绑定门店及其当前所属用户。 */
     public static function tenantLists(array $input): array
     {
         if (!AdminTerminalEnum::isTenant() || (int)(request()->tenantId ?? 0) <= 0) {
@@ -296,29 +296,26 @@ final class NfcCodeService
         };
 
         $count = $filteredQuery()->count();
-        $rows = $filteredQuery()->field('id,code,batch_no,store_id,bound_user_id,update_time')
+        $rows = $filteredQuery()->field('id,code,batch_no,store_id,update_time')
             ->order('id', 'desc')->page($page, $size)->select()->toArray();
 
         $storeIds = array_unique(array_filter(array_column($rows, 'store_id')));
         $stores = $storeIds === [] ? [] : MerchantStore::withTrashed()->whereIn('id', $storeIds)
             ->column('name,user_id', 'id');
 
-        // 历史码牌未记录绑定人，门店当前归属仅作参考。
-        $ownerIds = array_column($stores, 'user_id');
-        $userIds = array_unique(array_filter(array_merge($ownerIds, array_column($rows, 'bound_user_id'))));
+        $userIds = array_unique(array_filter(array_column($stores, 'user_id')));
         $users = $userIds === [] ? [] : User::whereIn('id', $userIds)->column('nickname,account', 'id');
 
         foreach ($rows as &$row) {
             $storeId = $row['store_id'];
-            $binderId = $row['bound_user_id'];
-            $ownerId = $stores[$storeId]['user_id'] ?? null;
-            $binder = $users[$binderId] ?? [];
-            $owner = $users[$ownerId] ?? [];
+            $store = $stores[$storeId] ?? [];
+            $userId = $store['user_id'] ?? null;
+            $user = $users[$userId] ?? [];
 
             $row['is_bound'] = $storeId !== null;
-            $row['store_name'] = $stores[$storeId]['name'] ?? null;
-            $row['bound_user_name'] = ($binder['nickname'] ?? '') ?: ($binder['account'] ?? null);
-            $row['store_owner_name'] = ($owner['nickname'] ?? '') ?: ($owner['account'] ?? null);
+            $row['store_name'] = $store['name'] ?? null;
+            $row['bound_user_id'] = $userId;
+            $row['bound_user_name'] = ($user['nickname'] ?? '') ?: ($user['account'] ?? null);
             $row['activated_at'] = $row['is_bound'] ? (int)$row['update_time'] : null;
             unset($row['update_time']);
         }
@@ -364,11 +361,7 @@ final class NfcCodeService
 
             $now = time();
             $updated = NfcCode::where('id', $row['id'])
-                ->whereNull('store_id')->strict(true)->update([
-                    'store_id' => $storeId,
-                    'bound_user_id' => $userId,
-                    'update_time' => $now,
-                ]);
+                ->whereNull('store_id')->update(['store_id' => $storeId, 'update_time' => $now]);
             if ($updated !== 1) {
                 throw new DomainException('码牌已被绑定，请刷新后重试');
             }

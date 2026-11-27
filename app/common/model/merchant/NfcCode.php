@@ -12,14 +12,13 @@ use app\common\enum\AdminTerminalEnum;
  *
  * 沿用 BaseModel 的模型连接和查询入口，在平台请求上下文中访问统一库存。
  * 平台端访问统一库存；用户端仅访问当前租户已获分配的码牌，不修改核心规则。
- * 码牌记录租户归属。绑定门店时保存首次操作的用户 ID。
+ * 码牌记录租户归属，预留 store_id 用于门店绑定，不在库存中重复保存用户 ID。
  *
  * @property int $id 库存记录主键，与面向商家使用的六位 code 不同
  * @property string $code 六位大写字母与数字混合编号，数据库唯一
  * @property string $batch_no 一次生成请求共用的批次号，用于查找整批码牌
  * @property int|null $tenant_id 目标租户 ID，NULL 表示未分配的平台库存
  * @property int|null $store_id 绑定的门店 ID，NULL 表示未绑定，一个门店可关联多块码牌
- * @property int|null $bound_user_id 首次绑定的用户 ID，历史绑定可能为 NULL
  * @property int|null $tenant_assigned_admin_id 执行分配的平台管理员 ID
  * @property int|null $tenant_assigned_at 分配给租户的时间，Unix 秒
  * @property int $created_admin_id 发起生成的平台管理员 ID
