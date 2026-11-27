@@ -11,6 +11,7 @@ use app\common\service\merchant\NfcCodeService;
 // 运行：php tests/nfc-code/store-binding.php [vendor/autoload.php]，需启用 pdo_sqlite。
 require __DIR__ . '/generate-with-tenant.php';
 
+
 request()->source = AdminTerminalEnum::PLATFORM;
 request()->tenantId = null;
 Tenant::query()->insert(['id' => 5, 'name' => '共享表租户', 'sn' => 'shared', 'tactics' => 0, 'disable' => 0, 'delete_time' => null]);
@@ -21,11 +22,12 @@ foreach (['la_merchant_store', 'la_merchant_store_test'] as $table) {
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER NOT NULL,
         user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
         delete_time INTEGER DEFAULT NULL
     )');
 }
-$connection->execute('INSERT INTO la_merchant_store VALUES (1,5,10,NULL)');
-$connection->execute('INSERT INTO la_merchant_store_test VALUES (1,4,10,NULL),(2,4,10,NULL),(3,4,11,NULL),(4,4,10,1)');
+$connection->execute("INSERT INTO la_merchant_store VALUES (1,5,10,'共享门店',NULL)");
+$connection->execute("INSERT INTO la_merchant_store_test VALUES (1,4,10,'分表门店',NULL),(2,4,10,'其他门店',NULL),(3,4,11,'另一用户门店',NULL),(4,4,10,'已删除门店',1)");
 $rows = [];
 foreach (['TEN401' => 4, 'TEN402' => 4, 'TEN403' => 4, 'TEN501' => 5, 'PLAT01' => null] as $code => $tenantId) {
     $rows[] = [
@@ -84,9 +86,57 @@ same(['TEN501'], array_column(NfcCodeService::storeLists(10, ['store_id' => 1])[
 request()->tenantId = 4;
 same(2, NfcCodeService::storeLists(10, ['store_id' => 1])['count'], 'Original store bindings remain intact');
 
+// 门店更换归属后，既有绑定记录展示当前所属用户。
+foreach (['la_user', 'la_user_test'] as $table) {
+    $connection->execute('CREATE TABLE ' . $table . ' (
+        id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL,
+        nickname TEXT NOT NULL,
+        account TEXT NOT NULL,
+        delete_time INTEGER DEFAULT NULL
+    )');
+}
+$connection->execute("INSERT INTO la_user VALUES (10,5,'其他租户用户','outside',NULL)");
+$connection->execute("INSERT INTO la_user_test VALUES (10,4,'最初绑定人','original',NULL),(11,4,'','current',NULL)");
+$connection->execute('UPDATE la_merchant_store_test SET user_id=11, delete_time=1 WHERE id=1');
+
+request()->source = AdminTerminalEnum::TENANT;
+$bound = NfcCodeService::tenantLists([
+    'batch_no' => 'binding_fixture', 'status' => 'bound', 'page_no' => 2, 'page_size' => 1, 'tenant_id' => 5,
+]);
+same(2, $bound['count'], 'Tenant list counts only current tenant matches');
+same(['TEN401'], array_column($bound['lists'], 'code'), 'Tenant list paginates matching codes');
+$card = $bound['lists'][0];
+same(true, $card['is_bound'], 'Bound status survives soft-deleted store');
+same('分表门店', $card['store_name'], 'Store lookup uses current split tenant table');
+same(11, (int)$card['bound_user_id'], 'Tenant list resolves the current store owner ID');
+same('current', $card['bound_user_name'], 'Tenant list falls back to the new owner account');
+same(100, $card['activated_at'], 'Tenant list reports original activation time');
+
+$second = NfcCodeService::tenantLists(['code' => ' ten402 '])['lists'][0];
+same('current', $second['bound_user_name'], 'Multiple cards on a store show the same current owner');
+$unbound = NfcCodeService::tenantLists(['batch_no' => 'binding_fixture', 'status' => 'unbound']);
+same(['TEN403'], array_column($unbound['lists'], 'code'), 'Unbound filter excludes other tenants and platform stock');
+same(false, $unbound['lists'][0]['is_bound'], 'Unbound status derived from missing store');
+same(null, $unbound['lists'][0]['activated_at'], 'Unbound code has no activation time');
+
+request()->tenantId = 5;
+$other = NfcCodeService::tenantLists(['batch_no' => 'binding_fixture'])['lists'][0];
+same('TEN501', $other['code'], 'Shared-table tenant sees its own card');
+same('共享门店', $other['store_name'], 'Overlapping store IDs are resolved in the correct tenant');
+same('其他租户用户', $other['bound_user_name'], 'Overlapping user IDs are resolved in the correct tenant');
+rejected(fn () => NfcCodeService::tenantLists(['status' => 'invalid']), 'Invalid list status accepted');
+
+request()->source = AdminTerminalEnum::PLATFORM;
+rejected(fn () => NfcCodeService::tenantLists([]), 'Tenant list accepted an unscoped platform context');
+request()->source = AdminTerminalEnum::TENANT;
+request()->tenantId = null;
+rejected(fn () => NfcCodeService::tenantLists([]), 'Tenant list accepted missing tenant context');
+request()->source = AdminTerminalEnum::USER;
+
 // 缺少认证租户时直接拒绝，不允许退化成无租户限制的库存查询。
 request()->tenantId = null;
 same(0, NfcCode::count(), 'Missing tenant context cannot read allocated codes');
 rejected(fn () => NfcCodeService::storeLists(10, ['store_id' => 1]), 'Missing tenant context accepted');
 
-echo "PASS NFC user store binding, multiple codes, ownership, idempotency and paginated own-store lists\n";
+echo "PASS NFC store binding, tenant lists, current store ownership and tenant isolation\n";

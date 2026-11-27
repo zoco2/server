@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\common\service\merchant;
 
+use app\common\enum\AdminTerminalEnum;
 use app\common\model\merchant\NfcCode;
 use app\common\model\merchant\MerchantStore;
 use app\common\model\tenant\Tenant;
+use app\common\model\user\User;
 use DomainException;
 use think\db\exception\PDOException;
 
@@ -258,6 +260,68 @@ final class NfcCodeService
             });
         }
         return $query->field('id,name')->order('id', 'desc')->limit(30)->select()->toArray();
+    }
+
+    /** 查询当前租户的码牌，按页查找绑定门店及其当前所属用户。 */
+    public static function tenantLists(array $input): array
+    {
+        if (!AdminTerminalEnum::isTenant() || (int)(request()->tenantId ?? 0) <= 0) {
+            throw new DomainException('缺少有效的租户');
+        }
+
+        $code = $input['code'] ?? '';
+        $code = $code === '' ? '' : self::normalizeCode($code);
+        $batch = is_string($input['batch_no'] ?? null) ? trim($input['batch_no']) : '';
+        $status = $input['status'] ?? '';
+        if (!in_array($status, ['', 'bound', 'unbound'], true)) {
+            throw new DomainException('绑定状态无效');
+        }
+        $page = min(1000000, self::positiveId($input['page_no'] ?? 1, '页码无效'));
+        $size = min(100, self::positiveId($input['page_size'] ?? 20, '每页数量无效'));
+
+        $filteredQuery = static function () use ($code, $batch, $status) {
+            $query = NfcCode::query();
+            if ($code !== '') {
+                $query->where('code', $code);
+            }
+            if ($batch !== '') {
+                $query->where('batch_no', $batch);
+            }
+            if ($status === 'bound') {
+                $query->whereNotNull('store_id');
+            } elseif ($status === 'unbound') {
+                $query->whereNull('store_id');
+            }
+            return $query;
+        };
+
+        $count = $filteredQuery()->count();
+        $rows = $filteredQuery()->field('id,code,batch_no,store_id,update_time')
+            ->order('id', 'desc')->page($page, $size)->select()->toArray();
+
+        $storeIds = array_unique(array_filter(array_column($rows, 'store_id')));
+        $stores = $storeIds === [] ? [] : MerchantStore::withTrashed()->whereIn('id', $storeIds)
+            ->column('name,user_id', 'id');
+
+        $userIds = array_unique(array_filter(array_column($stores, 'user_id')));
+        $users = $userIds === [] ? [] : User::whereIn('id', $userIds)->column('nickname,account', 'id');
+
+        foreach ($rows as &$row) {
+            $storeId = $row['store_id'];
+            $store = $stores[$storeId] ?? [];
+            $userId = $store['user_id'] ?? null;
+            $user = $users[$userId] ?? [];
+
+            $row['is_bound'] = $storeId !== null;
+            $row['store_name'] = $store['name'] ?? null;
+            $row['bound_user_id'] = $userId;
+            $row['bound_user_name'] = ($user['nickname'] ?? '') ?: ($user['account'] ?? null);
+            $row['activated_at'] = $row['is_bound'] ? (int)$row['update_time'] : null;
+            unset($row['update_time']);
+        }
+        unset($row);
+
+        return ['count' => $count, 'lists' => $rows, 'page_no' => $page, 'page_size' => $size];
     }
 
     /**
