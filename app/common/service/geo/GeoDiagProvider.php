@@ -9,7 +9,7 @@ use Exception;
  */
 class GeoDiagProvider
 {
-    public const BASE_URL = 'https://118.89.28.187/api/v1';
+    public const BASE_URL = 'https://api.zhisouyunji.com/api/v1';
 
     private string $apiKey;
 
