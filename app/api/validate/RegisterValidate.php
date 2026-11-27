@@ -33,7 +33,7 @@ class RegisterValidate extends BaseValidate
     protected $rule = [
         'channel' => 'require',
         'register_way' => 'in:1',
-        'account' => 'require|length:3,30|unique:' . User::class . '|regex:register',
+        'account' => 'require|length:3,30|regex:register|checkAccount',
         'password' => 'require|length:6,20|regex:password',
         'password_confirm' => 'require|confirm'
     ];
@@ -44,7 +44,7 @@ class RegisterValidate extends BaseValidate
         'account.require' => '请输入账号',
         'account.regex' => '账号须为字母数字组合',
         'account.length' => '账号须为3-30位之间',
-        'account.unique' => '账号已存在',
+        'account.checkAccount' => '账号已存在',
         'password.require' => '请输入密码',
         'password.length' => '密码须在6-25位之间',
         'password.regex' => '密码须为数字,字母或符号组合',
@@ -52,4 +52,8 @@ class RegisterValidate extends BaseValidate
         'password_confirm.confirm' => '两次输入的密码不一致'
     ];
 
+    protected function checkAccount(string $account): bool
+    {
+        return !User::withTrashed()->where('account', $account)->find();
+    }
 }
