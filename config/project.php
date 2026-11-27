@@ -21,7 +21,7 @@ return [
     // 租户端
     'tenant' => [
         'admin_avatar' => 'resource/image/common/shop_logo.png',
-        'name' => env('project.web_name', 'SaaS租户端'), // 网站名称
+        'name' => env('project.web_name', '中翱集团'), // 网站名称
         'url' => env('project.web_url', ''), // 网站地址
         'login_image' => 'resource/image/tenantapi/default/login_image.png',
         'web_logo' => 'resource/image/tenantapi/default/web_logo.jpg', // 网站logo
