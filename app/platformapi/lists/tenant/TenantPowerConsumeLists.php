@@ -20,11 +20,22 @@ class TenantPowerConsumeLists extends BaseAdminDataLists implements ListsSearchI
 
     public function lists(): array
     {
-        $rows = $this->baseQuery()
-            ->field(self::fields())
+        // Choose one matching user log per tenant log after applying the search filters.
+        $pageQuery = $this->baseQuery()
+            ->fieldRaw('tpl.id AS tenant_log_id, MIN(ual.id) AS user_log_id')
             ->group('tpl.id')
             ->order('tpl.id', 'desc')
-            ->limit($this->limitOffset, $this->limitLength)
+            ->limit($this->limitOffset, $this->limitLength);
+        $pageQuery->parseOptions();
+        $pageSql = $pageQuery->getConnection()->getBuilder()->select($pageQuery);
+
+        $rows = self::summaryQuery()
+            ->join(['(' . $pageSql . ')' => 'page_logs'], 'page_logs.tenant_log_id = tpl.id')
+            ->bind($pageQuery->getBind())
+            ->leftJoin('user_account_log ual', 'ual.id = page_logs.user_log_id AND ual.tenant_id = tpl.tenant_id')
+            ->leftJoin('user u', 'u.id = ual.user_id')
+            ->field(self::fields())
+            ->order('tpl.id', 'desc')
             ->select()
             ->toArray();
 
