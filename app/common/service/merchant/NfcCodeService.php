@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\common\service\merchant;
 
+use app\common\enum\AdminTerminalEnum;
 use app\common\model\merchant\NfcCode;
 use app\common\model\merchant\MerchantStore;
 use app\common\model\tenant\Tenant;
+use app\common\model\user\User;
 use DomainException;
 use think\db\exception\PDOException;
 
@@ -260,6 +262,71 @@ final class NfcCodeService
         return $query->field('id,name')->order('id', 'desc')->limit(30)->select()->toArray();
     }
 
+    /** 查询当前租户的码牌，按页查找门店及绑定人。 */
+    public static function tenantLists(array $input): array
+    {
+        if (!AdminTerminalEnum::isTenant() || (int)(request()->tenantId ?? 0) <= 0) {
+            throw new DomainException('缺少有效的租户');
+        }
+
+        $code = $input['code'] ?? '';
+        $code = $code === '' ? '' : self::normalizeCode($code);
+        $batch = is_string($input['batch_no'] ?? null) ? trim($input['batch_no']) : '';
+        $status = $input['status'] ?? '';
+        if (!in_array($status, ['', 'bound', 'unbound'], true)) {
+            throw new DomainException('绑定状态无效');
+        }
+        $page = min(1000000, self::positiveId($input['page_no'] ?? 1, '页码无效'));
+        $size = min(100, self::positiveId($input['page_size'] ?? 20, '每页数量无效'));
+
+        $filteredQuery = static function () use ($code, $batch, $status) {
+            $query = NfcCode::query();
+            if ($code !== '') {
+                $query->where('code', $code);
+            }
+            if ($batch !== '') {
+                $query->where('batch_no', $batch);
+            }
+            if ($status === 'bound') {
+                $query->whereNotNull('store_id');
+            } elseif ($status === 'unbound') {
+                $query->whereNull('store_id');
+            }
+            return $query;
+        };
+
+        $count = $filteredQuery()->count();
+        $rows = $filteredQuery()->field('id,code,batch_no,store_id,bound_user_id,update_time')
+            ->order('id', 'desc')->page($page, $size)->select()->toArray();
+
+        $storeIds = array_unique(array_filter(array_column($rows, 'store_id')));
+        $stores = $storeIds === [] ? [] : MerchantStore::withTrashed()->whereIn('id', $storeIds)
+            ->column('name,user_id', 'id');
+
+        // 历史码牌未记录绑定人，门店当前归属仅作参考。
+        $ownerIds = array_column($stores, 'user_id');
+        $userIds = array_unique(array_filter(array_merge($ownerIds, array_column($rows, 'bound_user_id'))));
+        $users = $userIds === [] ? [] : User::whereIn('id', $userIds)->column('nickname,account', 'id');
+
+        foreach ($rows as &$row) {
+            $storeId = $row['store_id'];
+            $binderId = $row['bound_user_id'];
+            $ownerId = $stores[$storeId]['user_id'] ?? null;
+            $binder = $users[$binderId] ?? [];
+            $owner = $users[$ownerId] ?? [];
+
+            $row['is_bound'] = $storeId !== null;
+            $row['store_name'] = $stores[$storeId]['name'] ?? null;
+            $row['bound_user_name'] = ($binder['nickname'] ?? '') ?: ($binder['account'] ?? null);
+            $row['store_owner_name'] = ($owner['nickname'] ?? '') ?: ($owner['account'] ?? null);
+            $row['activated_at'] = $row['is_bound'] ? (int)$row['update_time'] : null;
+            unset($row['update_time']);
+        }
+        unset($row);
+
+        return ['count' => $count, 'lists' => $rows, 'page_no' => $page, 'page_size' => $size];
+    }
+
     /**
      * 用户将当前租户的一块码牌绑定到自己名下的门店。
      *
@@ -297,7 +364,11 @@ final class NfcCodeService
 
             $now = time();
             $updated = NfcCode::where('id', $row['id'])
-                ->whereNull('store_id')->update(['store_id' => $storeId, 'update_time' => $now]);
+                ->whereNull('store_id')->strict(true)->update([
+                    'store_id' => $storeId,
+                    'bound_user_id' => $userId,
+                    'update_time' => $now,
+                ]);
             if ($updated !== 1) {
                 throw new DomainException('码牌已被绑定，请刷新后重试');
             }

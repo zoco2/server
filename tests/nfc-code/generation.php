@@ -63,6 +63,7 @@ namespace {
         batch_no TEXT NOT NULL,
         tenant_id INTEGER DEFAULT NULL,
         store_id INTEGER DEFAULT NULL,
+        bound_user_id INTEGER DEFAULT NULL,
         created_admin_id INTEGER NOT NULL,
         tenant_assigned_admin_id INTEGER DEFAULT NULL,
         tenant_assigned_at INTEGER DEFAULT NULL,

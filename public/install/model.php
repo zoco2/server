@@ -501,6 +501,8 @@ class installModel
         $content = str_replace(";\r\n", ";\n", file_get_contents($dbFile));
         require_once $this->getAppRoot() . '/app/common/service/database/SqlMigrationExecutor.php';
         $tables = \app\common\service\database\SqlMigrationExecutor::split($content);
+        $nfcMigration = $this->getInstallRoot() . '/../upgrade/20261127_merchant_nfc_bound_user.sql';
+        $tables = array_merge($tables, \app\common\service\database\SqlMigrationExecutor::split(file_get_contents($nfcMigration)));
         $accountSql = str_replace(';', ";\n", $this->initAccount($post));
         $tables = array_merge($tables, \app\common\service\database\SqlMigrationExecutor::split($accountSql));
         $installTime = (int) floor(microtime(true) * 10000);

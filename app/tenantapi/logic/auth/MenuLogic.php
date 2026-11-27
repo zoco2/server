@@ -180,7 +180,11 @@ class MenuLogic extends BaseLogic
         }
         $hasRedeemCard = TenantSystemMenu::where(['tenant_id'=>$tenantId,'source_menu_key'=>'core_tenant_redeem_card'])->count() > 0;
         $hasPoster = TenantSystemMenu::where(['tenant_id'=>$tenantId,'source_menu_key'=>'core_tenant_distribution_posters','component'=>'distribution/posters/index'])->count() > 0;
-        if ($hasPackage && $hasDistributionTree && !$hasLegacyDistributionDirect && $hasRedeemCard && $hasPoster) {
+        $hasNfcCode = TenantSystemMenu::where([
+            'tenant_id' => $tenantId,
+            'source_menu_key' => 'core_tenant_merchant_nfc_code',
+        ])->count() > 0;
+        if ($hasPackage && $hasDistributionTree && !$hasLegacyDistributionDirect && $hasRedeemCard && $hasPoster && $hasNfcCode) {
             return;
         }
 
