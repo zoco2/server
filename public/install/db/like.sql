@@ -2343,7 +2343,7 @@ CREATE TABLE `la_user`
     `delete_time`           int(10) UNSIGNED                                              NULL     DEFAULT NULL COMMENT '删除时间',
     PRIMARY KEY (`id`) USING BTREE,
     UNIQUE INDEX `sn` (`sn`) USING BTREE COMMENT '编号唯一',
-    UNIQUE INDEX `account` (`account`) USING BTREE COMMENT '账号唯一'
+    UNIQUE INDEX `uk_tenant_account` (`tenant_id`, `account`) USING BTREE COMMENT '租户内账号唯一'
 ) ENGINE = InnoDB
   AUTO_INCREMENT = 1
   CHARACTER SET = utf8mb4
