@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS `la_model_hub_call` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` int unsigned NOT NULL,
+  `user_id` int unsigned NOT NULL,
+  `call_key` char(64) NOT NULL,
+  `request_hash` char(64) NOT NULL,
+  `capability` varchar(32) NOT NULL,
+  `model` varchar(160) NOT NULL,
+  `unit_price` decimal(16,6) NOT NULL,
+  `estimated_units` bigint unsigned NOT NULL,
+  `reserved_points` decimal(16,2) NOT NULL,
+  `actual_units` bigint unsigned DEFAULT NULL,
+  `charged_points` decimal(16,2) NOT NULL DEFAULT 0.00,
+  `status` varchar(24) NOT NULL,
+  `reason` varchar(48) NOT NULL DEFAULT '',
+  `result` mediumtext,
+  `create_time` int unsigned NOT NULL DEFAULT 0,
+  `update_time` int unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_model_hub_call_key` (`call_key`),
+  KEY `idx_model_hub_call_owner` (`tenant_id`,`user_id`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Model Hub 调用和预占结算记录';
