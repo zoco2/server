@@ -390,7 +390,11 @@ final class PublishTaskService
     /** 消费执行记录，发送结果与下一次执行时间一并提交。 */
     public static function consume(int $taskId, int $runId, int $tenantId, int $userId, string $taskSn): void
     {
-        self::executeRun($taskId, $runId, $tenantId, $userId, $taskSn, false);
+        try {
+            self::executeRun($taskId, $runId, $tenantId, $userId, $taskSn, false);
+        } finally {
+            Db::connect(self::PROGRESS_CONNECTION)->close();
+        }
     }
 
     /** MNS 重试耗尽后结束本轮，并更新下一轮排期。 */
