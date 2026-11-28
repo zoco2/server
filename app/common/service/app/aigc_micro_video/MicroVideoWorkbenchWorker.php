@@ -150,9 +150,12 @@ final class MicroVideoWorkbenchWorker
         $script=$result['script']??null;
         $input=MicroVideoStore::json($row['request_json']);
         if(!empty($input['replacement_product'])){
-            $edits=$script['product_edits']??null;
+            // Older clients described the inner edit array as the output. Accept the
+            // equivalent wrappers so the saved receipt can be reconciled without a new model call.
+            $payload=is_array($script)?$script:$result;
+            $edits=$payload['product_edits']??(array_is_list($payload)?$payload:null);
             if(!is_array($edits)||!array_is_list($edits)||count($edits)>240)throw new InvalidArgumentException('换品结果缺少有效的修改列表');
-            $warning=$script['replacement_warning']??'';
+            $warning=$payload['replacement_warning']??'';
             if(!is_string($warning)||mb_strlen($warning)>500)throw new InvalidArgumentException('换品提示格式无效');
             return ['product_edits'=>$edits,'replacement_warning'=>trim($warning)];
         }
