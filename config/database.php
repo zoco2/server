@@ -63,5 +63,7 @@ $config = [
 
 // 发布任务持有计划行锁时，通过同一个库的独立连接提交发送进度。
 $config['connections']['publish_task_progress'] = $config['connections'][$config['default']];
+// 进度更新自动提交，常驻 Worker 可在连接失效后重连并重试该次更新。
+$config['connections']['publish_task_progress']['break_reconnect'] = true;
 
 return $config;
