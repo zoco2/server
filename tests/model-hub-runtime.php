@@ -152,10 +152,11 @@ namespace {
     $token = 'model-hub-fixture';
     $cacheKey = 'token_user_' . $token;
     $cache->set($cacheKey, ['user_id' => 2, 'tenant_id' => 2, 'expire_time' => time() + 3600], 3600);
-    $post = static function (array $body, string $token = '') use ($app): array {
+    $send = static function (array $body, string $token = '', string $method = 'POST') use ($app): array {
+        $path = 'v1.model_hub/chatTest';
         $request = new \app\Request();
         $request->tenantId = 2;
-        $request->setMethod('POST')->setPathinfo('api/model-hub/v1/chat/test');
+        $request->setMethod($method)->setPathinfo('api/' . $path);
         $request->withHeader(['content-type' => 'application/json', 'token' => $token]);
         $request->withInput(json_encode($body, JSON_THROW_ON_ERROR));
         $GLOBALS['modelHubRequest'] = $request;
@@ -163,12 +164,10 @@ namespace {
 
         $response = (new \app\common\http\middleware\OpenGatewayMiddleware())->handle(
             $request,
-            static function ($request) use ($app) {
+            static function ($request) use ($app, $path) {
                 // 多应用路由收到的是去掉 /api 前缀的相对路径。
-                $request->setPathinfo('model-hub/v1/chat/test');
-                return $app->route->dispatch($request, static function (): void {
-                    require dirname(__DIR__) . '/app/api/route/model_hub.php';
-                });
+                $request->setPathinfo($path);
+                return $app->route->dispatch($request);
             }
         );
         return json_decode($response->getContent(), true, 512, JSON_THROW_ON_ERROR);
@@ -176,22 +175,23 @@ namespace {
 
     try {
         $body = ['request_id' => 'frontend-1', 'prompt' => '你好'];
-        check($post($body)['code'] === 0, '版本化路由需要现有登录令牌');
-        check($post($body, $token)['msg'] === '当前租户未开启 Model Hub 测试', '测试租户未配置时关闭');
+        check($send($body)['code'] === 0, '约定路由需要现有登录令牌');
+        check($send($body, $token)['msg'] === '当前租户未开启 Model Hub 测试', '测试租户未配置时关闭');
         $GLOBALS['modelHubEnv']['model_hub.test_tenant_id'] = 1;
-        check($post($body, $token)['msg'] === '当前租户未开启 Model Hub 测试', '非测试租户无法提交');
+        check($send($body, $token)['msg'] === '当前租户未开启 Model Hub 测试', '非测试租户无法提交');
         $GLOBALS['modelHubEnv']['model_hub.test_tenant_id'] = 2;
-        check($post(['request_id' => [], 'prompt' => '你好'], $token)['code'] === 0, '无效请求号被拒绝');
+        check($send($body, $token, 'GET')['msg'] === '仅支持 POST 请求', '约定路由下 GET 不提交调用');
+        check($send(['request_id' => [], 'prompt' => '你好'], $token)['code'] === 0, '无效请求号被拒绝');
         check($db->name('model_hub_call')->count() === 6, '拒绝的测试请求不创建调用单');
 
-        $response = $post($body, $token);
+        $response = $send($body, $token);
         $data = $response['data'];
         check($response['code'] === 1 && $data['mock'] === true && $data['status'] === 'settled'
             && $data['reply'] === '模拟回复：你好' && $data['reserved_points'] === '10.00'
             && $data['charged_points'] === '3.00' && $data['actual_units'] === 3,
-            '正式路由返回模拟回复和已结算的算力');
-        check($post($body, $token)['data']['call_id'] === $data['call_id'], '原请求重放返回同一调用单');
-        check($post(array_replace($body, ['prompt' => '换一个问题']), $token)['code'] === 0, '同请求号异参失败');
+            '约定路由返回模拟回复和已结算的算力');
+        check($send($body, $token)['data']['call_id'] === $data['call_id'], '原请求重放返回同一调用单');
+        check($send(array_replace($body, ['prompt' => '换一个问题']), $token)['code'] === 0, '同请求号异参失败');
         check((float)$db->name('user')->where('id', 2)->value('user_money') === 7.0,
             '前端重试后仍只扣 3 点');
     } finally {
